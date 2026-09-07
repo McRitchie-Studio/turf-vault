@@ -13,9 +13,87 @@ import {
   LAMPORTS_PER_SOL,
   PublicKey,
   SystemProgram,
+  SYSVAR_CLOCK_PUBKEY,
 } from "@solana/web3.js";
 import { expect } from "chai";
 import { createHash } from "crypto";
+
+// Assert that `promise` REJECTS, with an error matching `pattern`.
+//
+// The two assertions live OUTSIDE the try/catch, and that placement is the
+// whole point of this helper. The previous version put `expect.fail(...)` on
+// the success path but INSIDE the try, so the AssertionError it threw fell
+// straight into its own `catch (err)` one line below — and because the
+// failure message interpolates `pattern` verbatim ("expected rejection
+// matching /Unauthorized/i"), `err.toString()` CONTAINED the very literal the
+// regex was looking for. The catch's assertion passed, the helper returned
+// normally, and a call the program had HAPPILY ACCEPTED was reported as a
+// passing rejection assertion. Every pattern in this suite is a bare literal,
+// so every one of these call sites self-matched: the suite could still catch a
+// rejection with the WRONG error, but never a guard that failed to refuse at
+// all — the only failure mode these assertions exist to catch.
+//
+// Keep the assertions below the try/catch. An `expect` inside a try whose
+// catch also asserts is how this class of blindness comes back.
+const expectRejected = async (
+  promise: Promise<unknown>,
+  pattern: RegExp
+): Promise<void> => {
+  let rejection: unknown;
+  let rejected = false;
+  try {
+    await promise;
+  } catch (err: any) {
+    rejection = err;
+    rejected = true;
+  }
+  expect(
+    rejected,
+    `expected rejection matching ${pattern}, but the call SUCCEEDED`
+  ).to.equal(true);
+  expect(String(rejection)).to.match(pattern);
+};
+
+// The helper above is the suite's ONLY negative-assertion primitive: 45 call
+// sites route through it. It was inert for its entire life, so this block
+// exercises the primitive itself. It needs no validator and no chain state —
+// it is pure control flow — which is why it lives outside the matrix describe.
+describe("expectRejected (the suite's own negative-assertion helper)", () => {
+  const helperFails = async (fn: () => Promise<void>): Promise<string> => {
+    try {
+      await fn();
+    } catch (err: any) {
+      return String(err.message ?? err);
+    }
+    throw new Error("expectRejected reported a PASS where it should have FAILED");
+  };
+
+  // THE REGRESSION. `/Unauthorized/i` is deliberate: the previous helper built
+  // its own failure message by interpolating the pattern ("expected rejection
+  // matching /Unauthorized/i"), threw that message INSIDE the try, caught it
+  // one line below, and matched it against the same pattern — which its own
+  // text contained. A call the program had ACCEPTED passed as a refusal.
+  it("FAILS when the call succeeds", async () => {
+    const message = await helperFails(() =>
+      expectRejected(Promise.resolve("the program accepted it"), /Unauthorized/i)
+    );
+    expect(message).to.match(/SUCCEEDED/);
+  });
+
+  it("passes when the call rejects with a matching error", async () => {
+    await expectRejected(
+      Promise.reject(new Error("AnchorError ... Error Code: Unauthorized")),
+      /Unauthorized/i
+    );
+  });
+
+  it("FAILS when the call rejects with a different error", async () => {
+    await helperFails(() =>
+      expectRejected(Promise.reject(new Error("ContestFull")), /Unauthorized/i)
+    );
+  });
+});
+
 
 describe("turf_vault verification matrix", () => {
   const provider = anchor.AnchorProvider.env();
@@ -72,6 +150,37 @@ describe("turf_vault verification matrix", () => {
   const amount = (tokens: number): number => tokens * 10 ** DECIMALS;
   const bn = (value: number | string): anchor.BN => new anchor.BN(value);
   const now = (): number => Math.floor(Date.now() / 1000);
+
+  // THE CLOCK THE PROGRAM ACTUALLY READS.
+  //
+  // Every lock/conclusion gate in the program compares against
+  // `Clock::get()?.unix_timestamp` — the on-chain Clock sysvar — while `now()`
+  // above is the client's wall clock. On solana-test-validator the two are NOT
+  // the same: the chain clock is derived from slot production and was measured
+  // running a stable 1-2 SECONDS BEHIND wall clock (2026-09-06, sampled over
+  // 70s on a fresh validator).
+  //
+  // That matters because "a lock that has already passed" used to be expressed
+  // as `now() - 1` — a ONE-SECOND margin against a TWO-SECOND skew. On-chain
+  // the lock then sat in the FUTURE, the contest stayed open, and the refusals
+  // these tests exist to assert were simply not applicable: the entry was
+  // accepted, the 1-of-3 amend was allowed, and settlement refused with
+  // ContestNotLocked. Whether a run went green came down to how many
+  // round-trips elapsed between creating the contest and asserting on it, which
+  // is why the failure was intermittent rather than constant.
+  //
+  // Read the sysvar the program reads, and use a margin that swamps the drift.
+  const chainNow = async (): Promise<number> => {
+    const info = await connection.getAccountInfo(SYSVAR_CLOCK_PUBKEY);
+    if (!info) throw new Error("Clock sysvar unavailable");
+    // Clock layout: slot u64 | epoch_start_timestamp i64 | epoch u64 |
+    // leader_schedule_epoch u64 | unix_timestamp i64 (byte offset 32).
+    return Number(info.data.readBigInt64LE(32));
+  };
+
+  // A timestamp that is UNAMBIGUOUSLY in the on-chain past.
+  const chainPast = async (marginSeconds = 60): Promise<number> =>
+    (await chainNow()) - marginSeconds;
   const tokenAmount = async (account: PublicKey): Promise<number> =>
     Number((await getAccount(connection, account)).amount);
 
@@ -177,18 +286,6 @@ describe("turf_vault verification matrix", () => {
     )[0];
 
   const statusName = (status: any): string => Object.keys(status)[0];
-
-  const expectRejected = async (
-    promise: Promise<unknown>,
-    pattern: RegExp
-  ): Promise<void> => {
-    try {
-      await promise;
-      expect.fail(`expected rejection matching ${pattern}`);
-    } catch (err: any) {
-      expect(err.toString()).to.match(pattern);
-    }
-  };
 
   const fund = async (wallet: PublicKey, sol = 5): Promise<void> => {
     const tx = new anchor.web3.Transaction().add(
@@ -411,7 +508,7 @@ describe("turf_vault verification matrix", () => {
 
   const lockContestNow = async (contest: ContestFixture): Promise<void> => {
     await program.methods
-      .setContestLockTime(bn(now() - 1))
+      .setContestLockTime(bn(await chainPast()))
       .accountsStrict({
         admin: admin.publicKey,
         cosigner: null,
@@ -1166,7 +1263,7 @@ describe("turf_vault verification matrix", () => {
         fees: { 0: amount(1) },
         prizePool: amount(1),
         payouts: [amount(1)],
-        lockTimestamp: now() - 1,
+        lockTimestamp: await chainPast(),
       });
       await expectRejected(
         enterPaid(
@@ -1253,7 +1350,7 @@ describe("turf_vault verification matrix", () => {
         fees: { 0: amount(1) },
         prizePool: amount(1),
         payouts: [amount(1)],
-        lockTimestamp: now() - 1,
+        lockTimestamp: await chainPast(),
       });
       await expectRejected(
         program.methods
