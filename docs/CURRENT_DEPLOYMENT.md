@@ -73,10 +73,10 @@ shasum -a 256 /tmp/mainnet.so
 solana program dump EQGFJAcABtDb6VXtiijTjZ6cE2UqdvhnqJvoharJbpMJ /tmp/devnet.so --url devnet
 shasum -a 256 /tmp/devnet.so
 
-# In-program signer set: VaultState PDA, seeds [b"vault"].
-# Signers sit at byte offsets 8/40/72; the threshold byte is at 104.
-solana account GBu44HFJjq61WnS9UV1twcSrCC6SkuXHK8RM6tUKsWzV --url mainnet-beta   # mainnet
-solana account J7b5g9uS5M2Nog1Ly1UATXTDMtXdpXK3JffRAHXGHkK2 --url devnet         # devnet
+# The signer rows and Threshold live in the VaultState PDA, seeds [b"vault"].
+# `solana account` alone prints a base64 blob: the signers are raw 32-byte
+# arrays, so the account has to be decoded before it says anything. Both PDA
+# addresses and the decode are under "Reading the signer set off the chain".
 
 # The live consumer pin, and the file it must equal. Run this pair from the
 # turf-vault repo root, with turf-monster checked out beside it. Read the config
@@ -120,6 +120,88 @@ Program SHA256 row is the only line here that pins the executing bytes, and it
 has no committed counterpart to compare against, because `anchor build` is not
 byte-reproducible across toolchains. Treat it as a drift detector: if it moves
 and no Squads upgrade was executed, something is wrong.
+
+### Reading the signer set off the chain
+
+`VaultState` stores its signers as raw 32-byte arrays, so `solana account`
+alone hands you a base64 blob and a comment naming byte offsets. This decodes
+it in place and leaves nothing further to convert — it ends in three pubkeys
+and a threshold, which is what the table rows above claim.
+
+It is a plain public RPC read: no configured keypair, no Heroku, no
+`turf-monster`, no app credential. That independence matters most during an
+incident, when the app whose key you are rotating is the thing you cannot
+trust.
+
+The first line selects mainnet; uncomment the second instead for devnet. Both
+program IDs are the deployed IDs above, and each `VaultState` address is the
+PDA of seeds `[b"vault"]` under its own program.
+
+```bash
+export CLUSTER=mainnet-beta PROGRAM=DaFv83yokwTz8msP9CzJ13eazSGk15NuUTxjkfzJzxMM VAULT=GBu44HFJjq61WnS9UV1twcSrCC6SkuXHK8RM6tUKsWzV
+# export CLUSTER=devnet     PROGRAM=EQGFJAcABtDb6VXtiijTjZ6cE2UqdvhnqJvoharJbpMJ VAULT=J7b5g9uS5M2Nog1Ly1UATXTDMtXdpXK3JffRAHXGHkK2
+
+solana account $VAULT --url $CLUSTER --output json |
+ruby -rjson -rbase64 -e '
+  a = JSON.parse(STDIN.read)["account"]
+  d = Base64.decode64(a["data"][0])
+  abort "not a VaultState: #{d.bytesize} bytes, expected 1515" unless d.bytesize == 1515
+  abort "wrong program: account is owned by #{a["owner"]}" unless a["owner"] == ENV.fetch("PROGRAM")
+  alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+  b58 = ->(raw) {
+    n = raw.unpack1("H*").to_i(16)
+    out = +""
+    until n.zero?
+      n, rem = n.divmod(58)
+      out.prepend(alphabet[rem])
+    end
+    "1" * raw.bytes.take_while(&:zero?).size + out
+  }
+  3.times { |i| puts "signer[#{i}]           #{b58.(d[8 + 32 * i, 32])}" }
+  puts       "threshold            #{d[104].ord}"
+  puts       "paused               #{d[106].ord}"
+  puts       "payout_mint          #{b58.(d[107, 32])}   <- control"
+  puts       "treasury_authority   #{b58.(d[139, 32])}"
+'
+```
+
+Offsets come from `VaultState` in `programs/turf_vault/src/state.rs`: an 8-byte
+Anchor discriminator, then `signers[3]` at **8 / 40 / 72**, `threshold` at
+**104**, `bump` 105, `paused` 106, `payout_mint` 107, `treasury_authority`
+**139**, for **1515** bytes in total.
+
+**What checks the read — three things, and none of them costs another command.**
+
+1. **Length.** A non-`VaultState` address aborts by name rather than printing a
+   plausible-looking set. Pointed at the program ID instead of the PDA it says
+   `not a VaultState: 36 bytes, expected 1515`, and exits non-zero.
+2. **Owner.** The account must be owned by `$PROGRAM`, so a `VaultState` from
+   the *other* cluster — or from the orphaned old devnet program named under
+   **Devnet** above — aborts too. That address is base58 the CLI produced, not this decoder.
+3. **`payout_mint` — the control on the decoder itself.** On **mainnet** it MUST
+   read `EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v`, Circle's USDC mint. That
+   is a **program invariant, not a deployment coincidence**: a mainnet build pins
+   it at `initialize` and refuses any other mint
+   (`initialize.rs:101-104`, inside the `#[cfg(feature = "mainnet")]` block
+   opened at `:95`), and `state.rs:47-50` defines that constant with the base58
+   spelling written beside its bytes at `:45`. So a wrong alphabet, a wrong
+   encoder loop, or wrong offsets could not read as USDC — and offset 107 sits
+   three bytes past `threshold`, so even a one-byte slide breaks it. On
+   **devnet** the field is the devnet test mint
+   (`222Dcu2RgAXE3T8A4mGSG3kQyXaNjqePx7vva1RdWBN9`) and no compile-time constant
+   pins it, so the control is weaker there; checks 1 and 2 still hold.
+
+`treasury_authority` is printed because it is the Squads vault PDA — the
+**Upgrade authority** row above — so this one read also cross-checks that row.
+It is **not** used as the control, and neither is `solana program show`:
+that command refuses to run without a local default keypair (`No default signer
+found`) even though it only reads, and this read must not depend on the machine
+having one.
+
+This is the same read as [`KEY_ROTATION.md`](KEY_ROTATION.md) §0 **Verifying
+this yourself** B, decoding the same offsets — deliberately, so a rotation and
+this reference cannot disagree about what the vault holds. Change one and change
+the other.
 
 `VaultState`'s in-program 2-of-3 is a separate mechanism from the Squads vault that holds the program upgrade authority. Both are 2-of-3; they are not the same multisig.
 
