@@ -84,6 +84,7 @@ VaultState (PDA: "vault")
 | `enter_contest` | `entry_num, currency_idx` | User signer + 1-of-3 payer | Paid entry: transfer user ATA funds to operator-revenue ATA |
 | `enter_contest_with_token` | `entry_num` | User signer + 1-of-3 payer | Entry funded by consuming an `EntryTokenAccount` |
 | `mint_entry_token` | `source, source_ref, source_ref_hash` | 1-of-3 | Mint an idempotent pre-purchased entry voucher |
+| `burn_entry_token` | `source_ref_hash` | 1-of-3 | Void an unspent entry voucher (operator claw-back); tombstones the account rather than closing it |
 | `grant_seeds` | `amount, kind, invitee` | 1-of-3 | Grant quest/referral seeds outside the normal entry flow |
 | `settle_contest` | `settlements: Vec<Settlement>` | 2-of-3 | Pay winners from the contest prize-pool ATA and update stats |
 | `cancel_contest` | — | 2-of-3 | Refund the live prize-pool balance to the creator |
