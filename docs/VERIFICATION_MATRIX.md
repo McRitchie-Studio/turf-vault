@@ -20,7 +20,7 @@ If `anchor test` cannot inherit Node/Yarn, use the direct test path from
 [`../RUNBOOK.md`](../RUNBOOK.md). After any source change, regenerate the IDL and
 re-pin Turf Monster from the freshly built file, not from `anchor idl fetch`.
 
-Latest local proof, 2026-06-14:
+Latest local proof, 2026-09-06:
 
 ```bash
 anchor build
@@ -31,7 +31,8 @@ ANCHOR_PROVIDER_URL=http://127.0.0.1:8898 \
   yarn run ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.ts
 ```
 
-Result: `23 passing`.
+Result: `27 passing` (was `23`; +4 for `burn_entry_token`), against an
+isolated local validator on `127.0.0.1:8898`.
 
 ## Instruction Matrix
 
@@ -54,6 +55,7 @@ Result: `23 passing`.
 | Entry | `enter_contest` | Requires user signature plus 1-of-3 payer; validates active currency slot, user ATA funds, max entries, lock/conclusion gate, and season schedule seed award. |
 | Entry | `enter_contest_with_token` | Requires user signature plus 1-of-3 payer; consumes matching `EntryTokenAccount`; awards seeds; charges no currency and cannot be reused. |
 | Free entry | `mint_entry_token` | Requires 1-of-3; PDA is keyed by `sha256(source_ref)`; remint of the same source reference fails. |
+| Free entry | `burn_entry_token` | Requires 1-of-3 and the holder does **not** sign; not pause-gated. TOMBSTONES rather than closing: the account survives, so the on-chain token COUNT that Rails reads as owed is unchanged and nothing re-mints it. Sets `consumed = true` (reusing the constraint `enter_contest_with_token` already carried) and raises `BURNED_FLAG` (`0x80`) in the spare high bit of `source`, inside the EXISTING 124-byte `EntryTokenAccount` layout — so tokens minted before the upgrade still deserialize. Rejects a double burn, with the flag checked FIRST so `EntryTokenAlreadyBurned` is reachable rather than masked by `EntryTokenAlreadyConsumed`; rejects a token already spent. `source_ref_hash` seed-binds the target, and the handler re-derives that hash from the account's own stored `source_ref`, so a matched wrong-account/wrong-hash pair is rejected too. |
 | Seeds | `grant_seeds` | Requires 1-of-3; applies bounded quest/referral seed amount; idempotent per `(wallet, kind, invitee)` guard PDA. |
 | Settlement | `settle_contest` | Requires 2-of-3; requires contest locked/concluded; validates user/entry PDAs and winner ATA owner/mint; pays only from prize pool; rejects duplicate settlement pairs and over-cap payouts. |
 | Cancellation | `cancel_contest` | Requires 2-of-3; refunds live prize-pool balance to creator ATA; status moves to Cancelled; operator revenue remains separate. |

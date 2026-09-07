@@ -50,11 +50,28 @@ a single 2-of-3 `update_signers` transaction — **never a redeploy again.**
 
 A leaked Alex Bot key is a **1-of-3** signer. On its own it can run only the
 **1-of-3 routine ops** (`create_contest`, `set_contest_lock_time`,
-`close_contest`, `mint_entry_token`, facilitate entries). It **cannot** settle,
-cancel, sweep, register/deactivate currencies, pause/unpause, or
-`update_signers` — those are 2-of-3. So the blast radius is limited UNLESS the
-attacker also holds a second signer. **But** Alex Bot is also a Squads member;
+`close_contest`, `mint_entry_token`, `burn_entry_token`, facilitate entries). It
+**cannot** settle, cancel, sweep, register/deactivate currencies, pause/unpause,
+or `update_signers` — those are 2-of-3. So the blast radius is limited to
+vandalism UNLESS the attacker also holds a second signer — with one exception,
+below, that is worse than vandalism. **But** Alex Bot is also a Squads member;
 two compromised Squads members could push a malicious program upgrade.
+
+> **`burn_entry_token` is the exception: the one 1-of-3 op that DESTROYS USER
+> PROPERTY.** A single leaked key can void every unspent free-entry voucher on
+> the platform, one instruction per token, and the damage is **irreversible** —
+> no instruction in the program clears `BURNED_FLAG` or `consumed`, and
+> re-minting the same `source_ref` fails because the tombstoned PDA survives and
+> collides on `init`. The only remedy is minting replacements against **fresh**
+> source references, and that is possible only if the outstanding set was
+> recorded before the burns — a `getProgramAccounts` scan for `EntryTokenAccount`
+> (Rails' `Solana::Vault#list_entry_tokens` reads one wallet at a time).
+>
+> **`pause` does not stop it.** Like `mint_entry_token`, this instruction is
+> deliberately not pause-gated, so §0's pause protects entries and funds but
+> leaves vouchers exposed. Only rotating `SOLANA_ADMIN_KEY` off the leaked key
+> stops a burn, which makes voucher loss the damage most sensitive to how fast
+> §0 completes.
 
 Immediate containment (operator, before the redeploy):
 1. **`pause` the vault** (2-of-3: Alex + Mason, NOT the compromised bot) to
@@ -531,6 +548,7 @@ Prioritize a clean upgrade-authority + Squads state so §8 can execute.
 | # | Risk | Mitigation |
 |---|------|------------|
 | R1 | **Leaked key acts during the window.** It's 1-of-3, so it can `create_contest` / `mint_entry_token` / `close_contest` / facilitate entries until §5. | §0 containment: `pause` first, rotate `SOLANA_ADMIN_KEY` env off it, then redeploy promptly. |
+| R1b | **Leaked key burns free-entry vouchers.** `burn_entry_token` is 1-of-3 and **not pause-gated**, so the key can irreversibly void every unspent voucher on the platform before §5 — the only 1-of-3 op that destroys user property, and the one §0's `pause` does not stop. | Rotation speed is the whole mitigation: the env rotation in §0, not the pause, is what ends the exposure. Record the outstanding voucher set (`getProgramAccounts` for `EntryTokenAccount`) as early in §0 as practical — replacements must be minted against **fresh** `source_ref`s, because the tombstoned PDAs block a re-mint on the originals. |
 | R2 | **Two-key compromise.** If a SECOND signer is also compromised, the attacker has 2-of-3 → can settle/sweep/`update_signers`/push a Squads upgrade. | Out of scope of a single-key rotation. If suspected, freeze funds (sweep to a fresh cold treasury via the clean signers) before anything else, and treat as a full incident. |
 | R3 | **Transient tainted authority** if §4 reuses the old Squads (still contains leaked bot). | Recommended path stands up a NEW Squads; if reusing, run §7 before real funds flow. |
 | R4 | **Closing the wrong program** in §8. | Triple-check the program ID; close is irreversible. New program ID is in `scripts/squad.json` after §3. |
