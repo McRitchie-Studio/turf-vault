@@ -49,20 +49,69 @@ upgrade.
 > verbatim — so the error's own text contained the literal the regex was hunting
 > for, and self-matched. A call the program ACCEPTED was recorded as a passing
 > refusal, with the blindness exactly one failure mode wide: "the guard did not
-> refuse at all." Accept-path results are unaffected, but no REJECTION assertion
-> predating that repair is evidence of anything — and because no run has followed
-> the repair, no rejection assertion in this suite has yet been OBSERVED to bite.
+> refuse at all." Accept-path results are unaffected, but no rejection assertion
+> ROUTED THROUGH THE HELPER, before the repair, is evidence of anything — and
+> because no run has followed the repair, no helper-mediated rejection assertion
+> in this suite has yet been OBSERVED to bite. Three refusals escape that,
+> because their evidence never went through the helper.
 > #18 also corrected the **lock-gate** and **post-lock-amend** drift (those tests
 > set a lock one second in the on-chain past against a chain clock running one to
 > two seconds behind wall clock, so the gate they assert was never engaged); the
-> `27 passing` above predates that fix and does not cover it. The
-> `burn_entry_token` row's refusal clauses below rest on SOURCE REVIEW rather
-> than on the suite — only its double-burn refusal carries even a PARTIAL
-> independent check, because the assertion that follows it re-reads `consumed_at`
-> and requires the original stamp to be unmoved. Partial, not conclusive:
-> `consumed_at` is a `Clock` unix timestamp in SECONDS, so a re-burn landing
-> inside the same second would leave the stamp unmoved and that assertion would
-> pass anyway.
+> `27 passing` above predates that fix and does not cover it. Which refusals
+> below carry evidence anyway, and which do not, is swept row by row in the
+> next section.
+
+## What the Suite Evidences
+
+A blanket warning is not a map, so all 45 rejection call sites in the matrix
+suite were read block by block on 2026-09-07, looking for the one thing that
+survives an inert helper: an assertion AFTER a refusal that re-reads state a
+wrongly-ACCEPTED call would have changed. Three exist, all in the
+`burn_entry_token` block. They are ordinary `expect`s that do not route
+through the helper, and both blocks holding them are among the four
+`burn_entry_token` cases the `27 passing` stamp counts — so these three, alone
+in the file, are refusals that stamp actually evidences:
+
+| Refusal | The assertion that follows it | Strength |
+|---|---|---|
+| A stranger holding no vault seat cannot burn | the target's `consumed` re-read as `false` | **full** — a boolean the burn would have flipped |
+| A burn naming an account its hash does not match | BOTH accounts' `consumed` re-read as `false` | **full**, same reason |
+| A second burn of an already-burned token | `consumed_at` re-read equal to the pre-burn stamp | **partial** — `consumed_at` is a `Clock` timestamp in SECONDS, so a re-burn inside the same second leaves it unmoved and the assertion passes anyway |
+
+Every other refusal clause in the matrix below rests on the helper alone, and
+therefore on source review until the suite is re-run: `update_signers`
+continuity, the `register_currency` duplicate and full-registry bars, the
+`create_contest` payout-tier bar, the `create_season` duplicate, the
+`enter_contest` currency / funds / max-entry / lock gates, the timestamp and
+post-finality gates on `set_contest_lock_time` and
+`set_contest_conclusion_time`, the `settle_contest` variants, `close_contest`,
+the pause cosigner, `sweep_operator_revenue`'s treasury-owner check, the
+username rules, the `mint_entry_token` remint bar, and the burn row's
+"rejects a token already spent".
+
+`sweep_operator_revenue` earns a second mention: its refusal is what stands
+between operator revenue and an attacker-named treasury ATA, and the
+assertions that follow it read a DIFFERENT currency's accounts, so the account
+the refused call targeted is never re-read as a check. The block is not
+entirely blind — a later sweep of 3 USDT from that same `op_rev` would fail if
+the refused call had drained it — but that is an accident of ordering, not an
+assertion, and reordering the test would remove it silently.
+
+**Two different properties share one error spelling.** `Unauthorized` (6000)
+is raised both by "this key holds no vault seat" and by "this signer holds a
+seat, but a second one was required", and the suite asserts both with the same
+`/Unauthorized/i`. They are not interchangeable evidence.
+
+- `tests/turf_vault.ts:1551`, in `only a vault signer may burn, and the hash
+  must name the token`, IS a genuine non-signer check: `burnEntryToken(token,
+  stranger)` is called by a key with no seat at all.
+- `tests/turf_vault.ts:1325` and `:1355`, in `enforces set_contest_lock_time
+  and set_contest_conclusion_time rules`, are NOT. Both call as `admin` — a
+  real vault signer — with `cosigner: null`, and both are followed by the
+  identical call succeeding once `signer2` cosigns. They are the
+  post-finality 2-of-3 RE-OPEN gate: an amend after a conclusion time is set,
+  and an amend after the lock has passed. Reading them as non-signer coverage
+  would credit seat checks that nothing here exercises.
 
 ## Instruction Matrix
 
@@ -106,7 +155,11 @@ upgrade.
 - Local TypeScript tests run the default localnet/devnet build. The
   mainnet-only `INIT_AUTHORITY`, canonical USDC, and canonical USDT checks are
   feature-gated and should be proven as part of mainnet build/deploy review.
-- Devnet and mainnet verification are distinct: devnet may run v0.25 while
-  mainnet remains v0.24 until the next upgrade window.
+- Devnet and mainnet verification are distinct. The two clusters are built
+  from different feature gates and are different sizes on chain, and nothing in
+  the program ties their releases together, so they CAN diverge. They do not
+  today: both ran v0.25.0 when [`CURRENT_DEPLOYMENT.md`](CURRENT_DEPLOYMENT.md)
+  was re-derived on 2026-09-07. Read that file for each cluster's label and for
+  how the label was established; do not carry an example from this line.
 - Any signer or upgrade-authority change must update `CURRENT_DEPLOYMENT.md` in
   the same change that updates deployment configuration.
