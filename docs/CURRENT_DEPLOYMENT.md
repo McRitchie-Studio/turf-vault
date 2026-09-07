@@ -131,7 +131,12 @@ and a threshold, which is what the table rows above claim.
 It is a plain public RPC read: no configured keypair, no Heroku, no
 `turf-monster`, no app credential. That independence matters most during an
 incident, when the app whose key you are rotating is the thing you cannot
-trust.
+trust. Run cold on **2026-09-07** to prove that: the block below extracted
+from this committed file, then executed under `env -i` with an **empty
+`HOME`**, macOS's stock `/usr/bin/ruby` (2.6.10), and nothing on `PATH` but
+`solana` and the system directories. Both clusters came back complete, and
+pointing it at the program ID instead of the PDA aborted `not a VaultState: 36
+bytes, expected 1515`.
 
 The first line selects mainnet; uncomment the second instead for devnet. Both
 program IDs are the deployed IDs above, and each `VaultState` address is the
