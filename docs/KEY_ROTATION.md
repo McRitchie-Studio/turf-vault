@@ -3,23 +3,53 @@
 > **HISTORICAL SUPERSEDED PLAN. DO NOT EXECUTE AS CURRENT PROCEDURE.**
 > The retired Alex Bot key `F6f8...KzhZ` has zero devnet authority in the
 > current deployment record. Current live signer facts live in
-> [`CURRENT_DEPLOYMENT.md`](CURRENT_DEPLOYMENT.md). Current source includes
-> `update_signers`, so future signer rotation should be planned from current
-> source, `CURRENT_DEPLOYMENT.md`, and the Squads state rather than replaying
-> this redeploy plan.
+> [`CURRENT_DEPLOYMENT.md`](CURRENT_DEPLOYMENT.md). `update_signers` is not
+> merely in current source — it is **on both deployed programs** (§0), so a
+> signer rotation is planned from current source, `CURRENT_DEPLOYMENT.md`, and
+> the Squads state, never by replaying this redeploy plan.
 >
-> **STATUS: DRAFT / PLAN ONLY. DO NOT EXECUTE.**
-> This document is the redeploy runbook for rotating a leaked **Alex Bot**
-> signer key off TurfVault. Execution is **gated** on:
+> **STATUS OF §1–§8: DRAFT / PLAN ONLY. DO NOT EXECUTE.**
+> Those sections are the redeploy runbook for rotating a leaked **Alex Bot**
+> signer key off the v0.19 program. Their execution is **gated** on:
 > 1. an adversarial mini-review of v0.20 (`update_signers` + this plan), and
 > 2. an explicit operator GO.
 >
-> Nothing in here has been run. The agent op token is **read-only** — every
-> step that writes a key, signs, or broadcasts is an **operator action**.
+> Nothing in them has been run. The agent op token is **read-only** — every
+> step that writes a key, signs, or broadcasts is an **operator action**. **This
+> gate covers the redeploy, NOT the containment below** — the containment is one
+> already-shipped instruction, and an incident does not wait on a review of a
+> plan it has no reason to run.
+
+> **IF YOU ARE HERE WITH A LEAKED KEY RIGHT NOW, READ THIS AND SKIP §1–§8.**
+> Those sections are the v0.19-era redeploy, and you do not need them.
+> On every deployment live today the leaked key is evicted from the vault signer
+> set by **one 2-of-3 `update_signers` transaction**, effective the moment it
+> confirms — no redeploy, no new program ID, no re-init, no §5. It must be
+> signed by the two keys that are **staying**, Alex (`7ZDJ…59Tcr`) and Mason
+> (`Cyt…qWjrR`); the compromised key **must not sign it** (§0 step 2 explains
+> why a bot-signed eviction cannot work). Then rotate the Squads membership,
+> which `update_signers` does not touch (§0 step 4, procedure in §7). Read §0's
+> containment list for the full sequence; the rest of this document is history.
 
 ---
 
 ## §0. Why a full redeploy (and why only once)
+
+> **THE PREMISE OF THIS SECTION EXPIRED AT v0.20 — read this box before the
+> table.** Everything below — the rest of §0, §1–§9, and the risk register —
+> was reasoned against the **v0.19** program, whose `VaultState.signers`
+> genuinely was immutable: v0.16 had removed `update_signers`. **v0.20 restored
+> it**, and every release since has shipped it. Measured from chain on
+> 2026-09-07 — not read from any document —
+> both live programs dispatch `update_signers`, both carry the same three
+> signers, and both are threshold 2 (method under **Verifying this yourself**
+> below). So a leaked vault signer today is evicted by **one 2-of-3
+> `update_signers` transaction that takes effect on confirmation**: no redeploy,
+> no new program ID, no re-init, no §5. The redeploy described below was the
+> price of the one compromise that happened while the program could not rotate
+> itself. The paragraph after the table already promises exactly this — "never a
+> redeploy again" — and the rest of §0 had simply never been re-tensed to agree
+> with it.
 
 The leaked key is **Alex Bot** (`F6f8h5yynbnkgWvU5abQx3RJxJpe8EoQmeFBuNKdKzhZ`),
 a 1-of-3 vault signer **and** a member of the Squads upgrade-authority
@@ -30,13 +60,15 @@ Two separate things contain this key:
 | Where | Mutable in place? | How |
 |-------|-------------------|-----|
 | Squads multisig **membership** (upgrade authority) | **YES** | Squads config tx (2-of-3) — members ARE mutable. |
-| The deployed program's **VaultState.signers** | **NO** (on the *currently deployed* v0.19 program) | v0.16 removed `update_signers`, so the on-chain signer set is immutable. |
+| The deployed program's **VaultState.signers** | **YES on every program deployed today**; **NO** on the v0.19 program this plan was written against | v0.20 restored `update_signers` (2-of-3), and it has shipped in every release since. On v0.19 the set was immutable, because v0.16 had removed the instruction. |
 
-Because the *deployed* program can't rotate its own `VaultState.signers`, the
-only way to evict the leaked key from the **vault signer set** is to deploy a
-program that HAS `update_signers` and re-init its VaultState with the new key.
-That program is **v0.20**. After this rotation, any future signer compromise is
-a single 2-of-3 `update_signers` transaction — **never a redeploy again.**
+Because the **v0.19** program could not rotate its own `VaultState.signers`,
+the only way to evict the leaked key from the **vault signer set** *at the time*
+was to deploy a program that HAS `update_signers` and re-init its VaultState
+with the new key. That program was **v0.20**. After that rotation, any future
+signer compromise is a single 2-of-3 `update_signers` transaction — **never a
+redeploy again.** That future is the present: see the box above, and §0 step 2
+below for the transaction itself.
 
 > We could *technically* leave the existing v0.19 program deployed, transfer a
 > v0.20 binary onto it via the Squads upgrade, and... still be stuck, because
@@ -48,14 +80,26 @@ a single 2-of-3 `update_signers` transaction — **never a redeploy again.**
 
 ### Threat-model note (do this FIRST, before anything below)
 
-A leaked Alex Bot key is a **1-of-3** signer. On its own it can run only the
-**1-of-3 routine ops** (`create_contest`, `set_contest_lock_time`,
-`close_contest`, `mint_entry_token`, `burn_entry_token`, facilitate entries). It
-**cannot** settle, cancel, sweep, register/deactivate currencies, pause/unpause,
-or `update_signers` — those are 2-of-3. So the blast radius is limited to
-vandalism UNLESS the attacker also holds a second signer — with one exception,
-below, that is worse than vandalism. **But** Alex Bot is also a Squads member;
-two compromised Squads members could push a malicious program upgrade.
+A leaked Alex Bot key is a **1-of-3** signer. On its own it can run the
+**1-of-3 ops**: `create_contest`, `close_contest`, `create_season`,
+`grant_seeds`, `mint_entry_token`, `burn_entry_token`,
+`admin_create_user_account`, `admin_set_username`, and facilitating entries
+(`enter_contest`, `enter_contest_with_token`). `set_contest_lock_time` and
+`set_contest_conclusion_time` are 1-of-3 in the ordinary direction and escalate
+to 2-of-3 only when they re-open a window that had already closed. It **cannot**
+settle, cancel, sweep, register/deactivate currencies, pause/unpause, or
+`update_signers` — those need two distinct current signers. So the blast radius
+is vandalism UNLESS the attacker also holds a second signer — with one
+exception, below, that is worse than vandalism. **But** Alex Bot is also a
+Squads member; two compromised Squads members could push a malicious program
+upgrade.
+
+> That list was re-derived on 2026-09-07 by reading which gate each file in
+> `programs/turf_vault/src/instructions/` carries —
+> `is_signer(&admin.key())` is 1-of-3, `validate_multisig(&admin, &cosigner)` is
+> 2-of-3. It replaces a five-op version that read as exhaustive and omitted four
+> 1-of-3 instructions. Under-scoping the blast radius is a specific way an
+> incident runbook fails the person reading it.
 
 > **`burn_entry_token` is the exception: the one 1-of-3 op that DESTROYS USER
 > PROPERTY.** A single leaked key can void every unspent free-entry voucher on
@@ -67,31 +111,103 @@ two compromised Squads members could push a malicious program upgrade.
 > recorded before the burns — a `getProgramAccounts` scan for `EntryTokenAccount`
 > (Rails' `Solana::Vault#list_entry_tokens` reads one wallet at a time).
 >
-> **NEITHER §0 STEP STOPS IT — not the pause, and not the env rotation.** Like
-> `mint_entry_token`, this instruction is deliberately not pause-gated, so §0's
+> **NEITHER THE PAUSE NOR THE ENV ROTATION STOPS IT.** Like
+> `mint_entry_token`, this instruction is deliberately not pause-gated, so a
 > `pause` protects entries and funds and leaves vouchers exposed. Rotating
-> `SOLANA_ADMIN_KEY` (§0 step 2) does not close the gap either: it stops **your
-> server** from signing with the leaked key, and nothing more. The gate is
-> **on-chain** — `vault_state.load()?.is_signer(&admin.key())` in
-> `burn_entry_token.rs` — and an attacker holding the private key signs a burn
-> straight to an RPC, with no environment variable anywhere in that path. The
-> deployed v0.19 `VaultState.signers` is immutable (see the table above), so the
-> leaked key stays an accepted signer for the whole window. **Exposure ends at
-> §5**, when the new program's VaultState is re-initialized without it — which is
-> exactly what §0 step 2 below already says: "the on-chain set still trusts it
-> until §5." Speed still matters, but the clock that counts runs to §5, not to
-> §0. Until §5 lands, treat every unspent voucher as burnable, and record the
-> outstanding set now.
+> `SOLANA_ADMIN_KEY` does not close the gap either: it stops **your server**
+> from signing with the leaked key, and nothing more. The gate is **on-chain** —
+> `vault_state.load()?.is_signer(&admin.key())` in `burn_entry_token.rs` — and
+> an attacker holding the private key signs a burn straight to an RPC, with no
+> environment variable anywhere in that path.
+>
+> **WHAT DOES STOP IT: one 2-of-3 `update_signers`, effective on confirmation.**
+> That gate reads `VaultState.signers`, so removing the leaked key from that
+> array ends the exposure outright — there is nothing further to wait for. The
+> instruction is available on **every program that could ever execute a burn**,
+> because `update_signers` has shipped in every release since v0.20 and
+> `burn_entry_token` has shipped in none. It is also not pause-gated, so the
+> eviction works while the vault is paused. See §0 step 2 for who signs it.
+>
+> **"Exposure ends at §5" is true only of the v0.19 program**, whose signer set
+> could not be rotated at all. This box used to state it unconditionally; that
+> was the stale v0.19 premise rather than a property of the attack, and it
+> pointed an operator at a redeploy when one transaction would do.
+>
+> Until the eviction confirms, treat every unspent voucher as burnable and
+> record the outstanding set now — a `getProgramAccounts` scan for
+> `EntryTokenAccount` (Rails' `Solana::Vault#list_entry_tokens` reads one wallet
+> at a time). Speed still matters; the clock runs to that one transaction.
 
-Immediate containment (operator, before the redeploy):
+### Immediate containment (operator)
+
+**Step 2 is the containment. The other three are hygiene, cleanup, and blast
+reduction.**
+
 1. **`pause` the vault** (2-of-3: Alex + Mason, NOT the compromised bot) to
-   block `enter_contest{,_with_token}` while you rotate. Pause does NOT block
-   the 1-of-3 ops the leaked key could still call, so also:
-2. **Rotate the SOLANA_ADMIN_KEY env off the leaked key** wherever it lives
-   (Heroku devnet prod, dev `.env`, 1Password `agent.solana`) so the server
-   stops *using* it — but the on-chain set still trusts it until §5.
-3. Treat the Squads membership rotation (§7) and old-program close (§8) as
-   part of the same incident, not optional cleanup.
+   block `enter_contest` / `enter_contest_with_token` while you work. Pause
+   reaches nothing else — every other 1-of-3 op listed above stays callable — so
+   do not stop here.
+2. **Evict the leaked key: ONE `update_signers` (2-of-3), signed by the two keys
+   that are STAYING.** This removes the key from `VaultState.signers`, which is
+   the array every on-chain gate reads, and it takes effect on confirmation. No
+   redeploy, no re-init. `update_signers` is not pause-gated, so it works with
+   the vault paused from step 1.
+   - **The compromised key MUST NOT supply either signature.** Continuity
+     (`update_signers.rs:100-107`) requires BOTH authorizing cosigners to
+     survive into the new set, so a bot-signed eviction is self-contradictory:
+     drop the bot from the new set and the guard trips
+     `SignerContinuityRequired` (**6017**); keep the bot to satisfy the guard
+     and you have not evicted it. Sign with Alex (`7ZDJ…59Tcr`) and Mason
+     (`Cyt…qWjrR`) — the two human signers in `Identities` below.
+   - **Read the live signer set before composing it** (the read-back in §5).
+     Both signing keys must already be in that set, or `validate_multisig`
+     rejects with `Unauthorized` (**6000**) — loud and harmless, but paid for
+     out of the incident window, and 6000 does not say which key was the
+     problem (see the 6000 note in §5).
+   - **No script in this repo builds this transaction yet.** `scripts/` holds
+     `initialize-mainnet.js`, `squad-upgrade.js`, `check-doc-op-refs.js` and
+     `squad.json`; none of them compose `update_signers`. §5's "WHO BUILDS AND
+     COLLECTS THE TWO SIGNATURES" note sizes the work. Budget it into the
+     incident, or write it before you need it.
+3. **Rotate the `SOLANA_ADMIN_KEY` env off the leaked key** wherever it lives
+   (Heroku, dev `.env`, 1Password `agent.solana`) so your server stops *using*
+   it. This is hygiene, not containment: it constrains **your own server**
+   across every on-chain-gated op, and constrains the attacker in none of them.
+4. **Rotate the Squads membership** (procedure in §7, against the live Squads in
+   `scripts/squad.json` — §7's `9dCLM…` is the historical multisig). Step 2
+   moves the vault signer set only; the leaked key remains a Squads member, and
+   so a partial route to the program's **upgrade** authority, until this runs.
+   Two authorities, two transactions. Treat this and any old-program close (§8)
+   as part of the same incident, not optional cleanup.
+
+### Verifying this yourself
+
+The claim that `update_signers` is reachable on the live programs is a chain
+fact, so read it from the chain rather than from this file. Anchor compiles a
+discriminator, `sha256("global:<name>")[0..8]`, into the binary for every
+instruction it dispatches:
+
+```bash
+solana program dump <PROGRAM_ID> /tmp/live.so --url <mainnet-beta|devnet>
+ruby -rdigest -e 'b = File.binread("/tmp/live.so"); %w[update_signers burn_entry_token no_such_instruction].each { |n| puts "#{n}: #{b.include?(Digest::SHA256.digest("global:#{n}")[0, 8]) ? "PRESENT" : "absent"}" }'
+
+# And the set it would rotate: VaultState PDA, seeds [b"vault"].
+# Signers sit at byte offsets 8/40/72; the threshold byte is at 104.
+solana account <VAULT_STATE_PDA> --url <cluster> --output-file /tmp/vault.bin
+```
+
+On 2026-09-07 both clusters answered `update_signers: PRESENT`,
+`burn_entry_token: absent`, `no_such_instruction: absent` — the last of those
+being the control that shows the probe discriminates rather than matching
+whatever it is handed — and both `VaultState` accounts decoded to the same three
+signers with threshold `2`. Program IDs and PDAs are in
+[`CURRENT_DEPLOYMENT.md`](CURRENT_DEPLOYMENT.md).
+
+**What this does and does not settle.** It settles the only thing §0 needs: the
+eviction instruction is on the live programs, and the burn instruction is not.
+It does not pin the BUILD — a patch inside a handler leaves every discriminator
+unchanged — so do not read a version label out of it beyond the instruction
+surface.
 
 ---
 
@@ -107,6 +223,17 @@ Immediate containment (operator, before the redeploy):
 > **INIT_AUTHORITY is Alex's Phantom key, NOT Alex Bot.** It is a compile-time
 > constant in `state.rs` and is unaffected by the leak. The §5 re-init runs
 > from Phantom, so the leaked key never touches the new program.
+
+> **`F6f8…KzhZ` IS NOT THE CURRENT ALEX BOT — do not paste it into a live
+> rotation.** This table records the 2026-06 incident: `F6f8…` was the key
+> leaked then, and it was replaced. Read on 2026-09-07, both clusters'
+> `VaultState.signers` are `8K81w4e6UcB7TiANhM9N8sAgijJvTxxybRi8AENRaRYd`
+> (Alex Bot), `7ZDJp7FU…59Tcr` (Alex) and `CytJS23p…qWjrR` (Mason), threshold
+> `2`. Alex and Mason are unchanged, which is why the containment above names
+> them by these pubkeys; the bot slot is not. **Always read the live set before
+> composing a rotation** rather than trusting either this table or
+> [`CURRENT_DEPLOYMENT.md`](CURRENT_DEPLOYMENT.md) — a signer-set row in a
+> document is a record of a reading, never the set itself.
 
 Mainnet program / Squads (from `scripts/squad.json`'s **top level** — that
 file has no `mainnet` block; its top level IS the live mainnet-beta config,
@@ -290,9 +417,13 @@ heroku run 'bin/rails runner "puts Solana::Vault.new.read_vault_state.inspect"' 
 #   signers MUST be [NEW alex_bot, 7ZDJ, Cyt]; F6f8… MUST be absent; threshold 2.
 ```
 
-> After §5, **`update_signers` is live on this program.** Any future signer
-> compromise is now a 2-of-3 `update_signers` tx (Alex + Mason cosign, evict the
-> bad key, keep continuity) — no redeploy. That is the whole point of v0.20.
+> **`update_signers` is live on every deployed program today** — v0.20 shipped
+> it and every release since has carried it (§0, with the chain probe under
+> **Verifying this yourself**). A signer compromise is therefore a 2-of-3
+> `update_signers` tx (Alex + Mason cosign, evict the bad key, keep continuity),
+> never a redeploy. That is the whole point of v0.20, and it is why §0's
+> containment no longer waits for this section — §5 is what *originally*
+> delivered the instruction, not what a rotation waits on now.
 >
 > **Continuity rule for every future `update_signers` (2-of-3, R7):** the new
 > set MUST keep BOTH human cosigners — Alex (`7ZDJ…59Tcr`) and Mason
@@ -361,6 +492,19 @@ heroku run 'bin/rails runner "puts Solana::Vault.new.read_vault_state.inspect"' 
 > `update_signers.rs:58`), whose message — "Only the vault admin can perform
 > this action" (`errors.rs:20-21`) — misdescribes the check it reports: there is
 > no single admin here, only two current signers.
+>
+> **A 6000 does not tell you WHICH half failed — do not read it as "my key was
+> rejected."** `validate_multisig` is `s1 != s2 && is_signer(s1) &&
+> is_signer(s2)` (`state.rs:159-160`): one boolean over three conditions, and
+> the identical 6000 comes back when the caller is a stranger holding no seat,
+> when the caller is a perfectly good current signer whose COSIGNER is not one,
+> and when the same key was passed into both slots. Those are three different
+> problems with three different fixes. The same error code also fronts the
+> unrelated **1-of-3** checks elsewhere in the program — `burn_entry_token.rs`'s
+> `is_signer(&admin.key())` returns 6000 too — so a bare 6000 in a log says only
+> "some signer constraint failed on some instruction," and never which. Diagnose
+> by reading the live `VaultState.signers` and comparing BOTH keys against it,
+> not by re-sending.
 >
 > **2-of-3 is structural, not configured.** `validate_multisig` never reads
 > `VaultState.threshold` — and neither does anything else that authorizes. The
@@ -435,7 +579,9 @@ heroku run 'bin/rails runner "puts Solana::Vault.new.read_vault_state.inspect"' 
 > keys — verify that before you rely on it" says above. If either key is absent
 > from the live set, `validate_multisig` rejects the transaction with
 > `Unauthorized` (**6000**) — loud and harmless, but paid for out of the
-> rotation window.
+> rotation window, and 6000 will not tell you which of the two keys was the
+> problem (see the 6000 note above). Check both against the read-back rather
+> than guessing.
 > Continuity (`update_signers.rs:100-107`) requires BOTH authorizing cosigners
 > to survive into the new set, so a bot signature forces the bot to stay:
 > dropping it then trips `SignerContinuityRequired` (**6017**,
@@ -557,14 +703,14 @@ Prioritize a clean upgrade-authority + Squads state so §8 can execute.
 
 | # | Risk | Mitigation |
 |---|------|------------|
-| R1 | **Leaked key acts during the window.** It's 1-of-3, so it can `create_contest` / `mint_entry_token` / `close_contest` / facilitate entries until §5. | §0 containment: `pause` first, rotate `SOLANA_ADMIN_KEY` env off it, then redeploy promptly. |
-| R1b | **Leaked key burns free-entry vouchers.** `burn_entry_token` is 1-of-3 and **not pause-gated**, so the key can irreversibly void every unspent voucher on the platform before §5 — the only 1-of-3 op that destroys user property, and the one §0's `pause` does not stop. | **Nothing in §0 ends this exposure.** The gate is on-chain, so §0's `pause` does not reach it and §0's env rotation stops only the SERVER from signing — the leaked key stays an accepted signer on the deployed program until §5 re-inits the VaultState without it. Mitigation is therefore recovery plus speed to §5, not prevention at §0: record the outstanding voucher set (`getProgramAccounts` for `EntryTokenAccount`) as early in §0 as practical, and treat every unspent voucher as burnable until §5 completes. Replacements must be minted against **fresh** `source_ref`s, because the tombstoned PDAs block a re-mint on the originals. |
+| R1 | **Leaked key acts during the window.** It's 1-of-3, so it can `create_contest` / `mint_entry_token` / `close_contest` / `create_season` / `grant_seeds` / the two `admin_*` user ops / facilitate entries, until it is evicted from `VaultState.signers`. | **§0 step 2 — one 2-of-3 `update_signers`, signed by Alex + Mason, effective on confirmation.** That is the only step that stops the leaked key, and it is available on every deployed program (§0). The other two §0 steps do NOT prevent these ops and must not be read as if they did: `pause` blocks `enter_contest{,_with_token}` and reaches nothing else, and the `SOLANA_ADMIN_KEY` rotation stops only **your server** from signing — across every on-chain-gated op, not merely the burn — while the attacker signs straight to an RPC. |
+| R1b | **Leaked key burns free-entry vouchers.** `burn_entry_token` is 1-of-3 and **not pause-gated**, so the key can irreversibly void every unspent voucher on the platform until it is evicted from `VaultState.signers` — the only 1-of-3 op that destroys user property, and the one a `pause` does not stop. | **Prevention is available, and it is one transaction: §0 step 2.** The gate is on-chain, so a `pause` does not reach it and the env rotation stops only the SERVER from signing; the leaked key stays an accepted signer until it is removed from `VaultState.signers`. Remove it with a 2-of-3 `update_signers` cosigned by Alex + Mason — no redeploy, no §5 — and the exposure ends on confirmation. Recovery still runs in parallel, because burns landing before that confirmation are irreversible: record the outstanding voucher set (`getProgramAccounts` for `EntryTokenAccount`) as early as practical, treat every unspent voucher as burnable until the eviction confirms, and mint replacements against **fresh** `source_ref`s, because the tombstoned PDAs block a re-mint on the originals. |
 | R2 | **Two-key compromise.** If a SECOND signer is also compromised, the attacker has 2-of-3 → can settle/sweep/`update_signers`/push a Squads upgrade. | Out of scope of a single-key rotation. If suspected, freeze funds (sweep to a fresh cold treasury via the clean signers) before anything else, and treat as a full incident. |
 | R3 | **Transient tainted authority** if §4 reuses the old Squads (still contains leaked bot). | Recommended path stands up a NEW Squads; if reusing, run §7 before real funds flow. |
 | R4 | **Closing the wrong program** in §8. | Triple-check the program ID; close is irreversible. New program ID is in `scripts/squad.json` after §3. |
 | R5 | **IDL drift** — re-pinning from a stale `anchor idl fetch` instead of the built IDL. | §6 uses `target/idl/turf_vault.json` from the §3b build; verify the hash matches `EXPECTED_IDL_HASH` before push. |
 | R6 | **Sidekiq runs on the old PROGRAM_ID** after the env swap. | §6: restart Sidekiq, confirm one PID, rely on `ensure_program_id_live!` guard. |
-| R7 | **Continuity guard rejects the §5 set** — N/A for re-init (init isn't `update_signers`), but relevant for FUTURE rotations: a 2-of-3 rotation must keep BOTH authorizing cosigners + no default slots, else 6017. A rotation that keeps only ONE controlled key (e.g. `[Alex, junk, junk]`) bricks all governance — no second key can ever cosign — even though a weaker "keep ≥1" guard would have passed it. | **Documented in v0.20 (continuity now requires BOTH cosigners survive).** Any future `update_signers` MUST keep both human cosigners — Alex (`7ZDJ…59Tcr`) and Mason (`Cyt…qWjrR`) — and MUST NOT rotate down to a single operator-controlled key. After the rotation, the post-rotation VaultState read-back MUST confirm TWO controlled keys survive (not just one): both Alex and Mason present in `signers`, and only the leaked key evicted. |
+| R7 | **Continuity guard rejects the §5 set** — N/A for re-init (init isn't `update_signers`), but relevant for FUTURE rotations: a 2-of-3 rotation must keep BOTH authorizing cosigners + no default slots, else 6017. A rotation that keeps only ONE controlled key (e.g. `[Alex, junk, junk]`) bricks all governance — no second key can ever cosign — even though a weaker "keep ≥1" guard would have passed it. | **Documented in v0.20 (continuity now requires BOTH cosigners survive).** Any future `update_signers` MUST keep both human cosigners — Alex (`7ZDJ…59Tcr`) and Mason (`Cyt…qWjrR`) — and MUST NOT rotate down to a single operator-controlled key. After the rotation, the post-rotation VaultState read-back MUST confirm TWO controlled keys survive (not just one): both Alex and Mason present in `signers`, and only the leaked key evicted. The same guard is why the **compromised** key must not supply either signature on an eviction (§0 step 2): a bot that cosigns must survive, so a bot-signed eviction either trips 6017 or fails to evict. |
 | R8 | **1Password write blocked** — agent op token is read-only. | Every key write (§1, §3a backups, §6 env secret) is an explicit operator action; the agent only drafts/plans. |
 
 ---
