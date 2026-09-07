@@ -34,6 +34,21 @@ ANCHOR_PROVIDER_URL=http://127.0.0.1:8898 \
 Result: `27 passing` (was `23`; +4 for `burn_entry_token`), against an
 isolated local validator on `127.0.0.1:8898`.
 
+> **A passing count is not evidence for every row below.** Until turf-vault
+> PR #18, the suite's `expectRejected` helper was INERT at all 45 of its call
+> sites: `expect.fail` sat inside the `try`, its AssertionError fell into the
+> `catch` one line below, and the failure message interpolates the pattern
+> verbatim — so the error's own text contained the literal the regex was hunting
+> for, and self-matched. A call the program ACCEPTED was recorded as a passing
+> refusal, with the blindness exactly one failure mode wide: "the guard did not
+> refuse at all." Accept-path results are unaffected, but no REJECTION assertion
+> predating that repair is evidence of anything. The **lock-gate** and
+> **post-lock-amend** rows are being corrected under their own task; this run's
+> count does not cover them. The `burn_entry_token` row's refusal clauses below
+> rest on SOURCE REVIEW rather than on the suite — only its double-burn refusal
+> carries independent test evidence, because the assertion that follows it
+> re-reads `consumed_at` and requires the original stamp to be unmoved.
+
 ## Instruction Matrix
 
 | Area | Instruction | Required proof |
