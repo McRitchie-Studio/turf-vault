@@ -67,11 +67,21 @@ two compromised Squads members could push a malicious program upgrade.
 > recorded before the burns — a `getProgramAccounts` scan for `EntryTokenAccount`
 > (Rails' `Solana::Vault#list_entry_tokens` reads one wallet at a time).
 >
-> **`pause` does not stop it.** Like `mint_entry_token`, this instruction is
-> deliberately not pause-gated, so §0's pause protects entries and funds but
-> leaves vouchers exposed. Only rotating `SOLANA_ADMIN_KEY` off the leaked key
-> stops a burn, which makes voucher loss the damage most sensitive to how fast
-> §0 completes.
+> **NEITHER §0 STEP STOPS IT — not the pause, and not the env rotation.** Like
+> `mint_entry_token`, this instruction is deliberately not pause-gated, so §0's
+> `pause` protects entries and funds and leaves vouchers exposed. Rotating
+> `SOLANA_ADMIN_KEY` (§0 step 2) does not close the gap either: it stops **your
+> server** from signing with the leaked key, and nothing more. The gate is
+> **on-chain** — `vault_state.load()?.is_signer(&admin.key())` in
+> `burn_entry_token.rs` — and an attacker holding the private key signs a burn
+> straight to an RPC, with no environment variable anywhere in that path. The
+> deployed v0.19 `VaultState.signers` is immutable (see the table above), so the
+> leaked key stays an accepted signer for the whole window. **Exposure ends at
+> §5**, when the new program's VaultState is re-initialized without it — which is
+> exactly what §0 step 2 below already says: "the on-chain set still trusts it
+> until §5." Speed still matters, but the clock that counts runs to §5, not to
+> §0. Until §5 lands, treat every unspent voucher as burnable, and record the
+> outstanding set now.
 
 Immediate containment (operator, before the redeploy):
 1. **`pause` the vault** (2-of-3: Alex + Mason, NOT the compromised bot) to
@@ -548,7 +558,7 @@ Prioritize a clean upgrade-authority + Squads state so §8 can execute.
 | # | Risk | Mitigation |
 |---|------|------------|
 | R1 | **Leaked key acts during the window.** It's 1-of-3, so it can `create_contest` / `mint_entry_token` / `close_contest` / facilitate entries until §5. | §0 containment: `pause` first, rotate `SOLANA_ADMIN_KEY` env off it, then redeploy promptly. |
-| R1b | **Leaked key burns free-entry vouchers.** `burn_entry_token` is 1-of-3 and **not pause-gated**, so the key can irreversibly void every unspent voucher on the platform before §5 — the only 1-of-3 op that destroys user property, and the one §0's `pause` does not stop. | Rotation speed is the whole mitigation: the env rotation in §0, not the pause, is what ends the exposure. Record the outstanding voucher set (`getProgramAccounts` for `EntryTokenAccount`) as early in §0 as practical — replacements must be minted against **fresh** `source_ref`s, because the tombstoned PDAs block a re-mint on the originals. |
+| R1b | **Leaked key burns free-entry vouchers.** `burn_entry_token` is 1-of-3 and **not pause-gated**, so the key can irreversibly void every unspent voucher on the platform before §5 — the only 1-of-3 op that destroys user property, and the one §0's `pause` does not stop. | **Nothing in §0 ends this exposure.** The gate is on-chain, so §0's `pause` does not reach it and §0's env rotation stops only the SERVER from signing — the leaked key stays an accepted signer on the deployed program until §5 re-inits the VaultState without it. Mitigation is therefore recovery plus speed to §5, not prevention at §0: record the outstanding voucher set (`getProgramAccounts` for `EntryTokenAccount`) as early in §0 as practical, and treat every unspent voucher as burnable until §5 completes. Replacements must be minted against **fresh** `source_ref`s, because the tombstoned PDAs block a re-mint on the originals. |
 | R2 | **Two-key compromise.** If a SECOND signer is also compromised, the attacker has 2-of-3 → can settle/sweep/`update_signers`/push a Squads upgrade. | Out of scope of a single-key rotation. If suspected, freeze funds (sweep to a fresh cold treasury via the clean signers) before anything else, and treat as a full incident. |
 | R3 | **Transient tainted authority** if §4 reuses the old Squads (still contains leaked bot). | Recommended path stands up a NEW Squads; if reusing, run §7 before real funds flow. |
 | R4 | **Closing the wrong program** in §8. | Triple-check the program ID; close is irreversible. New program ID is in `scripts/squad.json` after §3. |
