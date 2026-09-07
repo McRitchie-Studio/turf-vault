@@ -43,8 +43,19 @@ All notable changes to TurfVault are documented here. Format based on [Keep a Ch
   by the flag (a re-burn would overwrite `consumed_at` and destroy the record of
   when the burn happened). `source_ref_hash` seed-binds the target and the
   handler asserts it equals `sha256(entry_token.source_ref)`, so a burn must name
-  its token twice — a wrong account fails the seeds check rather than quietly
-  destroying someone else's voucher.
+  its token twice.
+
+  **That pair of checks is a FAT-FINGER GUARD, not a targeting control.** An
+  INCONSISTENT pair — an account named without its matching hash — fails the
+  seeds check. A SELF-CONSISTENT one does not: supply `(some other token, that
+  token's own hash)` and both the seeds check and the handler's assert hold, and
+  that token burns. The assert adds nothing against a real account, because
+  `mint_entry_token` already asserts `sha256(source_ref) == source_ref_hash`
+  before writing `source_ref` and seeds the PDA with that hash, so every account
+  the program can create satisfies the re-derivation by construction. Nothing
+  restricts WHICH voucher a signer may burn, so **a 1-of-3 signer can burn any
+  unspent voucher on the platform** — see `docs/KEY_ROTATION.md` R1b and the
+  `burn_entry_token` row of `docs/VERIFICATION_MATRIX.md`.
 
   New error `EntryTokenAlreadyBurned` (6045).
 
@@ -311,6 +322,80 @@ bit-compatible (their zeroed bytes decode as `lock_timestamp == 0` = no lock).
   / `cancel_contest` still accept `Open || Locked`; the `Locked` arm is dead but
   harmless. Error `ContestNotLocked` (6028) retained for numbering stability.
 
+## [0.16.0] - 2026-05-27
+
+The non-custodial refactor: the pooled-balance model gives way to server-signed
+self-custody, currencies become an on-chain registry, and `VaultState` moves to
+zero-copy. Deployed to **devnet only** — `scripts/squad.json` was bumped to the
+v0.16 devnet program the same day; mainnet's first deploy came later. The layout
+change is not backward compatible with v0.15.1 PDAs, so devnet state was torn
+down, which was acceptable because no real user data existed yet.
+
+> **Reconstructed 2026-09-07 from the release commit `e9ea5a9` and the source
+> tree at that commit** — tags stop at `v0.15.0` and resume at `v0.20.0`, so the
+> tree is the record, not a tag. This heading was missing entirely: the changelog
+> jumped 0.15.1 → 0.17.0, leaving the vault's governance story silent about the
+> release it turns on, because v0.16 is where `update_signers` was removed. The
+> v0.24.0 entry already accounts for the 0.21–0.23 gap (those iterations never
+> landed on `main`); v0.16 had no such explanation, because it did land and did
+> deploy. `docs/v0.16-spec.md` is the DESIGN INTENT — a draft spec written before
+> the source changed; what follows is the shipped surface.
+
+### Removed
+
+- **`update_signers` — a deployed program's signer set became IMMUTABLE.**
+  `programs/turf_vault/src/instructions/update_signers.rs` was deleted, and
+  `SignerContinuityRequired` (6017) retired with it — v0.16's own `errors.rs`
+  annotates the slot `6017 SignerContinuityRequired (no update_signers in
+  v0.16)`. This is the load-bearing fact of the release. With no in-place
+  rotation, a compromised signer key can be evicted only by a full program
+  redeploy plus re-init, with the old ProgramData rent permanently lost. That is
+  the premise the key-rotation runbook was written on, and precisely what
+  v0.20.0 was written to undo.
+- **`deposit` and `withdraw`** — there is no pooled balance left to move.
+  `UserAccount.balance`, `total_deposited` / `total_withdrawn` and the daily
+  withdraw cap go with them (`WithdrawDailyCapExceeded` 6019 retired, slot kept).
+- **`enter_contest_direct` and `enter_contest_direct_with_token`** — with funds
+  in the user's own ATA, the Phantom and managed paths converge, so
+  `enter_contest` / `enter_contest_with_token` serve both.
+- **`force_close_vault`** — the v0.2-era schema-migration escape hatch.
+
+Retired error variants stay in the enum for numbering stability; no renumbering.
+
+### Added
+
+- **Server-signed self-custody.** USDC and USDT live in each user's own ATA —
+  Rails holds the encrypted key for web2 users, Phantom signs for web3. A contest
+  entry is an SPL transfer from the user's ATA to a per-currency operator-revenue
+  PDA at `[b"op_rev", mint]`.
+- **On-chain currency registry.** `VaultState.accepted_currencies:
+  [AcceptedCurrency; 16]` (USDC at slot 0, USDT at slot 1) with
+  `register_currency` and `deactivate_currency` (2-of-3). Adding a currency is a
+  data update, never a contract upgrade. Payouts stay USDC-only; the payout mint
+  is pinned at `initialize`.
+- **Zero-copy `VaultState`** — `#[account(zero_copy(unsafe))]` + `#[repr(C)]`,
+  because borsh's `deserialize_reader` for a struct this size overflows BPF's 4KB
+  stack frame. `paused` and `AcceptedCurrency.active` become `u8` (0/1) for Pod
+  safety. Every constraint that reads the vault now goes through `AccountLoader`
+  and `load()` — the shape `burn_entry_token` and `update_signers` still use.
+- **Contest lifecycle and treasury instructions**: `lock_contest`,
+  `unlock_contest`, `cancel_contest`, `sweep_operator_revenue`. (`lock_contest` /
+  `unlock_contest` are short-lived — v0.17.0 replaces them with the derived
+  time-lock, which is why that entry removes two instructions this changelog
+  never recorded as added.)
+- **Prize pool decoupled from entry fees.** `Contest.prize_pool` is creator-
+  funded at create time and immutable; entry fees flow to the operator-revenue
+  PDAs, and settlement caps at `prize_pool`.
+- **Lifetime stat counters on `UserAccount`** — `entries`, `wins` (rank == 1),
+  `cashes` (rank > 0), `total_won` — replacing the financial state that left with
+  the custodial model.
+- **New error codes 6023–6033** covering the currency registry, the contest state
+  machine, and treasury operations.
+
+### Surface
+
+- 18 entry points in `lib.rs` (16 instructions plus `pause` / `unpause`).
+
 ## [0.15.1] - 2026-05-24
 
 Pre-mainnet audit closeout. Closes three findings from the 2026-05-24
@@ -492,6 +577,21 @@ layout changes, so no migration needed.
 - **OPSEC-025 — create_contest payout sum used wrapping arithmetic (HIGH).** `payout_amounts.iter().sum::<u64>()` wraps silently; `[u64::MAX, 1]` sums to 0 and would pass an equality check against `prizes=0`. Now a `checked_add` fold → `Overflow`.
 - **OPSEC-026 — force_close_vault was replayable forever (HIGH).** The migration-only instruction had no guard against running on a current-schema vault — 2 compromised signers could brick the live vault at any time. Now refuses when `data.len() == 8 + VaultState::INIT_SPACE` (`AccountAlreadyMigrated`).
 - **OPSEC-027 — update_signers could lock out the multisig (HIGH).** Two compromised signers could rotate to 3 attacker addresses, stranding the legitimate third party. Now requires continuity — at least one of the two cosigners authorizing the update must remain in the new set (`SignerContinuityRequired`, 6017).
+
+  > **SUPERSEDED — do not operate from this rule.** The "at least one" wording is
+  > accurate history: v0.12.0 really shipped
+  > `new_signers.contains(&admin_key) || new_signers.contains(&cosigner_key)`, so
+  > it stands as written. It stopped being the live rule twice over. v0.16.0
+  > (above) REMOVED `update_signers` and retired 6017 with it; v0.20.0 (above)
+  > restored the instruction and TIGHTENED the guard to
+  > `keep_admin && keep_cosigner` — **BOTH** authorizing cosigners must survive,
+  > because a 2-of-3 needs two surviving cosignable keys and a "keep ≥1" guard
+  > would pass a rotation to `[survivor, junk, junk]` that bricks all governance.
+  > **Read the operative rule in the v0.20.0 entry**, and see
+  > `programs/turf_vault/src/instructions/update_signers.rs`. It matters
+  > mid-incident: on an eviction the compromised key must supply NEITHER
+  > signature, because a key that cosigns must survive — so a bot-signed eviction
+  > either trips `SignerContinuityRequired` (6017) or fails to evict the bot.
 
 ### Added
 - New error `SignerContinuityRequired` (6017).

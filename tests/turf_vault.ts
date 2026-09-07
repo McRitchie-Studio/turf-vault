@@ -1550,9 +1550,11 @@ describe("turf_vault verification matrix", () => {
       // A stranger holding no vault seat cannot destroy a user's property.
       await expectRejected(burnEntryToken(token, stranger), /Unauthorized/i);
 
-      // The fat-finger guard. The account and the ref hash must agree, so a
-      // burn aimed at the wrong account fails the seeds check instead of
-      // quietly destroying some other user's token.
+      // The fat-finger guard: the account and the ref hash must agree, so an
+      // INCONSISTENT pair is rejected. Note the limit of what this covers — a
+      // SELF-CONSISTENT pair (another token plus that token's own hash) passes
+      // both the seeds check and the handler's assert and burns that token, so
+      // the binding is not a targeting control and no case here asserts one.
       const other = await mintEntryToken(user1.publicKey, "burn-wrong-hash-target");
       await expectRejected(
         program.methods

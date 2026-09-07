@@ -285,8 +285,13 @@ pub mod turf_vault {
     /// `source |= BURNED_FLAG` (tells a burn apart from a real redemption). No
     /// new field, so accounts minted before this upgrade still deserialize.
     ///
-    /// `source_ref_hash` seed-binds the target: a burn must name its token twice,
-    /// so a wrong account fails the seeds check instead of burning someone else's.
+    /// `source_ref_hash` seed-binds the target as a FAT-FINGER GUARD, not a
+    /// targeting control: a burn must name its token twice, so an INCONSISTENT
+    /// pair fails the seeds check. A SELF-CONSISTENT one does not — pass another
+    /// token together with that token's own hash and both the seeds check and the
+    /// handler's re-derivation hold, and that token burns. Nothing restricts WHICH
+    /// voucher a signer may burn, so a 1-of-3 signer can burn any unspent voucher
+    /// on the platform (see `docs/KEY_ROTATION.md` R1b).
     pub fn burn_entry_token(
         ctx: Context<BurnEntryToken>,
         source_ref_hash: [u8; 32],
