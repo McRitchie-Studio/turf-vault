@@ -86,12 +86,24 @@ pub struct BurnEntryToken<'info> {
     /// SEED-BOUND TO `source_ref_hash` ON PURPOSE — this is the fat-finger guard.
     /// A burn is destructive and irreversible, so the caller must name its target
     /// TWICE: once by passing the account, once by passing the ref hash it should
-    /// derive from. Naming the wrong account fails the seeds check instead of
-    /// quietly burning some other user's token. (The hash is an instruction arg
-    /// rather than a `hash()` call inside the seed expression because `anchor idl
-    /// build` cannot represent a function-call seed — the same reason, and the
-    /// same shape, as `mint_entry_token`. The handler's assert below closes the
-    /// loop by binding that arg back to the stored `source_ref`.)
+    /// derive from. An INCONSISTENT pair — an account named without its matching
+    /// hash — fails the seeds check instead of burning something unintended.
+    ///
+    /// IT IS NOT A TARGETING CONTROL. Nothing here restricts WHICH voucher a
+    /// vault signer may burn, and a SELF-CONSISTENT pair defeats the binding
+    /// outright: pass `(some other token, that token's own hash)` and the seeds
+    /// check derives exactly that account and passes. The hash costs nothing to
+    /// obtain — `source_ref` is public account data, so `sha256` of it is
+    /// computable for every voucher on chain. A 1-of-3 vault signer can
+    /// therefore burn ANY unspent voucher on the platform; `docs/KEY_ROTATION.md`
+    /// R1b treats that as a live risk and plans the response.
+    ///
+    /// (The hash is an instruction arg rather than a `hash()` call inside the
+    /// seed expression because `anchor idl build` cannot represent a
+    /// function-call seed — the same reason, and the same shape, as
+    /// `mint_entry_token`. The handler's assert below re-derives that arg from
+    /// the stored `source_ref`; read the note on the assert itself for why that
+    /// re-derivation does not narrow what this seed binding proves.)
     ///
     /// Both constraints are load-bearing and neither implies the other:
     ///   * the `BURNED_FLAG` check rejects a DOUBLE burn. It cannot be folded
@@ -125,12 +137,23 @@ pub fn handle_burn_entry_token(
     ctx: Context<BurnEntryToken>,
     source_ref_hash: [u8; 32],
 ) -> Result<()> {
-    // Bind the seed arg back to the account's OWN stored ref. Without this the
-    // seeds check proves only "this address derives from the hash you supplied",
-    // which a caller supplying a matched (wrong-account, wrong-hash) pair
-    // satisfies trivially. With it, the burn is provably aimed at the token whose
-    // stored source_ref really is the one named. Mirrors mint_entry_token's
-    // audit #9 assert.
+    // Re-derive the seed arg from the account's OWN stored ref, mirroring
+    // mint_entry_token's audit #9 assert.
+    //
+    // BE CLEAR ABOUT WHAT THIS BUYS: against a real account, nothing. It cannot
+    // fail, because mint_entry_token's own EntryTokenSeedMismatch assert requires
+    // sha256(source_ref) == source_ref_hash BEFORE it writes source_ref, and inits
+    // the PDA at [b"entry_token", source_ref_hash] — so every account this program
+    // can create satisfies this check by construction, and no other instruction
+    // writes source_ref. It does not make the burn "provably aimed" at anything, and it
+    // closes no gap the seeds check left open: a caller who supplies a
+    // SELF-CONSISTENT pair — some other token together with that token's own
+    // hash — passes the seeds check AND this assert, and that token burns.
+    //
+    // The pair of checks buys the fat-finger guard only: an INCONSISTENT pair is
+    // rejected. Keep the assert regardless — it is one hash, and it turns any
+    // future account whose stored ref ever diverged from its PDA seed into a loud
+    // EntryTokenSeedMismatch rather than a silent burn.
     require!(
         hash(&ctx.accounts.entry_token.source_ref).to_bytes() == source_ref_hash,
         VaultError::EntryTokenSeedMismatch
