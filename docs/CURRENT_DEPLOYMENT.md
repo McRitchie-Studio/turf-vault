@@ -44,9 +44,12 @@ Do not infer the live mainnet version from Turf Monster's committed IDL file alo
 
 ## Verification
 
-Every row of both tables above was re-derived from chain on **2026-09-07** with
-the commands below. That date covers those two tables and nothing else in this
-repository.
+Every row of both tables above was re-derived on **2026-09-07** with the
+commands below — from chain, except the two consumer-side rows. `Expected IDL
+hash` comes from `turf-monster`'s Heroku config and the committed IDL file it
+must equal; `Consumer app` names that Heroku app. Chain cannot supply either,
+because Squads upgrades do not update the on-chain IDL account (see **Upgrade
+Rule**). That date covers those two tables and nothing else in this repository.
 
 Read the stamp it replaces as a warning rather than a precedent. It claimed a
 2026-09-05 re-verification of *both* tables while mainnet's Version, Deployed,
@@ -59,22 +62,26 @@ next reader looking. Re-derive rather than trust:
 solana program show DaFv83yokwTz8msP9CzJ13eazSGk15NuUTxjkfzJzxMM --url mainnet-beta
 solana program show EQGFJAcABtDb6VXtiijTjZ6cE2UqdvhnqJvoharJbpMJ --url devnet
 
-# The Deployed row, from the slot the command above prints:
+# The Deployed row, from the slot each command above prints:
 solana block-time 425788802 --url mainnet-beta
+solana block-time 468716417 --url devnet
 
 # The Program SHA256 row. Two dumps taken minutes apart are byte-identical, so
 # this is a stable fingerprint of the bytes actually executing on chain:
 solana program dump DaFv83yokwTz8msP9CzJ13eazSGk15NuUTxjkfzJzxMM /tmp/mainnet.so --url mainnet-beta
 shasum -a 256 /tmp/mainnet.so
+solana program dump EQGFJAcABtDb6VXtiijTjZ6cE2UqdvhnqJvoharJbpMJ /tmp/devnet.so --url devnet
+shasum -a 256 /tmp/devnet.so
 
 # In-program signer set: VaultState PDA, seeds [b"vault"].
 # Signers sit at byte offsets 8/40/72; the threshold byte is at 104.
 solana account GBu44HFJjq61WnS9UV1twcSrCC6SkuXHK8RM6tUKsWzV --url mainnet-beta   # mainnet
 solana account J7b5g9uS5M2Nog1Ly1UATXTDMtXdpXK3JffRAHXGHkK2 --url devnet         # devnet
 
-# The live consumer pin, and the file it must equal. Read the config as JSON:
-# `heroku config:get` prints an identical bare newline for "absent" and for
-# "present but empty", and that ambiguity has already produced a wrong reading.
+# The live consumer pin, and the file it must equal. Run this pair from the
+# turf-vault repo root, with turf-monster checked out beside it. Read the config
+# as JSON: `heroku config:get` prints an identical bare newline for "absent" and
+# for "present but empty", and that ambiguity has already produced a wrong reading.
 heroku config --app turf-monster-mainnet --json | jq -r '.EXPECTED_IDL_HASH'
 shasum -a 256 ../turf-monster/config/turf_vault.mainnet.idl.json
 ```
