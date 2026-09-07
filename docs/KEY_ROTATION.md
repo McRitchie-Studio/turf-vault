@@ -10,7 +10,12 @@
 >
 > **STATUS OF §1–§8: DRAFT / PLAN ONLY. DO NOT EXECUTE.**
 > Those sections are the redeploy runbook for rotating a leaked **Alex Bot**
-> signer key off the v0.19 program. Their execution is **gated** on:
+> signer key off the v0.19 program. They were written before v0.20 existed, and
+> they still read as though it were unreleased. **It shipped**: v0.20 restored
+> `update_signers`, every release since has carried it, and both clusters run
+> **v0.25.0** today ([`CURRENT_DEPLOYMENT.md`](CURRENT_DEPLOYMENT.md)). So the
+> gate below is **history, not a queue** — nothing is waiting on it, because the
+> plan it gates is the wrong plan. Their execution was gated on:
 > 1. an adversarial mini-review of v0.20 (`update_signers` + this plan), and
 > 2. an explicit operator GO.
 >
@@ -85,9 +90,15 @@ A leaked Alex Bot key is a **1-of-3** signer. On its own it can run the
 `grant_seeds`, `mint_entry_token`, `burn_entry_token`,
 `admin_create_user_account`, `admin_set_username`, and facilitating entries
 (`enter_contest`, `enter_contest_with_token`). `set_contest_lock_time` and
-`set_contest_conclusion_time` are 1-of-3 in the ordinary direction and escalate
-to 2-of-3 only when they re-open a window that had already closed. It **cannot**
-settle, cancel, sweep, register/deactivate currencies, pause/unpause, or
+`set_contest_conclusion_time` are 1-of-3 on a first set and escalate to 2-of-3
+on an amend — but **on different conditions, and only the first is "re-open a
+closed window"**. `set_contest_lock_time` escalates once the lock has actually
+passed (`lock_engaged = current_lock != 0 && now >= current_lock`,
+`set_contest_lock_time.rs:74`), so moving a lock that has not yet arrived stays
+1-of-3. `set_contest_conclusion_time` escalates on **any** amend of an
+already-set conclusion — `if current_conclusion != 0`
+(`set_contest_conclusion_time.rs:80`) — passed or not, postpone or clear.
+It **cannot** settle, cancel, sweep, register/deactivate currencies, pause/unpause, or
 `update_signers` — those need two distinct current signers. So the blast radius
 is vandalism UNLESS the attacker also holds a second signer — with one
 exception, below, that is worse than vandalism. **But** Alex Bot is also a
@@ -159,7 +170,14 @@ reduction.**
      `SignerContinuityRequired` (**6017**); keep the bot to satisfy the guard
      and you have not evicted it. Sign with Alex (`7ZDJ…59Tcr`) and Mason
      (`Cyt…qWjrR`) — the two human signers in `Identities` below.
-   - **Read the live signer set before composing it** (the read-back in §5).
+   - **Read the live signer set before composing it — from the chain, with
+     "Verifying this yourself" B below.** That read is a public RPC call: no
+     Heroku, no `turf-monster-mainnet`, no app credential, and it ends in three
+     pubkeys and a threshold with nothing left to decode.
+     **Do not use §5's read-back for this.** §5 reads the set through
+     `heroku run` on `turf-monster-mainnet` — the app whose `SOLANA_ADMIN_KEY`
+     you may be rotating in this very incident — so it asks the system you are
+     containing. It belongs to §5's gated re-init flow, not to a containment.
      Both signing keys must already be in that set, or `validate_multisig`
      rejects with `Unauthorized` (**6000**) — loud and harmless, but paid for
      out of the incident window, and 6000 does not say which key was the
@@ -182,32 +200,118 @@ reduction.**
 
 ### Verifying this yourself
 
-The claim that `update_signers` is reachable on the live programs is a chain
-fact, so read it from the chain rather than from this file. Anchor compiles a
-discriminator, `sha256("global:<name>")[0..8]`, into the binary for every
-instruction it dispatches:
+Two chain reads, **A** and **B**. Both are plain public RPC reads: `solana`
+needs no configured keypair for either, so neither touches Heroku,
+`turf-monster-mainnet`, or any app credential. That independence is the whole
+point during an incident — a containment step must not have to ask the system
+you may be containing.
+
+Pick a cluster once. Every command below reads these three values, and all
+three are deterministic: the program IDs are the deployed IDs, and each
+`VaultState` address is the PDA of seeds `[b"vault"]` under its program. They
+are also recorded in [`CURRENT_DEPLOYMENT.md`](CURRENT_DEPLOYMENT.md).
 
 ```bash
-solana program dump <PROGRAM_ID> /tmp/live.so --url <mainnet-beta|devnet>
-ruby -rdigest -e 'b = File.binread("/tmp/live.so"); %w[update_signers burn_entry_token no_such_instruction].each { |n| puts "#{n}: #{b.include?(Digest::SHA256.digest("global:#{n}")[0, 8]) ? "PRESENT" : "absent"}" }'
-
-# And the set it would rotate: VaultState PDA, seeds [b"vault"].
-# Signers sit at byte offsets 8/40/72; the threshold byte is at 104.
-solana account <VAULT_STATE_PDA> --url <cluster> --output-file /tmp/vault.bin
+export CLUSTER=mainnet-beta PROGRAM=DaFv83yokwTz8msP9CzJ13eazSGk15NuUTxjkfzJzxMM VAULT=GBu44HFJjq61WnS9UV1twcSrCC6SkuXHK8RM6tUKsWzV
+# export CLUSTER=devnet     PROGRAM=EQGFJAcABtDb6VXtiijTjZ6cE2UqdvhnqJvoharJbpMJ VAULT=J7b5g9uS5M2Nog1Ly1UATXTDMtXdpXK3JffRAHXGHkK2
 ```
+
+**A — is `update_signers` on the live program?** That is a chain fact, so read
+it from the chain rather than from this file. Anchor compiles a discriminator,
+`sha256("global:<name>")[0..8]`, into the binary for every instruction it
+dispatches:
+
+```bash
+solana program dump $PROGRAM /tmp/live.so --url $CLUSTER
+ruby -rdigest -e 'b = File.binread("/tmp/live.so"); %w[update_signers burn_entry_token no_such_instruction].each { |n| puts "#{n}: #{b.include?(Digest::SHA256.digest("global:#{n}")[0, 8]) ? "PRESENT" : "absent"}" }'
+```
+
+**B — read the live signer set. This is the read §0 step 2 sends you to**, and
+it ends in three pubkeys and a threshold you can compose a rotation against.
+`VaultState` stores signers as raw 32-byte arrays, so the account has to be
+base58-encoded before it says anything; this decodes it in place and leaves you
+nothing further to convert.
+
+```bash
+solana account $VAULT --url $CLUSTER --output json |
+ruby -rjson -rbase64 -e '
+  a = JSON.parse(STDIN.read)["account"]
+  d = Base64.decode64(a["data"][0])
+  abort "not a VaultState: #{d.bytesize} bytes, expected 1515" unless d.bytesize == 1515
+  abort "wrong program: account is owned by #{a["owner"]}" unless a["owner"] == ENV.fetch("PROGRAM")
+  alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+  b58 = ->(raw) {
+    n = raw.unpack1("H*").to_i(16)
+    out = +""
+    until n.zero?
+      n, rem = n.divmod(58)
+      out.prepend(alphabet[rem])
+    end
+    "1" * raw.bytes.take_while(&:zero?).size + out
+  }
+  3.times { |i| puts "signer[#{i}]           #{b58.(d[8 + 32 * i, 32])}" }
+  puts       "threshold            #{d[104].ord}"
+  puts       "paused               #{d[106].ord}"
+  puts       "payout_mint          #{b58.(d[107, 32])}   <- control"
+  puts       "treasury_authority   #{b58.(d[139, 32])}"
+'
+```
+
+**That is the whole of B: one command, one pipe.** It looks nothing up
+afterwards, writes nothing, reads nothing off disk, and needs no keypair. Both A
+and B were run cold on 2026-09-07 to prove it — a scrubbed environment (`env
+-i`), an rc-less shell, an **empty `HOME`**, macOS's stock `/usr/bin/ruby`
+(2.6.10), and nothing on `PATH` but `solana` and the system directories. Both
+clusters came back complete. Nothing on that machine could have supplied a
+Heroku session, an `op` token, or a `SOLANA_ADMIN_KEY`, because nothing on that
+machine was reachable.
+
+Offsets come from `VaultState` in `programs/turf_vault/src/state.rs`: an 8-byte
+Anchor discriminator, then `signers[3]` at **8 / 40 / 72**, `threshold` at
+**104**, `bump` 105, `paused` 106, `payout_mint` 107, `treasury_authority`
+**139**, for **1515** bytes in total.
+
+**What checks the read — three things, and none of them costs another command.**
+
+1. **Length.** A non-`VaultState` address aborts by name rather than printing a
+   plausible-looking set. Pointed at the program ID instead of the PDA it says
+   `not a VaultState: 36 bytes, expected 1515`, and exits non-zero.
+2. **Owner.** The account must be owned by `$PROGRAM`, so a `VaultState` from
+   the *other* cluster — or from the orphaned old program — aborts too. That
+   address is base58 the CLI produced, not this decoder.
+3. **`payout_mint` — the control on the decoder itself.** On **mainnet** it MUST
+   read `EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v`, Circle's USDC mint. That
+   is a **program invariant, not a deployment coincidence**: a mainnet build pins
+   it at `initialize` and refuses any other mint
+   (`initialize.rs:101-104`, inside the `#[cfg(feature = "mainnet")]` block
+   opened at `:95`), and `state.rs:47-50` defines that constant with the base58
+   spelling written beside its bytes at `:45`. So if the alphabet, the encoder
+   loop, or the offsets were wrong, that line would not come back as USDC — and
+   offset 107 is three bytes past `threshold`, so even a one-byte slide breaks
+   it. On **devnet** the field is the devnet test mint
+   (`222Dcu2RgAXE3T8A4mGSG3kQyXaNjqePx7vva1RdWBN9`) and no compile-time constant
+   pins it, so the control is weaker there; checks 1 and 2 still hold.
+
+`treasury_authority` is printed because §4 and §7 need it — it is the Squads
+vault PDA, and it should match the `Authority` line of `solana program show
+$PROGRAM`. It is **not** used as the control: `solana program show` refuses to
+run without a local default keypair (`No default signer found`) even though it
+only reads, and an incident read must not depend on the machine having one.
 
 On 2026-09-07 both clusters answered `update_signers: PRESENT`,
 `burn_entry_token: absent`, `no_such_instruction: absent` — the last of those
-being the control that shows the probe discriminates rather than matching
-whatever it is handed — and both `VaultState` accounts decoded to the same three
-signers with threshold `2`. Program IDs and PDAs are in
-[`CURRENT_DEPLOYMENT.md`](CURRENT_DEPLOYMENT.md).
+being A's control, showing the probe discriminates rather than matching whatever
+it is handed — and B decoded, on both, to the same three signers named in the
+`Identities` note below, `threshold 2`, `paused 0`, and a `payout_mint` that on
+mainnet is Circle USDC.
 
-**What this does and does not settle.** It settles the only thing §0 needs: the
+**What this does and does not settle.** A settles the only thing §0 needs: the
 eviction instruction is on the live programs, and the burn instruction is not.
 It does not pin the BUILD — a patch inside a handler leaves every discriminator
 unchanged — so do not read a version label out of it beyond the instruction
-surface.
+surface. B settles what the signer set is **at the moment you read it**, which is
+the only form that claim ever takes — which is why §0 sends you here and not to a
+table.
 
 ---
 
@@ -231,7 +335,8 @@ surface.
 > (Alex Bot), `7ZDJp7FU…59Tcr` (Alex) and `CytJS23p…qWjrR` (Mason), threshold
 > `2`. Alex and Mason are unchanged, which is why the containment above names
 > them by these pubkeys; the bot slot is not. **Always read the live set before
-> composing a rotation** rather than trusting either this table or
+> composing a rotation** — with §0's **Verifying this yourself** B, which is
+> chain-direct and decodes to pubkeys — rather than trusting either this table or
 > [`CURRENT_DEPLOYMENT.md`](CURRENT_DEPLOYMENT.md) — a signer-set row in a
 > document is a record of a reading, never the set itself.
 
@@ -306,9 +411,14 @@ solana transfer <NEW_ALEX_BOT_PUBKEY> 4.55 \
 
 ## §3. Deploy v0.20 to a NEW program ID  *(operator signs; mirrors MAINNET_LAUNCH §3–§5)*
 
-> v0.20 is already **built** (devnet + `--features mainnet`) and pending the
-> adversarial mini-review. Do NOT re-deploy v0.19. The fresh program ID gives a
-> clean VaultState with the new signer set baked in at init (§5).
+> **STALE PREMISE — v0.20 is not pending anything; it shipped.** This box was
+> written when v0.20 was built and awaiting the adversarial mini-review. Both
+> clusters have run past it to **v0.25.0**
+> ([`CURRENT_DEPLOYMENT.md`](CURRENT_DEPLOYMENT.md)), so there is no v0.20 to
+> deploy and no v0.19 to avoid re-deploying. Kept for the record of what this
+> section was for: a fresh program ID giving a clean VaultState with the new
+> signer set baked in at init (§5). A signer rotation today is one
+> `update_signers` transaction (§0), not this.
 
 ```bash
 cd ~/projects/turf-vault
@@ -417,6 +527,14 @@ heroku run 'bin/rails runner "puts Solana::Vault.new.read_vault_state.inspect"' 
 #   signers MUST be [NEW alex_bot, 7ZDJ, Cyt]; F6f8… MUST be absent; threshold 2.
 ```
 
+> **This read-back belongs to §5's re-init, not to an incident.** It runs on
+> `turf-monster-mainnet` using that app's `SOLANA_ADMIN_KEY` — the credential a
+> key-compromise incident is rotating — so it is the wrong instrument for
+> reading the set before a rotation, and §0 step 2 no longer points at it. Use
+> §0's **Verifying this yourself** B, which reads the same `VaultState`
+> straight from the chain. It is kept here because what a §5 re-init confirms
+> is precisely the consumer app's own view of the new vault.
+
 > **`update_signers` is live on every deployed program today** — v0.20 shipped
 > it and every release since has carried it (§0, with the chain probe under
 > **Verifying this yourself**). A signer compromise is therefore a 2-of-3
@@ -433,7 +551,9 @@ heroku run 'bin/rails runner "puts Solana::Vault.new.read_vault_state.inspect"' 
 > any set that drops either authorizing cosigner. **After the rotation, the
 > VaultState read-back MUST confirm TWO controlled keys survive** (both Alex
 > and Mason present), not just one — a `[survivor, junk, junk]` set would brick
-> all governance even though it superficially "kept a known-good key."
+> all governance even though it superficially "kept a known-good key." Read it
+> back with §0's **Verifying this yourself** B, for the same reason it is read
+> that way before the rotation: it does not depend on the consumer app.
 
 > **WHO BUILDS AND COLLECTS THE TWO SIGNATURES — recorded 2026-09-04, because
 > nothing here said.** The rule above says a rotation *is* a 2-of-3 tx; it never
@@ -463,9 +583,11 @@ heroku run 'bin/rails runner "puts Solana::Vault.new.read_vault_state.inspect"' 
 > Squads membership is `8K81…` (Alex Bot), `7ZDJ…` (Alex), `Cyt…` (Mason)
 > (`scripts/squad.json` `members`). The mainnet **VaultState** signer set is
 > **not recorded in this repo**: `CURRENT_DEPLOYMENT.md`'s only signer rows sit
-> under `## Devnet`, and its `## Mainnet` table has none. Read it on-chain with
-> the §5 read-back above before composing the rotation. Two authorities, two
-> transactions, **one overlapping membership**: a compromised key sits in BOTH,
+> under `## Devnet`, and its `## Mainnet` table has none. Read it with §0's
+> **Verifying this yourself** B before composing the rotation — chain-direct, so
+> it stays available when the consumer app is exactly what you are rotating
+> away from. Two authorities, two transactions, **one overlapping membership**:
+> a compromised key sits in BOTH,
 > which is why §0 calls Alex Bot "a 1-of-3 vault signer **and** a member of the
 > Squads upgrade-authority multisig," and why **§7 exists**. Rotating the vault
 > signer set does **not** evict that key from Squads. A real compromise needs
@@ -573,14 +695,14 @@ heroku run 'bin/rails runner "puts Solana::Vault.new.read_vault_state.inspect"' 
 > compromised Alex Bot — the signing pair MUST be **Alex
 > (`7ZDJp7FU…59Tcr`) and Mason (`CytJS23p…qWjrR`)**, the two human signers in the
 > `Identities` table above, and the bot MUST NOT sign. **Confirm both against
-> the live `VaultState.signers` with the §5 read-back BEFORE you compose the
-> transaction.** That table names the humans, not the on-chain set: the mainnet
-> vault signer set is not recorded in this repo, as "But it is the same three
+> the live `VaultState.signers` with §0's Verifying this yourself B BEFORE you
+> compose the transaction.** That table names the humans, not the on-chain set:
+> the mainnet vault signer set is not recorded in this repo, as "But it is the same three
 > keys — verify that before you rely on it" says above. If either key is absent
 > from the live set, `validate_multisig` rejects the transaction with
 > `Unauthorized` (**6000**) — loud and harmless, but paid for out of the
 > rotation window, and 6000 will not tell you which of the two keys was the
-> problem (see the 6000 note above). Check both against the read-back rather
+> problem (see the 6000 note above). Check both against that chain read rather
 > than guessing.
 > Continuity (`update_signers.rs:100-107`) requires BOTH authorizing cosigners
 > to survive into the new set, so a bot signature forces the bot to stay:
@@ -710,21 +832,28 @@ Prioritize a clean upgrade-authority + Squads state so §8 can execute.
 | R4 | **Closing the wrong program** in §8. | Triple-check the program ID; close is irreversible. New program ID is in `scripts/squad.json` after §3. |
 | R5 | **IDL drift** — re-pinning from a stale `anchor idl fetch` instead of the built IDL. | §6 uses `target/idl/turf_vault.json` from the §3b build; verify the hash matches `EXPECTED_IDL_HASH` before push. |
 | R6 | **Sidekiq runs on the old PROGRAM_ID** after the env swap. | §6: restart Sidekiq, confirm one PID, rely on `ensure_program_id_live!` guard. |
-| R7 | **Continuity guard rejects the §5 set** — N/A for re-init (init isn't `update_signers`), but relevant for FUTURE rotations: a 2-of-3 rotation must keep BOTH authorizing cosigners + no default slots, else 6017. A rotation that keeps only ONE controlled key (e.g. `[Alex, junk, junk]`) bricks all governance — no second key can ever cosign — even though a weaker "keep ≥1" guard would have passed it. | **Documented in v0.20 (continuity now requires BOTH cosigners survive).** Any future `update_signers` MUST keep both human cosigners — Alex (`7ZDJ…59Tcr`) and Mason (`Cyt…qWjrR`) — and MUST NOT rotate down to a single operator-controlled key. After the rotation, the post-rotation VaultState read-back MUST confirm TWO controlled keys survive (not just one): both Alex and Mason present in `signers`, and only the leaked key evicted. The same guard is why the **compromised** key must not supply either signature on an eviction (§0 step 2): a bot that cosigns must survive, so a bot-signed eviction either trips 6017 or fails to evict. |
+| R7 | **Continuity guard rejects the §5 set** — N/A for re-init (init isn't `update_signers`), but relevant for FUTURE rotations: a 2-of-3 rotation must keep BOTH authorizing cosigners + no default slots, else 6017. A rotation that keeps only ONE controlled key (e.g. `[Alex, junk, junk]`) bricks all governance — no second key can ever cosign — even though a weaker "keep ≥1" guard would have passed it. | **Documented in v0.20 (continuity now requires BOTH cosigners survive).** Any future `update_signers` MUST keep both human cosigners — Alex (`7ZDJ…59Tcr`) and Mason (`Cyt…qWjrR`) — and MUST NOT rotate down to a single operator-controlled key. After the rotation, the post-rotation VaultState read-back (§0 **Verifying this yourself** B — chain-direct) MUST confirm TWO controlled keys survive (not just one): both Alex and Mason present in `signers`, and only the leaked key evicted. The same guard is why the **compromised** key must not supply either signature on an eviction (§0 step 2): a bot that cosigns must survive, so a bot-signed eviction either trips 6017 or fails to evict. |
 | R8 | **1Password write blocked** — agent op token is read-only. | Every key write (§1, §3a backups, §6 env secret) is an explicit operator action; the agent only drafts/plans. |
 
 ---
 
 ## Pre-execution gate
 
+> **This gate is closed history, not an open checklist.** v0.20 shipped; both
+> clusters run v0.25.0. Nothing below is pending, and nothing above it should be
+> executed. It is kept because it records what the redeploy plan was gated on.
+
 - [ ] **Adversarial mini-review of v0.20** (`update_signers` continuity logic +
-      zero-copy `load_mut` correctness + this plan) — REQUIRED before any
-      deploy.
-- [ ] Operator GO.
+      zero-copy `load_mut` correctness + this plan) — was REQUIRED before any
+      deploy. **Never run, and now moot**: v0.20 and every release since are
+      deployed on both clusters. The box stays unchecked because it records
+      that the review did not happen, not that it is owed.
+- [ ] Operator GO. **Never given, and it should not be — see §0.**
 - [ ] Rehearse the full §1–§8 on **devnet** first (substitute devnet program /
       Squads / a devnet Alex Bot).
 - [ ] Hand the production rollout to **Steffon** (QA + Infra) per the standard
       mainnet rollout protocol.
 
-> Nothing in this document is executed by the agent. Builds are done; deploys
-> and on-chain writes are operator actions, gated on the review + GO above.
+> Nothing in this document is executed by the agent. Deploys and on-chain
+> writes are operator actions. The "builds are done" note above described the
+> v0.20 build; that release, and every one since, is long deployed.
