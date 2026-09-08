@@ -227,16 +227,21 @@ and on every push to `main`, `release` and `accepted`:
 | `program` | `cargo check --workspace --all-targets --locked` | the program (and every `#[derive(Accounts)]` expansion) no longer compiles, or `Cargo.lock` is out of sync |
 | `program` | `cargo clippy -- -D clippy::correctness` | code clippy classes as outright wrong |
 | `guards` | `npm run check:doc-op-refs` | a 1Password vault reference in this repo's prose has gone stale |
-| `guards` | `npm run test:scripts` | a shape regression in the deploy scripts — 26 `node:test` cases over `scripts/lib/mainnet-config.js` and `scripts/initialize-mainnet.js`. 5 of the 26 drive the real checked-in `scripts/squad.json`; the other 21 are fixture mutations or a source read — the split is measured in [What it covers](docs/VERIFICATION_MATRIX.md#what-it-covers). One case self-skips here, where no `node_modules` is installed |
+| `guards` | `npm run test:scripts` | a shape regression in the deploy scripts, or a lane wired to the Anchor suite — 32 `node:test` cases. 26 cover `scripts/lib/mainnet-config.js` and `scripts/initialize-mainnet.js`; 5 of those 26 drive the real checked-in `scripts/squad.json` and the other 21 are fixture mutations or a source read — the split is measured in [What it covers](docs/VERIFICATION_MATRIX.md#what-it-covers). One case self-skips here, where no `node_modules` is installed. The remaining 6 are the lane guard below |
 
 CI is **build-and-check only** — it never contacts a Solana cluster, holds a
 keypair, or spends SOL.
 
-**And no lane runs the Anchor suite.** `tests/turf_vault.ts` — 30 `it()` blocks,
-the suite [`docs/VERIFICATION_MATRIX.md`](docs/VERIFICATION_MATRIX.md) is
-organised around — is executed by nothing automatic: not the jobs above, and not
-the studio certification path, which certifies nothing in this repo. What stands
-in for it, precisely what that does NOT cover, and the receipt the certification
+**And no lane runs the Anchor suite — nor even reads it.** `tests/turf_vault.ts`
+— 30 `it()` blocks, the suite
+[`docs/VERIFICATION_MATRIX.md`](docs/VERIFICATION_MATRIX.md) is organised around
+— is executed by nothing automatic: not the jobs above, and not the studio
+certification path, which certifies nothing in this repo. Nothing parses it
+either, so a syntax error in it reaches `accepted` green. Both facts are pinned
+by [`scripts/tests/anchor-suite-lane.test.js`](scripts/tests/anchor-suite-lane.test.js),
+which runs in the `guards` lane and fails — naming the workflow line and the doc
+sections to rewrite — the day either stops being true. What stands in for the
+suite, precisely what that does NOT cover, and the receipt the certification
 path records instead are written down under
 [The Compensating Control](docs/VERIFICATION_MATRIX.md#the-compensating-control-and-what-it-does-not-cover).
 Read it before treating a matrix row as machine-verified: every row rests on
@@ -264,7 +269,10 @@ program or the deploy scripts rather than adding a workflow:
 - **`npm run lint`** (Prettier) — two scripts are unformatted, and reformatting
   `scripts/squad-upgrade.js` turns its 198 lines into 291: a 207-line diff across
   the mainnet upgrade path (measured 2026-09-08 by running `npx prettier` against
-  the checked-in file).
+  the checked-in file). Note that its glob also covers `tests/turf_vault.ts`, so
+  wiring this lane makes the suite READ for the first time: expect
+  `scripts/tests/anchor-suite-lane.test.js` to go red, and update the sections it
+  names in the same change.
 
 ### Deploy
 

@@ -129,7 +129,8 @@ control named without them buys confidence it has not earned.
   drifted from `Cargo.toml`.
 - `cargo clippy … -D clippy::correctness` fails on code clippy classes as
   outright wrong.
-- `npm run test:scripts` is a real executing suite: 26 `node:test` cases, 24
+- `npm run test:scripts` is a real executing suite: 32 `node:test` cases across
+  two files. 26 of them are `scripts/tests/mainnet-config.test.js` — 24
   calling `scripts/lib/mainnet-config.js` directly and 2 over
   `scripts/initialize-mainnet.js` (`scripts/tests/mainnet-config.test.js:281`
   reads its source, `:296` spawns it; `:296` is the one that self-skips in CI,
@@ -144,6 +145,14 @@ control named without them buys confidence it has not earned.
   certifies the code, not the artifact — which is why the 5 are named and the
   21 are not counted as if they were. "No lane runs the Anchor suite" and
   "nothing is tested" are different sentences; only the first is true.
+  The remaining 6 are `scripts/tests/anchor-suite-lane.test.js`, which pins the
+  two facts the `## No Lane Runs This Suite` heading and the first two bullets
+  of [What it does not cover](#what-it-does-not-cover) rest on — see
+  [Re-arming it](#re-arming-it). They read `.github/workflows/` and assert no
+  step runs the Anchor suite and none subjects it to a TypeScript reader; the
+  other 4 are controls that fail if the guard's comment stripper, its step
+  extractor, its Prettier premise or its own doc citations stop working, so it
+  cannot pass by reading nothing.
 - `npm run check:doc-op-refs` fails on a stale 1Password vault reference in this
   repo's prose.
 
@@ -211,6 +220,16 @@ If a lane is ever wired to run the suite, the heading that stops being true is
 [What it does not cover](#what-it-does-not-cover) that rest on it. Deleting only
 the sub-subsection you are reading leaves the false heading standing above a
 matrix an operator reads before a mainnet upgrade.
+
+You will be told rather than trusted to remember.
+`scripts/tests/anchor-suite-lane.test.js` runs in CI's `guards` lane and fails
+the moment a workflow step runs the suite OR merely reads it, printing the
+workflow file, the line, the resolved command chain, and this list of sections.
+It pins BOTH facts because the second is the fragile one: `npm run lint`
+(Prettier) already exists in `package.json`, is listed in
+[`../README.md`](../README.md) as deliberately deferred, and globs
+`tests/turf_vault.ts` — so wiring that ONE line would falsify "no lane even
+reads the suite" while leaving `## No Lane Runs This Suite` literally true.
 
 ## What the Suite Evidences
 
