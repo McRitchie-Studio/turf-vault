@@ -95,9 +95,11 @@ of the spine entries `mcritchie-studio/config/fast_cert_spine.yml` declares,
 because that spine is anchored in the hub — and records a fingerprint-bound
 `[cert-deferred@<fp>]` receipt, which `bin/dor-check` credits ONLY alongside a
 green GitHub CI, never provisionally. Measured on this task 2026-09-08:
-`bin/fast-check` recorded
-`[cert-deferred@31d42f708a76b1fb320fd85c9167db56ef8b075f:turf-vault]`. By either
-door, no local lane executes anything in this repo.
+`bin/fast-check` recorded a `[cert-deferred@<tree-hash>:turf-vault]` receipt
+instead of a cert, on every push. That fingerprint hashes the TREE, so each push
+retires the previous receipt — read the task's `checks_run` for the one that
+binds the head you are looking at, rather than trusting a fingerprint copied into
+prose. By either door, no local lane executes anything in this repo.
 `mcritchie-studio/config/release_repos.yml` declares that state under
 `turf-vault` rather than leaving it to be discovered; its note there still names
 the older `[full-suite-bypass]` receipt and is due the same correction.
