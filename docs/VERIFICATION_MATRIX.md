@@ -76,17 +76,31 @@ under test:
 | CI job `program` (20s) | `rustup show active-toolchain`, `cargo check --workspace --all-targets --locked`, `cargo clippy … -D clippy::correctness` | no |
 | CI job `guards` (9s) | `npm run check:doc-op-refs`, `npm run test:scripts` | no |
 
-Those are the workflow's only two jobs, and those are their only steps.
-`anchor`, `ts-mocha` and `tests/` appear nowhere else in `.github/workflows/`
-except inside comments explaining their absence.
+Those are the workflow's only two jobs, and the steps above are the only ones
+in them that run anything under test. Each job also does an `actions/checkout`;
+`program` additionally prints its toolchain and restores a cargo cache, and
+`guards` additionally does an `actions/setup-node`. None of those four reach the
+suite either, so the conclusion is unchanged. `anchor`, `ts-mocha` and `tests/`
+appear nowhere else in `.github/workflows/` except inside comments explaining
+their absence.
 
 The studio certification path does not reach it either, and cannot.
-`bin/fast-check` and `bin/full-suite-check` open with a Rails
-`bin/rails db:test:prepare`, which this repo has no `bin/rails` for, so they
-abort before any lane runs — a turf-vault change certifies by recording a
-`[full-suite-bypass]` line on its task instead.
+`bin/full-suite-check` opens with a Rails `bin/rails db:test:purge
+db:test:prepare`, which this repo has no `bin/rails` for; it REFUSES rather than
+skipping, because a skipped prepare lane would hand back a green cert for a repo
+whose tests never ran. `bin/fast-check` does not get as far as that lane on a
+diff like this one: it decides first that no LOCAL lane could certify this
+CHECKOUT — the diff maps to no test file, and a satellite checkout resolves none
+of the spine entries `mcritchie-studio/config/fast_cert_spine.yml` declares,
+because that spine is anchored in the hub — and records a fingerprint-bound
+`[cert-deferred@<fp>]` receipt, which `bin/dor-check` credits ONLY alongside a
+green GitHub CI, never provisionally. Measured on this task 2026-09-08:
+`bin/fast-check` recorded
+`[cert-deferred@31d42f708a76b1fb320fd85c9167db56ef8b075f:turf-vault]`. By either
+door, no local lane executes anything in this repo.
 `mcritchie-studio/config/release_repos.yml` declares that state under
-`turf-vault` rather than leaving it to be discovered.
+`turf-vault` rather than leaving it to be discovered; its note there still names
+the older `[full-suite-bypass]` receipt and is due the same correction.
 
 ## The Compensating Control, and What It Does Not Cover
 
@@ -113,11 +127,21 @@ control named without them buys confidence it has not earned.
   drifted from `Cargo.toml`.
 - `cargo clippy … -D clippy::correctness` fails on code clippy classes as
   outright wrong.
-- `npm run test:scripts` is a real executing suite: 26 `node:test` cases over
-  `scripts/lib/mainnet-config.js`, driving the REAL checked-in
-  `scripts/squad.json` rather than a fixture (one case self-skips in CI, which
-  installs no `node_modules`). "No lane runs the Anchor suite" and "nothing is
-  tested" are different sentences; only the first is true.
+- `npm run test:scripts` is a real executing suite: 26 `node:test` cases, 24
+  calling `scripts/lib/mainnet-config.js` directly and 2 over
+  `scripts/initialize-mainnet.js` (`scripts/tests/mainnet-config.test.js:281`
+  reads its source, `:296` spawns it; `:296` is the one that self-skips in CI,
+  which installs no `node_modules`). **Five of the 26 drive the REAL checked-in
+  `scripts/squad.json`** — `:85`, `:97`, `:103`, `:113` and `:296`. The other 21
+  never read that file: 20 are `flatFixture()` mutations or inline literals,
+  including the whole 15-entry refusal table at `:155`, and `:281` reads
+  `initialize-mainnet.js`'s source text. Split measured 2026-09-08 by moving
+  `scripts/squad.json` aside in a scratch copy of this tree and re-running:
+  exactly those 5 failed and the other 21 passed unchanged, and 26/26 passed
+  again once the file was restored. A fixture written from the code under test
+  certifies the code, not the artifact — which is why the 5 are named and the
+  21 are not counted as if they were. "No lane runs the Anchor suite" and
+  "nothing is tested" are different sentences; only the first is true.
 - `npm run check:doc-op-refs` fails on a stale 1Password vault reference in this
   repo's prose.
 
@@ -135,6 +159,18 @@ control named without them buys confidence it has not earned.
 - **A Rust test lane would add nothing today.** `programs/` carries zero `#[test]`
   functions and no `#[cfg(test)]` module, so `cargo test` would execute no
   assertions. `--all-targets` compiles test targets; there are none to run.
+- **The script that performs the upgrade is itself unexercised.**
+  `scripts/squad-upgrade.js` is leg 3 of this very control — the 198 lines that
+  propose, cosign and execute the buffer upgrade against the Squads 2-of-3
+  vault — and no test runs a line of it. The executing suite named under
+  [What it covers](#what-it-covers) reaches `scripts/lib/mainnet-config.js` and
+  `scripts/initialize-mainnet.js` and stops there. Measured 2026-09-08: the only
+  occurrence of `squad-upgrade` anywhere under `scripts/tests/` or `tests/` is a
+  COMMENT at `scripts/tests/mainnet-config.test.js:114`, observing that the
+  upgrade path reads `cfg.vaultPda` for the same purpose the config guard does.
+  A comment is not a lane. So the reassurance that the deploy scripts have a
+  real suite must be read with this exception attached: the leg that moves the
+  program is not in it.
 - **The stamp ages, and nothing notices.** The local proof records a TREE, not
   `HEAD`. Between stamps no run re-checks it, and this file cannot tell you
   whether the tree it stamped is the tree you are about to upgrade from. The
@@ -150,10 +186,13 @@ control named without them buys confidence it has not earned.
   suite — is what this section is about. A green count from a suite nobody has
   re-run since is a weaker claim than it looks.
 - **No merge or release gate reads any of it.** `bin/dor-check` waives the suite
-  gate for a `docs`-shaped diff and accepts a recorded `[full-suite-bypass]` for
-  every other shape. The pre-QA (G3) and ship (G4) gates skip this repo, which
-  registers no `test_cmd` and no `qa_test_cmd`, and the release records no QA
-  evidence for it at all (`qa_evidence: exempt`). Each of those is correct on its
+  gate for a `docs`-shaped diff, and for every other shape accepts a recorded
+  receipt instead: a fingerprint-bound `[cert-deferred@<fp>]` alongside a green
+  CI, or an author-written `[full-suite-bypass] <reason>`, which still works and
+  is flagged loudly. Neither receipt is evidence that this program ran. The
+  pre-QA (G3) and ship (G4) gates skip this repo, which registers no `test_cmd`
+  and no `qa_test_cmd`, and the release records no QA evidence for it at all
+  (`qa_evidence: exempt`). Each of those is correct on its
   own — an Anchor program has no dyno to boot and no URL to smoke — and together
   they mean nothing between an edit here and `main` runs the program.
 
@@ -164,8 +203,12 @@ passing count, before the next Squads upgrade. The vault PDA is a SINGLETON, so
 every run needs a FRESH ledger (`solana-test-validator --reset`); a re-used
 ledger fails `initialize` with `Account already in use`.
 
-If a lane is ever wired to run the suite, delete this section rather than editing
-around it — the claim it exists to make will have stopped being true.
+If a lane is ever wired to run the suite, the heading that stops being true is
+`## No Lane Runs This Suite` — delete THAT section, not merely this
+`### Re-arming it` sub-subsection, and rewrite the bullets under
+[What it does not cover](#what-it-does-not-cover) that rest on it. Deleting only
+the sub-subsection you are reading leaves the false heading standing above a
+matrix an operator reads before a mainnet upgrade.
 
 ## What the Suite Evidences
 

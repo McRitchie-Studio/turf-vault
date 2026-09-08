@@ -227,7 +227,7 @@ and on every push to `main`, `release` and `accepted`:
 | `program` | `cargo check --workspace --all-targets --locked` | the program (and every `#[derive(Accounts)]` expansion) no longer compiles, or `Cargo.lock` is out of sync |
 | `program` | `cargo clippy -- -D clippy::correctness` | code clippy classes as outright wrong |
 | `guards` | `npm run check:doc-op-refs` | a 1Password vault reference in this repo's prose has gone stale |
-| `guards` | `npm run test:scripts` | a shape regression in the deploy scripts — 26 `node:test` cases over `scripts/lib/mainnet-config.js`, driven against the real checked-in `scripts/squad.json` (one self-skips here, where no `node_modules` is installed) |
+| `guards` | `npm run test:scripts` | a shape regression in the deploy scripts — 26 `node:test` cases over `scripts/lib/mainnet-config.js` and `scripts/initialize-mainnet.js`. 5 of the 26 drive the real checked-in `scripts/squad.json`; the other 21 are fixture mutations or a source read — the split is measured in [What it covers](docs/VERIFICATION_MATRIX.md#what-it-covers). One case self-skips here, where no `node_modules` is installed |
 
 CI is **build-and-check only** — it never contacts a Solana cluster, holds a
 keypair, or spends SOL.
@@ -235,10 +235,13 @@ keypair, or spends SOL.
 **And no lane runs the Anchor suite.** `tests/turf_vault.ts` — 30 `it()` blocks,
 the suite [`docs/VERIFICATION_MATRIX.md`](docs/VERIFICATION_MATRIX.md) is
 organised around — is executed by nothing automatic: not the jobs above, and not
-the studio certification path, which cannot run in a repo with no `bin/rails`.
-What stands in for it, and precisely what that does NOT cover, is written down in
-[`docs/VERIFICATION_MATRIX.md`](docs/VERIFICATION_MATRIX.md). Read it before
-treating a matrix row as machine-verified; every one of them is hand-verified.
+the studio certification path, which certifies nothing in this repo. What stands
+in for it, precisely what that does NOT cover, and the receipt the certification
+path records instead are written down under
+[The Compensating Control](docs/VERIFICATION_MATRIX.md#the-compensating-control-and-what-it-does-not-cover).
+Read it before treating a matrix row as machine-verified: every row rests on
+source review, or on a dated hand-run stamp that may predate the tree — and the
+current stamp does predate it.
 
 Deliberately NOT in CI yet, each because making it green means changing the
 program or the deploy scripts rather than adding a workflow:
@@ -259,7 +262,9 @@ program or the deploy scripts rather than adding a workflow:
   two of which need real logic changes. They still print as warnings in the
   `program` job, so the debt stays visible.
 - **`npm run lint`** (Prettier) — two scripts are unformatted, and reformatting
-  `scripts/squad-upgrade.js` rewrites ~207 lines of the mainnet upgrade path.
+  `scripts/squad-upgrade.js` turns its 198 lines into 291: a 207-line diff across
+  the mainnet upgrade path (measured 2026-09-08 by running `npx prettier` against
+  the checked-in file).
 
 ### Deploy
 

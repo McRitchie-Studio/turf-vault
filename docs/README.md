@@ -27,4 +27,4 @@ Use this index before following any operational instruction in this directory.
 - Keep new live deployment facts in `CURRENT_DEPLOYMENT.md`.
 - Keep cross-repo setup, credentials, ports, and agent workflows in `mcritchie-studio/docs/agents/`.
 - Add date/status banners to historical docs that could otherwise be mistaken for current runbooks.
-- Do not read a `VERIFICATION_MATRIX.md` row as machine-verified. No lane runs `tests/turf_vault.ts`; every row is hand-verified against a dated stamp in that file.
+- Do not read a `VERIFICATION_MATRIX.md` row as machine-verified. No lane runs `tests/turf_vault.ts`, so every row rests on source review, or on a dated hand-run stamp that may predate the tree — and the current stamp does predate it (it was taken before turf-vault PR #18, and no run has followed). Before authorizing a Squads upgrade, read [What the Suite Evidences](VERIFICATION_MATRIX.md#what-the-suite-evidences): it names the three refusals the stamp actually evidences, and leaves every other row resting on source review.
