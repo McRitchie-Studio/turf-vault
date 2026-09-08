@@ -38,6 +38,12 @@ Live deployment identity lives in [`docs/CURRENT_DEPLOYMENT.md`](docs/CURRENT_DE
 
 ## Test Failures
 
+You are here because you are running the suite by hand, which is the only way it
+ever runs: no CI lane and no certification lane executes `tests/turf_vault.ts`.
+See **The Compensating Control** in
+[`docs/VERIFICATION_MATRIX.md`](docs/VERIFICATION_MATRIX.md) for what that leaves
+uncovered, and re-stamp the proof there when a run succeeds.
+
 **`anchor test` can't find node/yarn**
 - Diagnosis: Anchor CLI 0.32.1 spawns a Rust subprocess that doesn't inherit the full shell PATH. `node` and `yarn` are not found.
 - Fix: Run tests directly without Anchor's test orchestrator:
