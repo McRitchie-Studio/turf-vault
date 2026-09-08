@@ -212,6 +212,11 @@ Use [`docs/VERIFICATION_MATRIX.md`](docs/VERIFICATION_MATRIX.md) as the coverage
 map and latest local proof record. If the default validator port is occupied,
 use the alternate-port direct path in [`RUNBOOK.md`](RUNBOOK.md).
 
+**You have to run this yourself.** No lane runs the Anchor suite — see
+[Continuous integration](#continuous-integration) below — so the stamp in the
+verification matrix is this repo's only record that the program has ever been
+executed. Re-run it and re-stamp it before a Squads upgrade.
+
 ### Continuous integration
 
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on every pull request
@@ -222,9 +227,18 @@ and on every push to `main`, `release` and `accepted`:
 | `program` | `cargo check --workspace --all-targets --locked` | the program (and every `#[derive(Accounts)]` expansion) no longer compiles, or `Cargo.lock` is out of sync |
 | `program` | `cargo clippy -- -D clippy::correctness` | code clippy classes as outright wrong |
 | `guards` | `npm run check:doc-op-refs` | a 1Password vault reference in this repo's prose has gone stale |
+| `guards` | `npm run test:scripts` | a shape regression in the deploy scripts — 26 `node:test` cases over `scripts/lib/mainnet-config.js`, driven against the real checked-in `scripts/squad.json` (one self-skips here, where no `node_modules` is installed) |
 
 CI is **build-and-check only** — it never contacts a Solana cluster, holds a
 keypair, or spends SOL.
+
+**And no lane runs the Anchor suite.** `tests/turf_vault.ts` — 30 `it()` blocks,
+the suite [`docs/VERIFICATION_MATRIX.md`](docs/VERIFICATION_MATRIX.md) is
+organised around — is executed by nothing automatic: not the jobs above, and not
+the studio certification path, which cannot run in a repo with no `bin/rails`.
+What stands in for it, and precisely what that does NOT cover, is written down in
+[`docs/VERIFICATION_MATRIX.md`](docs/VERIFICATION_MATRIX.md). Read it before
+treating a matrix row as machine-verified; every one of them is hand-verified.
 
 Deliberately NOT in CI yet, each because making it green means changing the
 program or the deploy scripts rather than adding a workflow:
@@ -234,7 +248,10 @@ program or the deploy scripts rather than adding a workflow:
   fragile part. `cargo check` type-checks the same source. The SBF artifact is
   verified by hand at rollout instead, via
   [`docs/VERIFICATION_MATRIX.md`](docs/VERIFICATION_MATRIX.md).
-- **`anchor test`** — spins a local validator; too heavy for a per-push lane.
+- **`anchor test`** — spins a local validator; too heavy for a per-push lane. It
+  is run by hand instead, and that stamp is the ONLY execution evidence this repo
+  has. The cost of the trade is stated in full under **The Compensating Control**
+  in [`docs/VERIFICATION_MATRIX.md`](docs/VERIFICATION_MATRIX.md).
 - **`cargo fmt --check`** — the tree is not rustfmt-clean; making it so rewrites
   ~947 lines across all 25 program files and destroys `git blame` on a program
   that custodies real assets.
