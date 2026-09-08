@@ -58,8 +58,159 @@ upgrade.
 > set a lock one second in the on-chain past against a chain clock running one to
 > two seconds behind wall clock, so the gate they assert was never engaged); the
 > `27 passing` above predates that fix and does not cover it. Which refusals
-> below carry evidence anyway, and which do not, is swept row by row in the
-> next section.
+> below carry evidence anyway, and which do not, is swept row by row in
+> [What the Suite Evidences](#what-the-suite-evidences).
+
+## No Lane Runs This Suite
+
+Nothing automatic executes `tests/turf_vault.ts`. The commands above run when a
+person types them, and at no other time.
+
+Measured 2026-09-08 from `.github/workflows/ci.yml` and from the step list of CI
+run `34146086293` (the `accepted`-rung push for PR #27). The steps below are
+read off the RUN, not off the workflow's comments — the comments are the claim
+under test:
+
+| Lane | Steps it actually ran | Reaches `tests/turf_vault.ts`? |
+|------|-----------------------|--------------------------------|
+| CI job `program` (20s) | `rustup show active-toolchain`, `cargo check --workspace --all-targets --locked`, `cargo clippy … -D clippy::correctness` | no |
+| CI job `guards` (9s) | `npm run check:doc-op-refs`, `npm run test:scripts` | no |
+
+Those are the workflow's only two jobs, and the steps above are the only ones
+in them that run anything under test. Each job also does an `actions/checkout`;
+`program` additionally prints its toolchain and restores a cargo cache, and
+`guards` additionally does an `actions/setup-node`. None of those four reach the
+suite either, so the conclusion is unchanged. `anchor`, `ts-mocha` and `tests/`
+appear nowhere else in `.github/workflows/` except inside comments explaining
+their absence.
+
+The studio certification path does not reach it either, and cannot.
+`bin/full-suite-check` opens with a Rails `bin/rails db:test:purge
+db:test:prepare`, which this repo has no `bin/rails` for; it REFUSES rather than
+skipping, because a skipped prepare lane would hand back a green cert for a repo
+whose tests never ran. `bin/fast-check` does not get as far as that lane on a
+diff like this one: it decides first that no LOCAL lane could certify this
+CHECKOUT — the diff maps to no test file, and a satellite checkout resolves none
+of the spine entries `mcritchie-studio/config/fast_cert_spine.yml` declares,
+because that spine is anchored in the hub — and records a fingerprint-bound
+`[cert-deferred@<fp>]` receipt, which `bin/dor-check` credits ONLY alongside a
+green GitHub CI, never provisionally. Measured on this task 2026-09-08:
+`bin/fast-check` recorded a `[cert-deferred@<tree-hash>:turf-vault]` receipt
+instead of a cert, on every push. That fingerprint hashes the TREE, so each push
+retires the previous receipt — read the task's `checks_run` for the one that
+binds the head you are looking at, rather than trusting a fingerprint copied into
+prose. By either door, no local lane executes anything in this repo.
+`mcritchie-studio/config/release_repos.yml` declares that state under
+`turf-vault` rather than leaving it to be discovered; its note there still names
+the older `[full-suite-bypass]` receipt and is due the same correction.
+
+## The Compensating Control, and What It Does Not Cover
+
+Skipping a validator lane in CI is a reasoned trade, argued in
+`.github/workflows/ci.yml` and in [`../README.md`](../README.md). A trade is only
+honest while the control standing in for the suite is described with its gaps: a
+control named without them buys confidence it has not earned.
+
+### What the control is
+
+1. **The static CI lanes above**, on every pull request and on every push to
+   `main`, `release` and `accepted`.
+2. **A hand-run local-validator proof**, stamped with its date and its passing
+   count under [Baseline Commands](#baseline-commands) in this file.
+3. **The rollout gate** — the program is upgraded by hand through
+   `scripts/squad-upgrade.js` against a Squads 2-of-3 multisig, and this matrix
+   is the checklist that upgrade is read against.
+
+### What it covers
+
+- `cargo check --workspace --all-targets --locked` type-checks every
+  `#[derive(Accounts)]` expansion — account structs, constraint attributes,
+  instruction signatures, PDA seed types — and refuses a `Cargo.lock` that has
+  drifted from `Cargo.toml`.
+- `cargo clippy … -D clippy::correctness` fails on code clippy classes as
+  outright wrong.
+- `npm run test:scripts` is a real executing suite: 26 `node:test` cases, 24
+  calling `scripts/lib/mainnet-config.js` directly and 2 over
+  `scripts/initialize-mainnet.js` (`scripts/tests/mainnet-config.test.js:281`
+  reads its source, `:296` spawns it; `:296` is the one that self-skips in CI,
+  which installs no `node_modules`). **Five of the 26 drive the REAL checked-in
+  `scripts/squad.json`** — `:85`, `:97`, `:103`, `:113` and `:296`. The other 21
+  never read that file: 20 are `flatFixture()` mutations or inline literals,
+  including the whole 15-entry refusal table at `:155`, and `:281` reads
+  `initialize-mainnet.js`'s source text. Split measured 2026-09-08 by moving
+  `scripts/squad.json` aside in a scratch copy of this tree and re-running:
+  exactly those 5 failed and the other 21 passed unchanged, and 26/26 passed
+  again once the file was restored. A fixture written from the code under test
+  certifies the code, not the artifact — which is why the 5 are named and the
+  21 are not counted as if they were. "No lane runs the Anchor suite" and
+  "nothing is tested" are different sentences; only the first is true.
+- `npm run check:doc-op-refs` fails on a stale 1Password vault reference in this
+  repo's prose.
+
+### What it does not cover
+
+- **No lane executes the program.** Nothing automatic contacts a Solana cluster,
+  so no `require!`, no `#[account]` constraint, no seed derivation and no
+  arithmetic in this program is ever RUN before it reaches `main`. Every
+  behavioural claim in the [Instruction Matrix](#instruction-matrix) below rests
+  on the hand-run stamp, or on source review.
+- **No lane even reads the suite.** `tests/turf_vault.ts` is TypeScript:
+  `cargo check` cannot see it, `node --test scripts/tests/` does not glob it, and
+  neither `tsc` nor `npm run lint` (Prettier) is wired into a workflow. A syntax
+  error in this file reaches `accepted` green.
+- **A Rust test lane would add nothing today.** `programs/` carries zero `#[test]`
+  functions and no `#[cfg(test)]` module, so `cargo test` would execute no
+  assertions. `--all-targets` compiles test targets; there are none to run.
+- **The script that performs the upgrade is itself unexercised.**
+  `scripts/squad-upgrade.js` is leg 3 of this very control — the 198 lines that
+  propose, cosign and execute the buffer upgrade against the Squads 2-of-3
+  vault — and no test runs a line of it. The executing suite named under
+  [What it covers](#what-it-covers) reaches `scripts/lib/mainnet-config.js` and
+  `scripts/initialize-mainnet.js` and stops there. Measured 2026-09-08: the only
+  occurrence of `squad-upgrade` anywhere under `scripts/tests/` or `tests/` is a
+  COMMENT at `scripts/tests/mainnet-config.test.js:114`, observing that the
+  upgrade path reads `cfg.vaultPda` for the same purpose the config guard does.
+  A comment is not a lane. So the reassurance that the deploy scripts have a
+  real suite must be read with this exception attached: the leg that moves the
+  program is not in it.
+- **The stamp ages, and nothing notices.** The local proof records a TREE, not
+  `HEAD`. Between stamps no run re-checks it, and this file cannot tell you
+  whether the tree it stamped is the tree you are about to upgrade from. The
+  qualification under Baseline Commands is the current example: the `27 passing`
+  count predates PR #18, and no run has followed it.
+- **A rotted suite still prints green, measured rather than imagined.**
+  `expectRejected` — the suite's only negative-assertion primitive, 45 call
+  sites — was inert for the suite's entire life, repaired only in PR #18. While
+  it was inert a harness bug redeployed a stale `.so` with the lock gate
+  DELETED, and the suite still reported the lock-gate entries as passing: a
+  deleted money-path guard, and a green suite over it. The helper is fixed; the
+  thing that let it stay broken unnoticed for so long — that no lane runs the
+  suite — is what this section is about. A green count from a suite nobody has
+  re-run since is a weaker claim than it looks.
+- **No merge or release gate reads any of it.** `bin/dor-check` waives the suite
+  gate for a `docs`-shaped diff, and for every other shape accepts a recorded
+  receipt instead: a fingerprint-bound `[cert-deferred@<fp>]` alongside a green
+  CI, or an author-written `[full-suite-bypass] <reason>`, which still works and
+  is flagged loudly. Neither receipt is evidence that this program ran. The
+  pre-QA (G3) and ship (G4) gates skip this repo, which registers no `test_cmd`
+  and no `qa_test_cmd`, and the release records no QA evidence for it at all
+  (`qa_evidence: exempt`). Each of those is correct on its
+  own — an Anchor program has no dyno to boot and no URL to smoke — and together
+  they mean nothing between an edit here and `main` runs the program.
+
+### Re-arming it
+
+Re-run the Baseline Commands block and re-stamp BOTH numbers, the date and the
+passing count, before the next Squads upgrade. The vault PDA is a SINGLETON, so
+every run needs a FRESH ledger (`solana-test-validator --reset`); a re-used
+ledger fails `initialize` with `Account already in use`.
+
+If a lane is ever wired to run the suite, the heading that stops being true is
+`## No Lane Runs This Suite` — delete THAT section, not merely this
+`### Re-arming it` sub-subsection, and rewrite the bullets under
+[What it does not cover](#what-it-does-not-cover) that rest on it. Deleting only
+the sub-subsection you are reading leaves the false heading standing above a
+matrix an operator reads before a mainnet upgrade.
 
 ## What the Suite Evidences
 
@@ -152,6 +303,11 @@ seat, but a second one was required", and the suite asserts both with the same
 
 ## Known Gaps
 
+- **The largest gap is that no lane runs this suite at all** — see
+  [No Lane Runs This Suite](#no-lane-runs-this-suite) and
+  [The Compensating Control, and What It Does Not Cover](#the-compensating-control-and-what-it-does-not-cover)
+  above. The gaps below are the ones that remain even after a successful
+  hand-run.
 - Local TypeScript tests run the default localnet/devnet build. The
   mainnet-only `INIT_AUTHORITY`, canonical USDC, and canonical USDT checks are
   feature-gated and should be proven as part of mainnet build/deploy review.
