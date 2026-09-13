@@ -687,11 +687,12 @@ heroku run 'bin/rails runner "puts Solana::Vault.new.read_vault_state.inspect"' 
 > **Its cost, and how to keep it small.** Both keys leave Phantom, which is
 > precisely the property the console existed to avoid; that is traded knowingly.
 > But do not reach for keypair FILES by default. `squad-upgrade.js` — this repo's
-> other two-signature script — loads both signing keys from base58 env vars
-> (`ALEX_BOT_KEY` / `MASON_KEY`), explicitly "never argv — argv leaks in `ps`",
-> and never writes them to disk. Match that — the HANDLING, not the pair.
-> Those two variables name Alex Bot and Mason because a Squads UPGRADE is what
-> `squad-upgrade.js` signs. For the rotation THIS runbook is about — evicting a
+> other multi-signature script — loads every signing key from base58 env vars
+> (`ALEX_BOT_KEY` / `ALEX_KEY` / `MASON_KEY`), explicitly "never argv — argv
+> leaks in `ps`", and never writes them to disk. Match that — the HANDLING, not
+> the set. Since 2026-09-13 the two APPROVALS there are Alex and Mason, the same
+> two humans; the bot key initiates, pays and executes, and does not vote. For
+> the rotation THIS runbook is about — evicting a
 > compromised Alex Bot — the signing pair MUST be **Alex
 > (`7ZDJp7FU…59Tcr`) and Mason (`CytJS23p…qWjrR`)**, the two human signers in the
 > `Identities` table above, and the bot MUST NOT sign. **Confirm both against
