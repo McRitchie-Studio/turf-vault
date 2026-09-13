@@ -9,18 +9,33 @@
 //        → prints "Buffer: <ADDR>"
 //   3. solana program set-buffer-authority <BUFFER> \
 //        --new-buffer-authority <vaultPda from squad.json> --url devnet
-//   4. ALEX_BOT_KEY=... MASON_KEY=... node scripts/squad-upgrade.js <BUFFER>
+//   4. ALEX_BOT_KEY=... ALEX_KEY=... MASON_KEY=... node scripts/squad-upgrade.js <BUFFER>
 //
 // Step 4: (a) extends the ProgramData account if the new binary is larger
 // than the current one — the BPF `upgrade` instruction does NOT auto-grow
 // it the way `solana program deploy` does, and ExtendProgram is
 // permissionless so we do it directly; (b) wraps the BPF `upgrade`
-// instruction in a Squad vault transaction → propose → approve(Alex Bot)
+// instruction in a Squad vault transaction → a HUMAN proposes → approve(Alex)
 // → approve(Mason) → execute.
 //
+// WHO VOTES, AND WHY NOT THE BOT (narrow-bot-squads-permissions, 2026-09-13).
+// This script used to approve as ALEX BOT. That key lives in Heroku config and
+// on disk, so while it holds Vote, a LEAKED BOT KEY PLUS ANY ONE HUMAN KEY is
+// quorum over mainnet upgrade authority. Mr. McRitchie's decision: both humans
+// approve, and the bot's Squads mask drops to 5 (Initiate|Execute) in a
+// separate two-human ceremony — documented in mcritchie-studio
+// docs/agents/agents/steffon/sops/credential-rotation.md. THIS HALF LANDS
+// FIRST: granting mask 5 while the script still voted as the bot would ship a
+// permission the tooling violates. The bot still initiates, pays and executes.
+//
+// Roles are planned by scripts/lib/squad-roles.js against the ON-CHAIN member
+// masks and threshold, BEFORE the first lamport is spent, so a missing bit or
+// an unreachable quorum refuses instead of stranding a half-done upgrade.
+//
 // Keys via env (never argv — argv leaks in `ps`):
-//   ALEX_BOT_KEY  base58 secret  (creator + approver #1 + fee payer)
-//   MASON_KEY     base58 secret  (approver #2)
+//   ALEX_BOT_KEY  base58 secret  (vault-tx creator + fee payer + executor; never votes)
+//   ALEX_KEY      base58 secret  (human approver #1, and opens the proposal)
+//   MASON_KEY     base58 secret  (human approver #2)
 
 const multisig = require("@sqds/multisig");
 const {
@@ -28,6 +43,7 @@ const {
   VersionedTransaction, ComputeBudgetProgram, SystemProgram,
 } = require("@solana/web3.js");
 const bs58 = require("bs58").default;
+const { planUpgradeSigners, describeMask } = require("./lib/squad-roles");
 const fs = require("fs");
 const path = require("path");
 
@@ -84,6 +100,7 @@ async function confirmSig(connection, sig, label) {
   const vaultPda  = new PublicKey(cfg.vaultPda);
   const buffer    = new PublicKey(bufferArg);
   const alexBot   = loadKey("ALEX_BOT_KEY");
+  const alex      = loadKey("ALEX_KEY");
   const mason     = loadKey("MASON_KEY");
 
   const [programData] = PublicKey.findProgramAddressSync([program.toBuffer()], BPF_LOADER);
@@ -93,6 +110,24 @@ async function confirmSig(connection, sig, label) {
   console.log("  programData:", programData.toBase58());
   console.log("  buffer:     ", buffer.toBase58());
   console.log("  squad vault:", vaultPda.toBase58());
+
+  // --- who signs what, settled BEFORE the first lamport ---------------------
+  // The extend below spends, so the quorum question is asked first: read the
+  // multisig's own members/masks/threshold and refuse here if the upgrade
+  // could not be approved and executed with the keys in hand.
+  const msForRoles = await multisig.accounts.Multisig.fromAccountAddress(connection, multisigPda);
+  const plan = planUpgradeSigners({
+    multisig: {
+      threshold: Number(msForRoles.threshold),
+      members: msForRoles.members.map((m) => ({ key: m.key.toBase58(), mask: Number(m.permissions.mask) })),
+    },
+    bot: alexBot.publicKey.toBase58(),
+    humans: [alex.publicKey.toBase58(), mason.publicKey.toBase58()],
+  });
+  console.log("\n  signers (on-chain masks, live):");
+  console.log(`    bot      ${alexBot.publicKey.toBase58()}  ${describeMask(plan.botMask)} — initiates, pays, executes; does NOT vote`);
+  plan.approvers.forEach((key, i) => console.log(`    approver ${i + 1} ${key}  votes`));
+  console.log(`    quorum:  ${plan.approvals} human approval(s) vs threshold ${plan.threshold}`);
 
   const bufInfo = await connection.getAccountInfo(buffer);
   if (!bufInfo) throw new Error(`buffer ${buffer.toBase58()} not found — did write-buffer succeed?`);
@@ -154,12 +189,16 @@ async function confirmSig(connection, sig, label) {
     connection, feePayer: alexBot, multisigPda, transactionIndex: txIndex,
     creator: alexBot.publicKey, vaultIndex: 0, ephemeralSigners: 0, transactionMessage: innerMessage,
   }), "vaultTransactionCreate");
+  // A HUMAN opens the proposal (the bot's Initiate covers the vault tx above;
+  // whether proposalCreate demands Initiate or Vote is not settled from the
+  // vendored IDL, and a mask-7 human satisfies either). The bot still pays
+  // both the fee and the proposal rent, so the humans need no SOL.
   await confirmSig(connection, await multisig.rpc.proposalCreate({
-    connection, feePayer: alexBot, multisigPda, transactionIndex: txIndex, creator: alexBot,
-  }), "proposalCreate");
+    connection, feePayer: alexBot, rentPayer: alexBot, multisigPda, transactionIndex: txIndex, creator: alex,
+  }), "proposalCreate (Alex)");
   await confirmSig(connection, await multisig.rpc.proposalApprove({
-    connection, feePayer: alexBot, multisigPda, transactionIndex: txIndex, member: alexBot,
-  }), "approve (Alex Bot)");
+    connection, feePayer: alexBot, multisigPda, transactionIndex: txIndex, member: alex,
+  }), "approve (Alex)");
   await confirmSig(connection, await multisig.rpc.proposalApprove({
     connection, feePayer: alexBot, multisigPda, transactionIndex: txIndex, member: mason,
   }), "approve (Mason)");
