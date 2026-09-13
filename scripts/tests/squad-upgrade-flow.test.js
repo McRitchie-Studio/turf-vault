@@ -164,12 +164,11 @@ async function runUpgrade({
         });
         return "SIG";
       },
-      async proposalCreate(args) {
-        trace.push({
-          step: "proposalCreate",
-          member: args.creator.publicKey.toBase58(),
-          rentPayer: args.rentPayer && args.rentPayer.publicKey.toBase58(),
-        });
+      async proposalCreate() {
+        // Present ONLY so the script REACHING for it shows up in the trace: this
+        // helper accepts rentPayer and discards it (locked 2.1.4), which is why
+        // the script must build the instruction instead.
+        trace.push({ step: "rpc.proposalCreate" });
         return "SIG";
       },
       async proposalApprove(args) {
@@ -181,6 +180,14 @@ async function runUpgrade({
       },
     },
     instructions: {
+      proposalCreate(args) {
+        trace.push({
+          step: "proposalCreate",
+          member: args.creator.toBase58(),
+          rentPayer: args.rentPayer && args.rentPayer.toBase58(),
+        });
+        return { kind: "proposalCreate" };
+      },
       async vaultTransactionExecute(args) {
         trace.push({
           step: "vaultTransactionExecute",
@@ -296,7 +303,23 @@ test("the executed flow: bot initiates, humans propose and approve, bot executes
   assert.equal(
     proposal.rentPayer,
     BOT,
-    "the bot pays the proposal rent, so the humans need no SOL"
+    "the bot must be named rent payer on the INSTRUCTION"
+  );
+  assert.equal(
+    steps(trace, "rpc.proposalCreate").length,
+    0,
+    "the script used multisig.rpc.proposalCreate, which accepts rentPayer and discards it — the rent then falls on the human creator"
+  );
+
+  // Sent by the bot (fee payer and rent payer) and signed by both: the human
+  // signs as creator. The FIRST sign in the trace is the ProgramData extend, so
+  // take the one that follows the proposal instruction being built.
+  const builtAt = trace.findIndex((t) => t.step === "proposalCreate");
+  const proposalSign = trace.slice(builtAt).find((t) => t.step === "sign");
+  assert.deepEqual(
+    proposalSign.signers,
+    [BOT, ALEX],
+    "the bot pays and signs the proposal transaction; the human creator signs it too"
   );
 });
 

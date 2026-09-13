@@ -24,7 +24,10 @@
  *   Execute  (4)  vaultTransactionExecute — the bot lands the approved tx
  *
  * and it PAYS for everything (fee payer + rent payer), so the humans need no
- * SOL and no tooling beyond their key.
+ * SOL and no tooling beyond their key. The RENT half holds only because
+ * squad-upgrade.js builds the proposalCreate instruction itself: at the locked
+ * @sqds/multisig 2.1.4, `rpc.proposalCreate` accepts `rentPayer` and discards it,
+ * leaving the human creator to pay (measured — scripts/tests/squad-upgrade-rent-payer.test.js).
  *
  * THE PROPOSAL IS OPENED BY A HUMAN, deliberately. The vendored Squads IDL
  * (@sqds/multisig 2.1.4) carries no per-instruction permission docs and the

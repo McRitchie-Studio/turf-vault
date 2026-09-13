@@ -108,10 +108,27 @@ test("the bot still initiates and executes, and still pays", () => {
     /vaultTransactionExecute\(\{[\s\S]*?member: alexBot\.publicKey/,
     "the bot executes"
   );
+});
+
+// WHY THIS IS NO LONGER `assert.match(/rentPayer: alexBot/)` (2026-09-13, Carl's
+// review of PR 31). It was exactly that — and it passed while the rent fell on the
+// HUMAN. `multisig.rpc.proposalCreate` accepts `rentPayer`, pushes it into the
+// signer list, and hands the transaction builder no rentPayer at all (locked 2.1.4,
+// lib/index.js:8209-8217), so the instruction resolved `rent_payer = creator`. A
+// regex over the source could not see that; it only proved the string was present.
+// So the SHAPE is graded here — the script must BUILD the instruction — and the
+// SDK's real behaviour is graded in squad-upgrade-rent-payer.test.js.
+test("the proposal instruction is built, never taken from the rpc helper that drops rentPayer", () => {
+  const src = script();
+
   assert.match(
     src,
-    /proposalCreate\(\{[\s\S]*?rentPayer: alexBot/,
-    "the bot pays the proposal rent, not a human"
+    /multisig\.instructions\.proposalCreate\(\{[\s\S]*?rentPayer: alexBot\.publicKey/,
+    "the script must build the proposal instruction with the bot as rent payer"
+  );
+  assert.ok(
+    !/multisig\.rpc\.proposalCreate\(/.test(src),
+    "multisig.rpc.proposalCreate accepts rentPayer and discards it — the human creator then pays the rent"
   );
 });
 

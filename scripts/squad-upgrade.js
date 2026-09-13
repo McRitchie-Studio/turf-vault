@@ -191,11 +191,22 @@ async function confirmSig(connection, sig, label) {
   }), "vaultTransactionCreate");
   // A HUMAN opens the proposal (the bot's Initiate covers the vault tx above;
   // whether proposalCreate demands Initiate or Vote is not settled from the
-  // vendored IDL, and a mask-7 human satisfies either). The bot still pays
-  // both the fee and the proposal rent, so the humans need no SOL.
-  await confirmSig(connection, await multisig.rpc.proposalCreate({
-    connection, feePayer: alexBot, rentPayer: alexBot, multisigPda, transactionIndex: txIndex, creator: alex,
-  }), "proposalCreate (Alex)");
+  // vendored IDL, and a mask-7 human satisfies either).
+  //
+  // BUILT HERE RATHER THAN VIA multisig.rpc.proposalCreate, because that helper
+  // ACCEPTS `rentPayer` AND DISCARDS IT. Measured against the locked @sqds/multisig
+  // 2.1.4 (node_modules/@sqds/multisig/lib/index.js:8209-8217): it pushes rentPayer
+  // into the signer list and hands the transaction builder no rentPayer at all, so
+  // the instruction resolves `rent_payer = rentPayer ?? creator` — the CREATOR,
+  // which is now a human. Measured both ways at that version: with rentPayer the
+  // rent account comes out 8K81…(the bot, signer+writable); without it, 7ZDJ…
+  // (Alex). Passing it to the rpc helper looked like it held the rent on the bot
+  // and did nothing. The instruction below really does, and the bot pays the fee
+  // as signers[0] — so the humans still need no SOL.
+  const proposalIx = multisig.instructions.proposalCreate({
+    multisigPda, transactionIndex: txIndex, creator: alex.publicKey, rentPayer: alexBot.publicKey,
+  });
+  await sendAndConfirm(connection, [proposalIx], [alexBot, alex], "proposalCreate (Alex opens, bot pays rent)");
   await confirmSig(connection, await multisig.rpc.proposalApprove({
     connection, feePayer: alexBot, multisigPda, transactionIndex: txIndex, member: alex,
   }), "approve (Alex)");

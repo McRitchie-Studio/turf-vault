@@ -170,18 +170,20 @@ control named without them buys confidence it has not earned.
 - **A Rust test lane would add nothing today.** `programs/` carries zero `#[test]`
   functions and no `#[cfg(test)]` module, so `cargo test` would execute no
   assertions. `--all-targets` compiles test targets; there are none to run.
-- **The script that performs the upgrade is itself unexercised.**
-  `scripts/squad-upgrade.js` is leg 3 of this very control — the 198 lines that
-  propose, cosign and execute the buffer upgrade against the Squads 2-of-3
-  vault — and no test runs a line of it. The executing suite named under
-  [What it covers](#what-it-covers) reaches `scripts/lib/mainnet-config.js` and
-  `scripts/initialize-mainnet.js` and stops there. Measured 2026-09-08: the only
-  occurrence of `squad-upgrade` anywhere under `scripts/tests/` or `tests/` is a
-  COMMENT at `scripts/tests/mainnet-config.test.js:114`, observing that the
-  upgrade path reads `cfg.vaultPda` for the same purpose the config guard does.
-  A comment is not a lane. So the reassurance that the deploy scripts have a
-  real suite must be read with this exception attached: the leg that moves the
-  program is not in it.
+- **The script that performs the upgrade is exercised now, but never against a
+  chain.** `scripts/squad-upgrade.js` is leg 3 of this very control — the 248
+  lines that propose, approve and execute the buffer upgrade against the Squads
+  2-of-3 vault. Until 2026-09-13 no test ran a line of it (measured 2026-09-08:
+  the only occurrence of `squad-upgrade` under `scripts/tests/` was a COMMENT at
+  `mainnet-config.test.js:114`). `narrow-bot-squads-permissions` added 906 lines
+  of suite across four files: the signer planner's refusals, a text scan of who
+  each call names, an END-TO-END run of the real script with `@solana/web3.js`
+  and `@sqds/multisig` replaced in the module loader, and the rent-payer
+  question asked of the real SDK. **What that still is not:** no transaction is
+  built against a validator and none is sent, so the upgrade's on-chain
+  behaviour — whether the vault PDA can actually authorise the BPF `upgrade` —
+  remains proved only by having been run by hand on devnet. The rent-payer file
+  self-skips wherever `node_modules` is absent, which is CI's `guards` lane.
 - **The stamp ages, and nothing notices.** The local proof records a TREE, not
   `HEAD`. Between stamps no run re-checks it, and this file cannot tell you
   whether the tree it stamped is the tree you are about to upgrade from. The
