@@ -501,8 +501,16 @@ solana program show <NEW_PROGRAM_ID>
 compile-time constant — **unaffected by the leak**. So the re-init runs from
 Phantom; the leaked key never touches the new program.
 
+**`Phantom → 1Password → temp` below is a transit route, not a filing claim.**
+You export the key from Phantom, stash it in 1Password for the duration of the
+ceremony, and pull it down to a temp keypair file — no item holds `7ZDJ…` as a
+standing credential, which is what the registration table under **The worked
+example: the Alex Bot signing key** in `mcritchie-studio`'s
+`docs/agents/agents/steffon/sops/credential-rotation.md` records. The two docs
+agree.
+
 ```bash
-# Switch CLI to Alex's Phantom key (INIT_AUTHORITY). Phantom → 1Password → temp.
+# Switch CLI to Alex's Phantom key (INIT_AUTHORITY). Transit: Phantom → 1Password → temp.
 solana config set --url mainnet-beta --keypair /tmp/alex-phantom-keypair.json
 solana balance   # ≥ ~0.05 SOL for VaultState + 2 op_rev ATAs rent
 

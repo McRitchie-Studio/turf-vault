@@ -109,7 +109,10 @@ function planUpgradeSigners({ multisig, bot, approvers: approverKeys }) {
     return member ? Number(member.mask) : null;
   };
 
-  // --- the bot: Initiate + Execute, and NEVER a vote ------------------------
+  // --- the bot: Initiate + Vote + Execute (BOT_MASK_REQUIRED, :56) ----------
+  // Vote is REQUIRED here, not optional: narrowing the bot to Initiate|Execute
+  // was proposed and DECLINED (see the header, :26). This check throws without
+  // it. Do not "fix" the mask to match a narrower comment.
   const botMask = maskOf(bot);
   if (botMask === null) {
     throw new SquadRoleError(
