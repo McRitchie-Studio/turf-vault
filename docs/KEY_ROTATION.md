@@ -691,7 +691,9 @@ heroku run 'bin/rails runner "puts Solana::Vault.new.read_vault_state.inspect"' 
 > (`ALEX_BOT_KEY` / `MASON_KEY`), explicitly "never argv — argv leaks in `ps`",
 > and never writes them to disk. Match that — the HANDLING, not the pair.
 > Those two variables name Alex Bot and Mason because a Squads UPGRADE is what
-> `squad-upgrade.js` signs. For the rotation THIS runbook is about — evicting a
+> `squad-upgrade.js` signs, and the bot casts one of its two approvals (narrowing
+> it out of that was proposed and declined, 2026-09-14). For the rotation THIS
+> runbook is about — evicting a
 > compromised Alex Bot — the signing pair MUST be **Alex
 > (`7ZDJp7FU…59Tcr`) and Mason (`CytJS23p…qWjrR`)**, the two human signers in the
 > `Identities` table above, and the bot MUST NOT sign. **Confirm both against

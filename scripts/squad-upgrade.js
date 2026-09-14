@@ -28,6 +28,7 @@ const {
   VersionedTransaction, ComputeBudgetProgram, SystemProgram,
 } = require("@solana/web3.js");
 const bs58 = require("bs58").default;
+const { planUpgradeSigners, describeMask } = require("./lib/squad-roles");
 const fs = require("fs");
 const path = require("path");
 
@@ -93,6 +94,26 @@ async function confirmSig(connection, sig, label) {
   console.log("  programData:", programData.toBase58());
   console.log("  buffer:     ", buffer.toBase58());
   console.log("  squad vault:", vaultPda.toBase58());
+
+  // --- who signs what, settled BEFORE the first lamport -----------------------
+  // The extend below SPENDS. So the quorum question is asked first: read the
+  // multisig's own members, masks and threshold, and refuse here if this upgrade
+  // could not be approved and executed with the keys in hand. A run that dies at
+  // the approve step has already paid for ExtendProgram and left a buffer on
+  // chain, with the operator holding no way to finish.
+  const msForRoles = await multisig.accounts.Multisig.fromAccountAddress(connection, multisigPda);
+  const plan = planUpgradeSigners({
+    multisig: {
+      threshold: Number(msForRoles.threshold),
+      members: msForRoles.members.map((m) => ({ key: m.key.toBase58(), mask: Number(m.permissions.mask) })),
+    },
+    bot: alexBot.publicKey.toBase58(),
+    approvers: [alexBot.publicKey.toBase58(), mason.publicKey.toBase58()],
+  });
+  console.log("\n  signers (on-chain masks, live):");
+  console.log(`    bot      ${alexBot.publicKey.toBase58()}  ${describeMask(plan.botMask)} — initiates, approves, pays, executes`);
+  plan.approvers.forEach((key, i) => console.log(`    approver ${i + 1} ${key}  votes`));
+  console.log(`    quorum:  ${plan.approvals} approval(s) vs threshold ${plan.threshold}`);
 
   const bufInfo = await connection.getAccountInfo(buffer);
   if (!bufInfo) throw new Error(`buffer ${buffer.toBase58()} not found — did write-buffer succeed?`);
