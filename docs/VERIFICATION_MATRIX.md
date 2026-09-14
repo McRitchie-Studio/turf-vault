@@ -84,25 +84,34 @@ suite either, so the conclusion is unchanged. `anchor`, `ts-mocha` and `tests/`
 appear nowhere else in `.github/workflows/` except inside comments explaining
 their absence.
 
-The studio certification path does not reach it either, and cannot.
-`bin/full-suite-check` opens with a Rails `bin/rails db:test:purge
-db:test:prepare`, which this repo has no `bin/rails` for; it REFUSES rather than
-skipping, because a skipped prepare lane would hand back a green cert for a repo
-whose tests never ran. `bin/fast-check` does not get as far as that lane on a
-diff like this one: it decides first that no LOCAL lane could certify this
-CHECKOUT — the diff maps to no test file, and a satellite checkout resolves none
-of the spine entries `mcritchie-studio/config/fast_cert_spine.yml` declares,
-because that spine is anchored in the hub — and records a fingerprint-bound
+The studio certification path DOES reach this repo — as of 2026-09-14 — and what
+it runs is the four lanes above, never the suite.
+`mcritchie-studio/config/release_repos.yml` names `bin/release-check` on the
+`turf-vault` row, so both `bin/fast-check` and `bin/full-suite-check` run THAT
+SCRIPT as the whole gate and never reach the Rails lanes this repo has no runner
+for (the test-DB reset does not apply to a repo that declares its own gate, and
+the rubocop lane is declared absent with `lint_lane: none` — this tree ships no
+Ruby). A local cert here is therefore real evidence of a `cargo check`, a clippy
+`correctness` pass, the `check:doc-op-refs` guard and 61 `node:test` cases. It is
+still NOT evidence that the program ran: `bin/release-check` runs exactly what CI
+runs, and neither runs `tests/turf_vault.ts`. Read the rest of this section
+before treating a green cert as execution evidence.
+
+Until 2026-09-14 neither door opened at all, which is why older notes and task
+records describe a bypass. `bin/full-suite-check` opened with `bin/rails
+db:test:purge db:test:prepare` and REFUSED rather than skipping, because a
+skipped prepare lane would hand back a green cert for a repo whose tests never
+ran. `bin/fast-check` never got that far: it decided first that no LOCAL lane
+could certify this CHECKOUT and recorded a fingerprint-bound
 `[cert-deferred@<fp>]` receipt, which `bin/dor-check` credits ONLY alongside a
-green GitHub CI, never provisionally. Measured on this task 2026-09-08:
-`bin/fast-check` recorded a `[cert-deferred@<tree-hash>:turf-vault]` receipt
-instead of a cert, on every push. That fingerprint hashes the TREE, so each push
-retires the previous receipt — read the task's `checks_run` for the one that
+green GitHub CI, never provisionally (measured on this repo 2026-09-08:
+`[cert-deferred@<tree-hash>:turf-vault]` on every push). The blocker was never
+"this repo has no tests" — it was that the cert's whole-gate branch keyed on the
+`gems` SECTION, so an `apps` row could not reach it however completely it
+declared a lane. Either receipt's fingerprint hashes the TREE, so each push
+retires the previous one — read the task's `checks_run` for the receipt that
 binds the head you are looking at, rather than trusting a fingerprint copied into
-prose. By either door, no local lane executes anything in this repo.
-`mcritchie-studio/config/release_repos.yml` declares that state under
-`turf-vault` rather than leaving it to be discovered; its note there still names
-the older `[full-suite-bypass]` receipt and is due the same correction.
+prose.
 
 ## The Compensating Control, and What It Does Not Cover
 
@@ -129,8 +138,10 @@ control named without them buys confidence it has not earned.
   drifted from `Cargo.toml`.
 - `cargo clippy … -D clippy::correctness` fails on code clippy classes as
   outright wrong.
-- `npm run test:scripts` is a real executing suite: 32 `node:test` cases across
-  two files. 26 of them are `scripts/tests/mainnet-config.test.js` — 24
+- `npm run test:scripts` is a real executing suite: 61 `node:test` cases across
+  six files, measured 2026-09-14 (the count below was written when the suite was
+  32 across two, and the four files added since are named at the end of this
+  bullet). 26 of them are `scripts/tests/mainnet-config.test.js` — 24
   calling `scripts/lib/mainnet-config.js` directly and 2 over
   `scripts/initialize-mainnet.js` (`scripts/tests/mainnet-config.test.js:281`
   reads its source, `:296` spawns it; `:296` is the one that self-skips in CI,
@@ -153,6 +164,15 @@ control named without them buys confidence it has not earned.
   other 4 are controls that fail if the guard's comment stripper, its step
   extractor, its Prettier premise or its own doc citations stop working, so it
   cannot pass by reading nothing.
+  The last 29 are the four files added since that split was measured, counted
+  2026-09-14 but not otherwise re-analysed here: 14 in
+  `scripts/tests/squad-roles.test.js` (who may sign each upgrade step, graded
+  against the planner), 5 in `scripts/tests/squad-upgrade-flow.test.js` (the real
+  `scripts/squad-upgrade.js` executed end to end against stubs), 5 in
+  `scripts/tests/squad-upgrade-signers.test.js` (which member each call in that
+  script names), and 5 in `scripts/tests/release-check-covers-ci.test.js`, which
+  holds `bin/release-check` — the local gate the studio's cert now runs for this
+  repo — identical to the lanes this workflow runs.
 - `npm run check:doc-op-refs` fails on a stale 1Password vault reference in this
   repo's prose.
 
@@ -199,9 +219,13 @@ control named without them buys confidence it has not earned.
   re-run since is a weaker claim than it looks.
 - **No merge or release gate reads any of it.** `bin/dor-check` waives the suite
   gate for a `docs`-shaped diff, and for every other shape accepts a recorded
-  receipt instead: a fingerprint-bound `[cert-deferred@<fp>]` alongside a green
-  CI, or an author-written `[full-suite-bypass] <reason>`, which still works and
-  is flagged loudly. Neither receipt is evidence that this program ran. The
+  receipt instead. Since 2026-09-14 that receipt can be a REAL local cert
+  (`[full-suite@<fp>:turf-vault]`, written by `bin/full-suite-check` running
+  `bin/release-check`); before that it could only be a fingerprint-bound
+  `[cert-deferred@<fp>]` alongside a green CI, or an author-written
+  `[full-suite-bypass] <reason>`, which still works and is flagged loudly. The
+  upgrade is real and it does not touch this gap: the cert runs CI's four lanes,
+  so NO receipt any gate reads is evidence that this program ran. The
   pre-QA (G3) and ship (G4) gates skip this repo, which registers no `test_cmd`
   and no `qa_test_cmd`, and the release records no QA evidence for it at all
   (`qa_evidence: exempt`). Each of those is correct on its

@@ -1,0 +1,106 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# release-check — THIS REPO'S OWN ANSWER TO "is this tree certifiable?".
+#
+# It runs, in one command, exactly the gate lanes .github/workflows/ci.yml runs:
+# the two pure-Node guards and the two Rust lanes. A builder runs it directly; the
+# hub's cert writers (bin/fast-check / bin/full-suite-check) run it because
+# mcritchie-studio's config/release_repos.yml names THIS SCRIPT on the turf-vault
+# row — `release_check: bin/release-check`, the same shape studio-engine and
+# solana-studio already use.
+#
+# WHY THE SCRIPT EXISTS AT ALL (2026-09-14). Until this file landed, that registry
+# row spelled the four lanes out as a hub-side `&&` chain — a COPY of this repo's
+# CI, living in another repo, with nothing but a local tripwire to keep the two in
+# step. The copy could only ever under-certify (the hub would run less than CI, and
+# the settled CI verdict still governs the PR), but a gate that quietly covers less
+# than it claims is worth fixing before it costs something. The definition now lives
+# beside the code it gates, and cannot drift from it by being edited somewhere else.
+#
+# THE LANES ARE STILL DECLARED TWICE — here and in ci.yml — and that is a DELIBERATE
+# choice with a guard on it, not an oversight:
+#
+#   * CI runs `guards` and `program` as two PARALLEL jobs with different runners and
+#     a Rust-only cache key. Collapsing them into one job that calls this script
+#     would serialise the fast Node lanes behind a cold Rust compile and blur four
+#     named steps into one log. Keeping the split is worth more than the dedup.
+#   * So the coupling is ENFORCED INSTEAD OF ASSUMED:
+#     scripts/tests/release-check-covers-ci.test.js executes `--list` below, extracts
+#     every gate lane from ci.yml, and fails when CI runs something this script does
+#     not. It is pure `node:test`, so it runs in CI's own `guards` lane — a real gate
+#     on every push and PR, not a tripwire that needs a particular checkout on disk.
+#
+# ORDER IS CHEAPEST-FIRST, AND FAIL-FAST. CI runs its two jobs in parallel; a local
+# run is serial, so the sub-second Node pair goes first and a prose or config-shape
+# break surfaces in under a second instead of behind a Rust compile. The run stops at
+# the first red lane, exactly as the `&&` chain it replaces did: with `cargo check`
+# red, `cargo clippy` can only repeat the same compile error.
+#
+# A MISSING TOOLCHAIN IS RED, NEVER A SKIP. `npm` or `cargo` absent aborts before any
+# lane runs, naming what is missing. A cert that silently drops a lane because its
+# binary is not installed reports a pass for tests that never ran — the failure this
+# ecosystem refuses everywhere else it declares a lane.
+#
+# NOT A GEM GATE. studio-engine and solana-studio take `--build` here to package a
+# gem; turf-vault publishes nothing (it is an `apps` row with no gemspec), so that
+# flag does not exist and any unknown argument is a usage error.
+#
+# Usage: bin/release-check [--list]
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+
+# THE LANE TABLE — one entry per command, written exactly as ci.yml writes it so
+# the guard can compare the two verbatim rather than by a loose "subject" match that
+# would let a changed flag through (`--locked` is the one that matters: it is what
+# refuses a Cargo.lock that disagrees with Cargo.toml).
+LANES=(
+  "npm run check:doc-op-refs"
+  "npm run test:scripts"
+  "cargo check --workspace --all-targets --locked"
+  "cargo clippy --workspace --all-targets --locked -- -D clippy::correctness"
+)
+
+case "${1:-}" in
+  "") ;;
+  "--list")
+    for lane in "${LANES[@]}"; do printf '%s\n' "$lane"; done
+    exit 0
+    ;;
+  *)
+    echo "Usage: bin/release-check [--list]" >&2
+    exit 64
+    ;;
+esac
+
+missing=""
+command -v npm >/dev/null 2>&1 || missing="$missing npm"
+command -v cargo >/dev/null 2>&1 || missing="$missing cargo"
+if [ -n "$missing" ]; then
+  echo "release-check: COULD NOT RUN —$missing not on PATH." >&2
+  echo "  The Node lanes need node 20+ (package.json scripts); the Rust lanes need the" >&2
+  echo "  toolchain rust-toolchain.toml pins. Install them and re-run: a lane that cannot" >&2
+  echo "  run is not a lane that passed." >&2
+  exit 1
+fi
+
+echo "node:  $(node --version 2>/dev/null || echo 'MISSING')"
+echo "cargo: $(cargo --version)"
+echo "rust:  $(rustup show active-toolchain 2>/dev/null || echo 'rustup absent — cargo resolves its own toolchain')"
+echo
+
+started=$SECONDS
+for lane in "${LANES[@]}"; do
+  echo "── $lane"
+  lane_started=$SECONDS
+  if ! bash -c "$lane"; then
+    echo
+    echo "release-check: FAILED — $lane"
+    exit 1
+  fi
+  echo "   ok ($((SECONDS - lane_started))s)"
+  echo
+done
+
+echo "release-check: PASSED — ${#LANES[@]} lanes, $((SECONDS - started))s"
