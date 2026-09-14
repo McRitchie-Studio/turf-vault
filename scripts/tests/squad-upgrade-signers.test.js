@@ -1,17 +1,18 @@
 /**
- * THE DEFECT ITSELF, read off the script: who casts the two approvals on a
- * mainnet upgrade (narrow-bot-squads-permissions, 2026-09-13).
+ * WHO SIGNS EACH STEP, read off the script itself.
  *
- * `scripts/squad-upgrade.js` approved as ALEX BOT and as Mason. The bot key
- * lives in Heroku config and on disk, so with a Vote bit a leaked bot key plus
- * ANY ONE human key reached the 2-of-3 quorum over mainnet upgrade authority.
- * Mr. McRitchie's decision (activity-8875): both HUMANS approve, and the bot
- * loses Vote (mask 5). The script must stop voting as the bot BEFORE that mask
- * lands, or the multisig ships a permission the tooling violates.
+ * The defect was one argument on one line, and only the line can answer for it,
+ * so this grades the SCRIPT text: which member each call names, and that the
+ * signer plan is consulted BEFORE the first spend. The planner's own behaviour is
+ * graded in squad-roles.test.js; the executed order in squad-upgrade-flow.test.js.
  *
- * This file grades the SCRIPT, not a description of it: the defect was one
- * argument on one line, and only the line can answer for it. The planner's own
- * behaviour is graded in squad-roles.test.js.
+ * WHAT THE SCRIPT DOES, and deliberately still does (2026-09-14): the bot
+ * initiates the vault transaction, opens the proposal, casts the FIRST approval,
+ * pays every fee and executes; Mason casts the second. Moving both approvals to
+ * humans was proposed under /tasks/narrow-bot-squads-permissions and DECLINED by
+ * Mr. McRitchie — without the mask narrowing it is not a security boundary (an
+ * attacker holding the bot key would use the SDK, not this script) and it would
+ * put both humans at every upgrade.
  *
  * No keys, no network, node stdlib only.
  *
@@ -54,24 +55,24 @@ test("squad.json still documents three members and a threshold of 2", () => {
   assert.equal(cfg.members.mason, MASON);
 });
 
-test("squad-upgrade.js approves as two humans and never as the bot", () => {
-  // The planner can only bind what the script asks it to bind. This reads the
-  // script itself, because the defect was one argument on one line.
-  const src = fs.readFileSync(
-    path.join(__dirname, "..", "squad-upgrade.js"),
-    "utf8"
-  );
+test("the two approvals are the bot and Mason, and the plan names them", () => {
+  const src = script();
   const approvals = src.match(/proposalApprove\(\{[\s\S]*?\}\)/g) || [];
 
-  assert.equal(approvals.length, 2, "two approvals, one per human");
-  for (const call of approvals) {
-    assert.ok(
-      !/member:\s*alexBot\b/.test(call),
-      "no approval may be cast as the bot"
-    );
-  }
-  assert.ok(/member:\s*alex\b/.test(approvals.join("\n")), "Alex approves");
-  assert.ok(/member:\s*mason\b/.test(approvals.join("\n")), "Mason approves");
+  assert.equal(approvals.length, 2, "two approvals, one per approver");
+  assert.ok(
+    /member: alexBot\b/.test(approvals.join("\n")),
+    "the bot casts one approval — it holds Vote, by decision"
+  );
+  assert.ok(
+    /member: mason\b/.test(approvals.join("\n")),
+    "Mason casts the other"
+  );
+  assert.match(
+    src,
+    /approvers: \[alexBot\.publicKey\.toBase58\(\), mason\.publicKey\.toBase58\(\)\]/,
+    "the planner must be handed the SAME two approvers the script then uses, or it grades a plan nobody runs"
+  );
 });
 
 test("the quorum is settled BEFORE the first lamport is spent", () => {
@@ -95,7 +96,7 @@ test("the quorum is settled BEFORE the first lamport is spent", () => {
   );
 });
 
-test("the bot still initiates and executes, and still pays", () => {
+test("the bot still initiates, opens the proposal, and executes", () => {
   const src = script();
 
   assert.match(
@@ -105,37 +106,20 @@ test("the bot still initiates and executes, and still pays", () => {
   );
   assert.match(
     src,
+    /proposalCreate\(\{[\s\S]*?creator: alexBot/,
+    "the bot opens the proposal"
+  );
+  assert.match(
+    src,
     /vaultTransactionExecute\(\{[\s\S]*?member: alexBot\.publicKey/,
     "the bot executes"
   );
 });
 
-// WHY THIS IS NO LONGER `assert.match(/rentPayer: alexBot/)` (2026-09-13, Carl's
-// review of PR 31). It was exactly that — and it passed while the rent fell on the
-// HUMAN. `multisig.rpc.proposalCreate` accepts `rentPayer`, pushes it into the
-// signer list, and hands the transaction builder no rentPayer at all (locked 2.1.4,
-// lib/index.js:8209-8217), so the instruction resolved `rent_payer = creator`. A
-// regex over the source could not see that; it only proved the string was present.
-// So the SHAPE is graded here — the script must BUILD the instruction — and the
-// SDK's real behaviour is graded in squad-upgrade-rent-payer.test.js.
-test("the proposal instruction is built, never taken from the rpc helper that drops rentPayer", () => {
+test("the signing keys come from env vars, never argv", () => {
   const src = script();
 
-  assert.match(
-    src,
-    /multisig\.instructions\.proposalCreate\(\{[\s\S]*?rentPayer: alexBot\.publicKey/,
-    "the script must build the proposal instruction with the bot as rent payer"
-  );
-  assert.ok(
-    !/multisig\.rpc\.proposalCreate\(/.test(src),
-    "multisig.rpc.proposalCreate accepts rentPayer and discards it — the human creator then pays the rent"
-  );
-});
-
-test("the human keys come from env vars, never argv", () => {
-  const src = script();
-
-  assert.match(src, /loadKey\("ALEX_KEY"\)/);
+  assert.match(src, /loadKey\("ALEX_BOT_KEY"\)/);
   assert.match(src, /loadKey\("MASON_KEY"\)/);
   assert.ok(
     !/process\.argv\[[34]\]/.test(src),

@@ -1,21 +1,14 @@
 /**
  * The upgrade flow, EXECUTED — scripts/squad-upgrade.js end to end, with every
- * external boundary stubbed (narrow-bot-squads-permissions, 2026-09-13).
+ * external boundary stubbed.
  *
- * WHY THIS EXISTS AND NOT ONLY THE TEXT SCAN. squad-upgrade-signers.test.js
- * reads the script and asserts which member each call names. That catches the
- * defect (an approval cast as the bot) but proves nothing about the ORDER the
- * calls actually happen in, nor that the plan is consulted at all — a planner
- * whose result is thrown away passes every text assertion. So this file RUNS
- * the real script against fakes and grades the sequence it produces:
- *
- *   1. the signer plan is computed BEFORE the ProgramData extend, which spends;
- *   2. the vault transaction is created by the BOT (its Initiate bit);
- *   3. the proposal is opened by a HUMAN, with the bot paying the rent;
- *   4. BOTH approvals are cast by HUMANS — never by the bot, which is the whole
- *      point: the bot's key is on disk and in Heroku config, so a bot vote plus
- *      one leaked human key would be quorum;
- *   5. execute is the BOT (its Execute bit).
+ * WHY THIS EXISTS AND NOT ONLY THE TEXT SCAN. squad-upgrade-signers.test.js reads
+ * the script and asserts which member each call names. That says nothing about the
+ * ORDER the calls happen in, nor whether the signer plan is consulted at all — a
+ * planner whose result is thrown away passes every text assertion. So this file
+ * RUNS the real script against fakes and grades the sequence: the plan before the
+ * ProgramData extend (which spends), the bot initiating, the bot opening the
+ * proposal, the bot and Mason approving, the bot executing.
  *
  * NOTHING REAL IS TOUCHED. @solana/web3.js, @sqds/multisig and bs58 are replaced
  * in the module loader, so there is no RPC, no signature and no transaction. The
@@ -51,7 +44,7 @@ const PUBKEY_FOR = {
 
 /** Runs the real script under stubbed modules; returns the call trace. */
 async function runUpgrade({
-  masks = { [BOT]: 5, [ALEX]: 7, [MASON]: 7 },
+  masks = { [BOT]: 7, [ALEX]: 7, [MASON]: 7 },
   threshold = 2,
 } = {}) {
   const trace = [];
@@ -164,11 +157,11 @@ async function runUpgrade({
         });
         return "SIG";
       },
-      async proposalCreate() {
-        // Present ONLY so the script REACHING for it shows up in the trace: this
-        // helper accepts rentPayer and discards it (locked 2.1.4), which is why
-        // the script must build the instruction instead.
-        trace.push({ step: "rpc.proposalCreate" });
+      async proposalCreate(args) {
+        trace.push({
+          step: "proposalCreate",
+          member: args.creator.publicKey.toBase58(),
+        });
         return "SIG";
       },
       async proposalApprove(args) {
@@ -180,14 +173,6 @@ async function runUpgrade({
       },
     },
     instructions: {
-      proposalCreate(args) {
-        trace.push({
-          step: "proposalCreate",
-          member: args.creator.toBase58(),
-          rentPayer: args.rentPayer && args.rentPayer.toBase58(),
-        });
-        return { kind: "proposalCreate" };
-      },
       async vaultTransactionExecute(args) {
         trace.push({
           step: "vaultTransactionExecute",
@@ -222,7 +207,6 @@ async function runUpgrade({
     "BufferAddr111111111111111111111111111111111",
   ];
   process.env.ALEX_BOT_KEY = BOT_SECRET;
-  process.env.ALEX_KEY = ALEX_SECRET;
   process.env.MASON_KEY = MASON_SECRET;
   process.env.SOLANA_RPC_URL = "http://127.0.0.1:1/never-called";
   // Record and return — never throw. The script calls process.exit from inside
@@ -270,7 +254,7 @@ async function runUpgrade({
 const steps = (trace, step) => trace.filter((t) => t.step === step);
 const indexOf = (trace, step) => trace.findIndex((t) => t.step === step);
 
-test("the executed flow: bot initiates, humans propose and approve, bot executes", async () => {
+test("the executed flow: bot initiates, opens and approves; Mason approves; bot executes", async () => {
   const { trace, exitCode } = await runUpgrade();
 
   assert.equal(
@@ -282,10 +266,9 @@ test("the executed flow: bot initiates, humans propose and approve, bot executes
   const approvals = steps(trace, "proposalApprove").map((t) => t.member);
   assert.deepEqual(
     approvals,
-    [ALEX, MASON],
-    "both approvals are cast by the humans, in order"
+    [BOT, MASON],
+    "the bot and Mason cast the approvals, in order"
   );
-  assert.ok(!approvals.includes(BOT), "no approval may be cast by the bot");
 
   assert.equal(
     steps(trace, "vaultTransactionCreate")[0].member,
@@ -293,33 +276,14 @@ test("the executed flow: bot initiates, humans propose and approve, bot executes
     "the bot initiates the vault tx"
   );
   assert.equal(
+    steps(trace, "proposalCreate")[0].member,
+    BOT,
+    "the bot opens the proposal"
+  );
+  assert.equal(
     steps(trace, "vaultTransactionExecute")[0].member,
     BOT,
     "the bot executes"
-  );
-
-  const proposal = steps(trace, "proposalCreate")[0];
-  assert.equal(proposal.member, ALEX, "a human opens the proposal");
-  assert.equal(
-    proposal.rentPayer,
-    BOT,
-    "the bot must be named rent payer on the INSTRUCTION"
-  );
-  assert.equal(
-    steps(trace, "rpc.proposalCreate").length,
-    0,
-    "the script used multisig.rpc.proposalCreate, which accepts rentPayer and discards it — the rent then falls on the human creator"
-  );
-
-  // Sent by the bot (fee payer and rent payer) and signed by both: the human
-  // signs as creator. The FIRST sign in the trace is the ProgramData extend, so
-  // take the one that follows the proposal instruction being built.
-  const builtAt = trace.findIndex((t) => t.step === "proposalCreate");
-  const proposalSign = trace.slice(builtAt).find((t) => t.step === "sign");
-  assert.deepEqual(
-    proposalSign.signers,
-    [BOT, ALEX],
-    "the bot pays and signs the proposal transaction; the human creator signs it too"
   );
 });
 
@@ -332,7 +296,7 @@ test("the quorum is read and settled BEFORE the extend transaction spends", asyn
   assert.ok(read > -1, "the script must read the multisig account");
   assert.ok(
     firstSpend > -1,
-    "the extend step must still spend in this fixture, or the ordering is untested"
+    "the extend must still spend in this fixture, or the ordering is untested"
   );
   assert.ok(
     read < firstSpend,
@@ -343,23 +307,26 @@ test("the quorum is read and settled BEFORE the extend transaction spends", asyn
     (t) => t.step === "log" && /quorum:/.test(t.line || "")
   );
   assert.ok(quorumLine, "the run must state its quorum");
-  assert.match(quorumLine.line, /2 human approval\(s\) vs threshold 2/);
+  assert.match(quorumLine.line, /2 approval\(s\) vs threshold 2/);
 });
 
-test("the same flow holds while the bot still carries mask 7 — this half lands first", async () => {
+test("a third member's mask does not affect the plan this run makes", async () => {
   const { trace } = await runUpgrade({
-    masks: { [BOT]: 7, [ALEX]: 7, [MASON]: 7 },
+    masks: { [BOT]: 7, [ALEX]: 5, [MASON]: 7 },
   });
 
   assert.deepEqual(
     steps(trace, "proposalApprove").map((t) => t.member),
-    [ALEX, MASON]
+    [BOT, MASON],
+    "Alex is a member but not one of this run's approvers; his mask is not this run's business"
   );
 });
 
-test("a bot that lost Execute stops the run BEFORE anything is spent", async () => {
+test("a bot narrowed to mask 5 stops the run BEFORE anything is spent", async () => {
+  // The narrowing that was proposed and DECLINED: without Vote the bot cannot
+  // cast its approval, and this is where that surfaces — before the spend.
   const { trace, exitCode } = await runUpgrade({
-    masks: { [BOT]: 3, [ALEX]: 7, [MASON]: 7 },
+    masks: { [BOT]: 5, [ALEX]: 7, [MASON]: 7 },
   });
 
   assert.equal(exitCode, 1, "a refused plan must exit non-zero");
@@ -372,10 +339,10 @@ test("a bot that lost Execute stops the run BEFORE anything is spent", async () 
   const failure = trace.find(
     (t) => t.step === "log" && /FAILED/.test(t.line || "")
   );
-  assert.ok(!failure || /Execute/.test(failure.line));
+  assert.ok(!failure || /Vote/.test(failure.line));
 });
 
-test("a threshold the two humans cannot reach stops the run", async () => {
+test("a threshold the approvers in hand cannot reach stops the run", async () => {
   const { trace, exitCode } = await runUpgrade({ threshold: 3 });
 
   assert.equal(exitCode, 1);

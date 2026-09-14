@@ -2,39 +2,35 @@
  * squad-roles — decide WHO signs each step of a mainnet upgrade, and refuse
  * before anything is spent if the quorum is not actually there.
  *
- * WHY THIS EXISTS (2026-09-13, narrow-bot-squads-permissions).
- * `scripts/squad-upgrade.js` used to approve the upgrade proposal as ALEX BOT:
+ * WHY THIS EXISTS. A mainnet upgrade SPENDS before it votes: by the time
+ * `proposalApprove` runs, the bot has already paid for ExtendProgram and created
+ * the vault transaction, and a buffer is sitting on chain. If a key it needs
+ * cannot do what the step asks — a member evicted by a rotation, a mask granted
+ * narrower than the tooling uses, an approver who cannot Vote, or simply fewer
+ * approvers than the threshold — the run dies mid-ceremony and the operator is
+ * left with a half-done upgrade and no way to finish it from where they stand.
  *
- *     proposalApprove({ ..., member: alexBot })   // "approve (Alex Bot)"
+ * So `squad-upgrade.js` asks this module first, against the multisig's OWN
+ * members, masks and threshold read from chain, and refuses BEFORE the first
+ * lamport. It reads the chain and decides nothing on its own.
  *
- * The bot key lives in Heroku config AND on disk. While it holds Vote, a LEAKED
- * BOT KEY PLUS ANY ONE HUMAN KEY reaches the 2-of-3 quorum over the mainnet
- * program's upgrade authority. Mr. McRitchie's decision (activity-8875): the bot
- * loses Vote — mask 5, Initiate|Execute — and BOTH humans approve every upgrade.
+ * WHO SIGNS WHAT, as the script actually runs it (2026-09-14, unchanged by
+ * /tasks/narrow-bot-squads-permissions, which was declined — see below):
  *
- * THE ORDER IS THE POINT. The script half lands FIRST. Granting mask 5 while
- * the script still votes as the bot would ship a documented permission the
- * tooling violates, and the next upgrade would fail at the approve step with
- * the operator holding a buffer and no idea why. So this planner never asks the
- * bot for Vote — under mask 7 (today) or mask 5 (after the ceremony).
+ *   Initiate (1)  vaultTransactionCreate and proposalCreate — the bot
+ *   Vote     (2)  proposalApprove — the bot AND Mason, two of the three members
+ *   Execute  (4)  vaultTransactionExecute — the bot
  *
- * WHAT THE BOT STILL DOES, and why it is exactly two bits:
+ * and the bot pays every fee, so an approver needs nothing but their key.
  *
- *   Initiate (1)  vaultTransactionCreate — the bot wraps the BPF upgrade ix
- *   Execute  (4)  vaultTransactionExecute — the bot lands the approved tx
- *
- * and it PAYS for everything (fee payer + rent payer), so the humans need no
- * SOL and no tooling beyond their key. The RENT half holds only because
- * squad-upgrade.js builds the proposalCreate instruction itself: at the locked
- * @sqds/multisig 2.1.4, `rpc.proposalCreate` accepts `rentPayer` and discards it,
- * leaving the human creator to pay (measured — scripts/tests/squad-upgrade-rent-payer.test.js).
- *
- * THE PROPOSAL IS OPENED BY A HUMAN, deliberately. The vendored Squads IDL
- * (@sqds/multisig 2.1.4) carries no per-instruction permission docs and the
- * Rust program is not vendored here, so whether `proposalCreate` demands
- * Initiate or Vote is NOT SETTLED. A member who holds both cannot be wrong
- * either way, and the humans hold mask 7 — so the question stops deciding
- * anything. If you ever narrow a human's mask, settle it first.
+ * THE BOT DELIBERATELY KEEPS Vote. Narrowing it to Initiate|Execute was
+ * proposed and DECLINED by Mr. McRitchie: Squads counts approvals only from
+ * Vote-holders, so dropping the bot's would leave exactly two voters against
+ * threshold 2 — lose either human key and upgrade authority freezes with no
+ * quorum left to add a replacement. He chose the spare, accepting that a leaked
+ * bot key plus one human key still reaches quorum. Do not re-litigate it here;
+ * this module describes what the script does, and requires of the bot exactly
+ * the bits the script uses.
  *
  * The caller hands in the multisig as plain data — members as base58 strings
  * with their on-chain mask — so this file has no network, no SDK and no key
@@ -56,8 +52,8 @@ class SquadRoleError extends Error {
   }
 }
 
-/** The two bits the bot exercises. Vote is deliberately absent. */
-const BOT_MASK_REQUIRED = INITIATE | EXECUTE;
+/** Every bit the bot exercises: it initiates, votes, and executes. */
+const BOT_MASK_REQUIRED = INITIATE | VOTE | EXECUTE;
 
 const BIT_NAMES = [
   [INITIATE, "Initiate"],
@@ -88,13 +84,14 @@ function missingBits(mask, required) {
  *
  * @param {{threshold: number, members: Array<{key: string, mask: number}>}} multisig
  *        the ON-CHAIN Multisig account, flattened. Live truth — never squad.json.
- * @param {string} bot     base58 pubkey of the Alex Bot key (creates, pays, executes)
- * @param {string[]} humans base58 pubkeys of the human approvers, in approval order
+ * @param {string} bot       base58 pubkey of the Alex Bot key (creates, pays, executes)
+ * @param {string[]} approvers base58 pubkeys casting the approvals, in order. The
+ *        bot may be one of them — it holds Vote, by decision.
  * @returns {{transactionCreator: string, creator: string, approvers: string[],
  *            executor: string, approvals: number, threshold: number,
  *            quorumReached: boolean, botMask: number, botMaskRequired: number}}
  */
-function planUpgradeSigners({ multisig, bot, humans }) {
+function planUpgradeSigners({ multisig, bot, approvers: approverKeys }) {
   if (!multisig || !Array.isArray(multisig.members)) {
     throw new SquadRoleError(
       "multisig account has no members array — read it from chain before planning"
@@ -133,16 +130,9 @@ function planUpgradeSigners({ multisig, bot, humans }) {
     );
   }
 
-  // --- the approvers: humans only, distinct, members, able to vote ----------
-  const approvers = Array.isArray(humans) ? humans.slice() : [];
+  // --- the approvers: distinct, members, able to vote -----------------------
+  const approvers = Array.isArray(approverKeys) ? approverKeys.slice() : [];
   approvers.forEach((key, i) => {
-    if (key === bot) {
-      throw new SquadRoleError(
-        `approver ${i + 1} is the bot ${short(
-          bot
-        )} — the bot must not vote; a leaked bot key plus one human would be quorum`
-      );
-    }
     if (approvers.indexOf(key) !== i) {
       throw new SquadRoleError(
         `approver ${short(key)} is supplied twice — that is one vote, not two`
@@ -163,20 +153,23 @@ function planUpgradeSigners({ multisig, bot, humans }) {
 
   if (approvers.length < threshold) {
     throw new SquadRoleError(
-      `${approvers.length} human approver(s) supplied against threshold ${threshold} — ` +
-        `the bot no longer votes, so ${threshold} human keys must sign this upgrade`
+      `${approvers.length} approver(s) supplied against threshold ${threshold} — ` +
+        `${threshold} keys able to Vote must sign this upgrade`
     );
   }
 
   // --- who opens the proposal ----------------------------------------------
-  // A human, so no ruling on proposalCreate's permission bit can break it.
-  const creator = approvers[0];
-  const creatorMask = maskOf(creator);
-  const creatorMissing = missingBits(creatorMask, INITIATE | VOTE);
+  // The bot, as the script does it. Whether `proposalCreate` demands Initiate or
+  // Vote is NOT settled from the vendored IDL (no per-instruction permission
+  // docs) and the Rust program is not vendored here — so this requires BOTH of
+  // the bot, which it holds, and the question stops deciding anything. Narrow
+  // the bot's mask one day and settle it first.
+  const creator = bot;
+  const creatorMissing = missingBits(botMask, INITIATE | VOTE);
   if (creatorMissing.length) {
     throw new SquadRoleError(
       `proposal creator ${short(creator)} holds ${describeMask(
-        creatorMask
+        botMask
       )}; it needs ${creatorMissing.join(" and ")} ` +
         "because the Squads program's requirement for proposalCreate is not settled here"
     );

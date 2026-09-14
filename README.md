@@ -267,7 +267,7 @@ program or the deploy scripts rather than adding a workflow:
   two of which need real logic changes. They still print as warnings in the
   `program` job, so the debt stays visible.
 - **`npm run lint`** (Prettier) — two scripts are unformatted, and reformatting
-  `scripts/squad-upgrade.js` turns its 237 lines into 345: a 108-line diff across
+  `scripts/squad-upgrade.js` turns its 219 lines into 326: a 107-line diff across
   the mainnet upgrade path (re-measured 2026-09-13 by running `npx prettier`
   against the checked-in file). Note that its glob also covers `tests/turf_vault.ts`, so
   wiring this lane makes the suite READ for the first time: expect

@@ -171,15 +171,14 @@ control named without them buys confidence it has not earned.
   functions and no `#[cfg(test)]` module, so `cargo test` would execute no
   assertions. `--all-targets` compiles test targets; there are none to run.
 - **The script that performs the upgrade is exercised now, but never against a
-  chain.** `scripts/squad-upgrade.js` is leg 3 of this very control — the 248
+  chain.** `scripts/squad-upgrade.js` is leg 3 of this very control — the 219
   lines that propose, approve and execute the buffer upgrade against the Squads
   2-of-3 vault. Until 2026-09-13 no test ran a line of it (measured 2026-09-08:
   the only occurrence of `squad-upgrade` under `scripts/tests/` was a COMMENT at
-  `mainnet-config.test.js:114`). `narrow-bot-squads-permissions` added 906 lines
-  of suite across four files: the signer planner's refusals, a text scan of who
-  each call names, an END-TO-END run of the real script with `@solana/web3.js`
-  and `@sqds/multisig` replaced in the module loader, and the rent-payer
-  question asked of the real SDK. **What that still is not:** no transaction is
+  `mainnet-config.test.js:114`). /tasks/narrow-bot-squads-permissions added
+  three suites: the signer planner's refusals, a text scan of who each call
+  names, and an END-TO-END run of the real script with `@solana/web3.js` and
+  `@sqds/multisig` replaced in the module loader. **What that still is not:** no transaction is
   built against a validator and none is sent, so the upgrade's on-chain
   behaviour — whether the vault PDA can actually authorise the BPF `upgrade` —
   remains proved only by having been run by hand on devnet. The rent-payer file

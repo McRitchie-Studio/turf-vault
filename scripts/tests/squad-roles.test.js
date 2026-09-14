@@ -1,29 +1,20 @@
 /**
- * Regression suite for scripts/lib/squad-roles.js — WHO SIGNS A MAINNET UPGRADE.
+ * Regression suite for scripts/lib/squad-roles.js — WHO CAN SIGN A MAINNET
+ * UPGRADE, asked before the first lamport.
  *
- * THE DEFECT THIS PINS (2026-09-13, narrow-bot-squads-permissions).
- * `scripts/squad-upgrade.js:160` approved the upgrade proposal AS ALEX BOT:
+ * WHAT IT PROTECTS. `scripts/squad-upgrade.js` spends before it votes: by the
+ * approve step it has already paid for ExtendProgram and created the vault
+ * transaction. A key that cannot do what the next step asks — evicted by a
+ * rotation, granted a narrower mask than the tooling uses, unable to Vote, or
+ * simply fewer approvers than the threshold — strands a half-done upgrade with a
+ * buffer on chain. The planner reads the multisig's own members, masks and
+ * threshold and refuses first.
  *
- *     proposalApprove({ ..., member: alexBot })   // "approve (Alex Bot)"
- *
- * The bot key lives in Heroku config AND on disk. With a Vote bit, a LEAKED BOT
- * KEY PLUS ANY ONE HUMAN KEY reaches the 2-of-3 quorum over mainnet upgrade
- * authority. Mr. McRitchie's decision (activity-8875): the bot loses Vote (mask
- * 5 = Initiate|Execute) and BOTH humans approve. The script must stop voting as
- * the bot BEFORE that mask lands, or the multisig ships a permission the tooling
- * violates.
- *
- * WHAT MAKES THIS EVIDENCE RATHER THAN DECORATION.
- *
- *   1. It grades the ON-CHAIN shape, not our intentions: every case is a
- *      Multisig account's own members + masks + threshold, the values
- *      `squad-upgrade.js` reads back before it spends anything.
- *   2. It proves the planner REFUSES. A planner that accepts everything passes
- *      every happy-path assertion; the REFUSED table below is the half that
- *      says so, including the two shapes that would silently lose quorum — a
- *      duplicate approver, and a threshold the humans alone cannot reach.
- *   3. It runs BOTH masks: 7 (today, before the ceremony) and 5 (after). The
- *      script half must be correct in both, because it lands first.
+ * WHO SIGNS, as the script runs it: the bot initiates, casts one approval, pays
+ * and executes; Mason casts the second. Narrowing the bot to drop Vote was
+ * proposed and DECLINED — Squads counts approvals only from Vote-holders, so it
+ * would leave two voters against threshold 2 with no spare — so the mask this
+ * requires of the bot is all three bits, which is what the script uses.
  *
  * No keys, no network, no @sqds dependency: plain base58 strings and node
  * stdlib, so this runs in CI's guards lane.
@@ -54,7 +45,7 @@ const ALEX = "7ZDJp7FUHhuceAqcW9CHe81hCiaMTjgWAXfprBM59Tcr";
 const MASON = "CytJS23p1zCM2wvUUngiDePtbMB484ebD7bK4nDqWjrR";
 
 const ALL = INITIATE | VOTE | EXECUTE; // 7
-const BOT_AFTER = INITIATE | EXECUTE; // 5 — the mask the ceremony grants
+const NO_VOTE = INITIATE | EXECUTE; // 5 — the narrowing that was declined
 
 function multisig({
   botMask = ALL,
@@ -77,51 +68,39 @@ const plan = (opts = {}) =>
   planUpgradeSigners({
     multisig: multisig(opts.multisig),
     bot: opts.bot === undefined ? BOT : opts.bot,
-    humans: opts.humans === undefined ? [ALEX, MASON] : opts.humans,
+    approvers: opts.approvers === undefined ? [BOT, MASON] : opts.approvers,
   });
 
-// --- the shape the ceremony produces, and the one it starts from ------------
+// --- the plan the script actually runs --------------------------------------
 
-test("with the bot at mask 5 the two humans carry the quorum", () => {
-  const p = plan({ multisig: { botMask: BOT_AFTER } });
+test("the bot initiates, approves and executes; Mason casts the second approval", () => {
+  const p = plan();
 
-  assert.deepEqual(p.approvers, [ALEX, MASON]);
-  assert.equal(p.executor, BOT);
+  assert.deepEqual(p.approvers, [BOT, MASON]);
+  assert.equal(p.transactionCreator, BOT);
   assert.equal(
     p.creator,
-    ALEX,
-    "a human opens the proposal, so no Initiate-vs-Vote question decides it"
-  );
-  assert.equal(
-    p.transactionCreator,
     BOT,
-    "the bot still initiates the vault transaction"
+    "the bot opens the proposal, as the script does"
   );
+  assert.equal(p.executor, BOT);
   assert.equal(p.approvals, 2);
   assert.equal(p.threshold, 2);
   assert.ok(p.quorumReached);
 });
 
-test("the same plan holds while the bot still has mask 7 — the script lands first", () => {
-  const p = plan();
+test("a human pair plans just as happily — this module decides nothing about WHO", () => {
+  const p = plan({ approvers: [ALEX, MASON] });
 
-  assert.deepEqual(
-    p.approvers,
-    [ALEX, MASON],
-    "the bot must not vote even while it still can"
-  );
-  assert.ok(!p.approvers.includes(BOT));
+  assert.deepEqual(p.approvers, [ALEX, MASON]);
   assert.ok(p.quorumReached);
 });
 
-test("the plan never asks the bot for a vote it is about to lose", () => {
-  const p = plan({ multisig: { botMask: BOT_AFTER } });
+test("the plan requires of the bot exactly the bits the script uses", () => {
+  const p = plan();
 
-  assert.ok(
-    !(p.botMaskRequired & VOTE),
-    "the script must require only Initiate|Execute of the bot"
-  );
-  assert.equal(p.botMaskRequired, INITIATE | EXECUTE);
+  assert.equal(p.botMaskRequired, INITIATE | VOTE | EXECUTE);
+  assert.equal(p.botMask, ALL);
 });
 
 // --- refusals: every way the quorum could quietly not be there --------------
@@ -140,7 +119,7 @@ const REFUSED = [
     /not a member/i,
   ],
   [
-    "the bot lost Execute as well as Vote",
+    "the bot lost Execute",
     { multisig: { botMask: INITIATE | VOTE } },
     /Execute/,
   ],
@@ -150,23 +129,23 @@ const REFUSED = [
     /Initiate/,
   ],
   [
-    "only one human is supplied for a threshold of 2",
-    { humans: [MASON] },
+    "only one approver is supplied for a threshold of 2",
+    { approvers: [MASON] },
     /threshold 2/i,
   ],
   [
-    "the same human is supplied twice",
-    { humans: [MASON, MASON] },
+    "the same approver is supplied twice",
+    { approvers: [MASON, MASON] },
     /twice|duplicate/i,
   ],
   [
-    "the bot is offered as one of the approvers",
-    { humans: [BOT, MASON] },
-    /bot/i,
+    "the bot was narrowed to Initiate|Execute and can no longer cast its approval",
+    { multisig: { botMask: NO_VOTE } },
+    /Vote/,
   ],
   [
     "an approver is not a member of this multisig",
-    { humans: [ALEX, "So1oNotAMemberOfThisMultisig11111111111111"] },
+    { approvers: [BOT, "So1oNotAMemberOfThisMultisig11111111111111"] },
     /not a member/i,
   ],
   [
@@ -175,16 +154,11 @@ const REFUSED = [
     /Vote/,
   ],
   [
-    "the human opening the proposal cannot initiate",
-    { multisig: { alexMask: VOTE } },
-    /Initiate/,
-  ],
-  [
-    "the threshold is higher than the humans can reach without the bot",
+    "the threshold is higher than the approvers in hand",
     { multisig: { threshold: 3 } },
     /threshold 3/i,
   ],
-  ["no human is supplied at all", { humans: [] }, /threshold 2/i],
+  ["no approver is supplied at all", { approvers: [] }, /threshold 2/i],
 ];
 
 for (const [label, opts, pattern] of REFUSED) {
