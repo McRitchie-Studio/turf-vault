@@ -173,10 +173,39 @@ them — it must fail `Unauthorized` (6000).
 ## What this does not cover
 
 - **Mainnet.** Same two steps, different tooling and its own review.
-- **The emergency console.** A separate deliverable, with one hard rule: it
-  must NOT be served by the Rails app. If the scenario is a captured system,
-  a console that system serves is captured too — it can display anything and
-  sign anything. It is a static page talking straight to a public RPC, holding
-  no keys, needing nothing from the servers, the database, or any agent: a file
+- **The emergency console — now `docs/vault-console.html`, partially.** The hard
+  rule is unchanged and is met: it is NOT served by the Rails app. If the
+  scenario is a captured system, a console that system serves is captured too —
+  it can display anything and sign anything. It is a static page talking
+  straight to a public RPC, holding no keys, needing nothing from the servers,
+  the database, or any agent, and carrying no third-party code at all: a file
   that opens from a USB stick on a borrowed laptop. Sequence on the bad day:
   pause (2, instant) → evict slots 1 and 2 (3, unhurried) → unpause (3).
+
+  **Open it over localhost, never as `file://`.** Phantom injects its provider
+  only into pages served over https or from localhost / 127.0.0.1, and Chrome
+  withholds file access from every extension unless the user ticks *Allow access
+  to file URLs* by hand. A `file://` page therefore has no wallet at all, and
+  says nothing about why. `cd docs && python3 -m http.server 8000`, then open
+  `http://localhost:8000/vault-console.html`. The page detects the mistake and
+  prints the remedy, but knowing it beforehand is cheaper.
+
+  **What it does today:**
+
+  | capability | state |
+  |---|---|
+  | Read a Squads multisig, decode config proposals into plain words | proven on devnet |
+  | Approve and execute a Squads config proposal | proven on devnet |
+  | Read `VaultState`, decode all five signer slots | proven on devnet |
+  | Detect the three-slot vs five-slot program shape | proven on devnet, structurally |
+  | Build and simulate `update_signers` for either shape | built and simulated |
+  | Collect three wallet signatures onto one `update_signers` transaction | **not yet exercised** |
+
+  The last row is why the ceremony above still runs through
+  `scripts/rotate-devnet-signers.js`. Phantom's sign-without-send method is
+  documented as legacy and its return shape is not pinned by Phantom's own docs,
+  so the console stops at a verified, simulated transaction rather than pretend a
+  multi-wallet collection flow has been proven. Everything the console builds is
+  gated by `scripts/tests/vault-console.test.js`, which extracts the page's own
+  code out of the shipped HTML and runs it — so CI proves the bytes an operator
+  actually opens, not a copy of them.
