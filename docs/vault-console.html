@@ -978,9 +978,13 @@ function isLeftPacked(slots) {
 
 /** THE STRUCTURAL PROBE.
  *
- *  turf-vault ships two programs that BOTH report metadata.version 0.25.0, so a
- *  version string returns a plausible answer and picks the wrong shape. The
- *  shapes differ in the thing that actually matters — the account list:
+ *  Written when turf-vault shipped BOTH programs reporting metadata.version
+ *  0.25.0: a version string then returned a plausible answer and picked the
+ *  WRONG shape. The crate reads 0.26.0 since 2026-09-15 and a guard keeps it
+ *  ahead of the last release (/tasks/cargo-version-lies-about-program), and
+ *  this probe still does not read it — a version is a DECLARATION, true only
+ *  because someone wrote it down. The shapes differ in the thing that actually
+ *  matters — the account list:
  *
  *    three slot   admin, cosigner, vault_state              args [Pubkey; 3]
  *    five  slot   admin, cosigner, vault_state, governance  args [Pubkey; 5]
