@@ -6,6 +6,18 @@ Solana escrow program for contest entry fees and prize distribution. Built with 
 
 **Docs index**: see [`docs/README.md`](docs/README.md) before following historical specs, audits, or generated reports.
 
+> **THE `Auth` COLUMN BELOW, THE `Architecture` BLOCK AND THE `Security`
+> SECTION STILL DESCRIBE v0.25 — THE DEPLOYED PROGRAM, NOT THIS TREE.**
+> v0.26 (Unreleased) replaces the fixed 2-of-3 / 1-of-3 model with five signer
+> slots and a per-action threshold table stored in the `governance` PDA, so
+> most thresholds written below are now wrong for the source in this repo —
+> `burn_entry_token` and `update_signers` are 3, not the 1-of-3 / 2-of-3 shown.
+> Authoritative for this tree: `DEFAULT_THRESHOLDS` in
+> [`programs/turf_vault/src/state.rs`](programs/turf_vault/src/state.rs) and the
+> instruction matrix in
+> [`docs/VERIFICATION_MATRIX.md`](docs/VERIFICATION_MATRIX.md). Authoritative
+> for the chain: [`docs/CURRENT_DEPLOYMENT.md`](docs/CURRENT_DEPLOYMENT.md).
+
 ![Anchor 0.32.1](https://img.shields.io/badge/Anchor-0.32.1-blue)
 ![Solana](https://img.shields.io/badge/Solana-Devnet-purple)
 ![License: MIT](https://img.shields.io/badge/License-MIT-green)
