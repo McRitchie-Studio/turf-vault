@@ -96,7 +96,8 @@ jobs:
       # What that trade gives up is honest and small: SBF-target-specific failures
       # (stack-frame limits and the like) that a host-target check cannot see. Those are
       # already caught before they can matter — the program is deployed by hand through
-      # scripts/squad-upgrade.js against the Squads 2-of-3 vault, and docs/VERIFICATION_MATRIX.md
+      # scripts/squad-upgrade.js against the Squads vault (3-of-5 on both clusters since
+      # 2026-09-15), and docs/VERIFICATION_MATRIX.md
       # gates that rollout. If an SBF build is ever wanted in CI, the right home is a
       # scheduled/dispatch lane of its own, not this gate.
       - name: cargo check
