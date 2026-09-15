@@ -4,6 +4,28 @@ All notable changes to TurfVault are documented here. Format based on [Keep a Ch
 
 ## [Unreleased]
 
+**This section ships as v0.26.0, and the crate finally says so.**
+`programs/turf_vault/Cargo.toml` declared `0.25.0` until 2026-09-15 — the version
+both clusters run on chain — while this tree already carried the five-signer
+governance rewrite and the username registry. `anchor idl build` stamps
+`metadata.version` from that file, so an IDL built here was labelled identically
+to the deployed program's, and a consumer asking which program it held got a
+PLAUSIBLE WRONG ANSWER rather than no answer. Anchor account lists are
+positional, so a wrong answer selects the wrong account shape and can inspect one
+account while reporting on another — which has already happened once here, when
+`assert_entry_cosign_safe!` read a hard-coded index that `governance` shifted.
+`scripts/tests/crate-version.test.js` now refuses a tree whose crate version
+still names the newest released version while this section carries work.
+
+**The bump deploys nothing, and changes no probe.** Both clusters still run
+v0.25.0 (`docs/CURRENT_DEPLOYMENT.md`), and turf-monster's two committed IDLs
+still read `metadata.version` `0.25.0` — correctly, because they describe the
+programs that are actually on chain. They are re-pinned from the freshly built
+IDL during the upgrade window, together with `EXPECTED_IDL_HASH`, and not
+before it. A version remains a DECLARATION rather than a measurement: it is true
+only because someone wrote it down. Every probe that selects an account shape
+stays structural, asking the chain for the account that actually differs.
+
 ### Added
 
 - **THE USERNAME REGISTRY — UNIQUENESS AND THE BLOCKED LIST AS ONE MECHANISM.**

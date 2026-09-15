@@ -679,12 +679,16 @@ test("readSignerSlots reads all five slots and refuses a short buffer", () => {
 test("the program shape is detected structurally, never from a version string", () => {
   const core = loadCore();
 
-  // turf-vault ships BOTH programs reporting metadata.version 0.25.0, so a
-  // version check returns a plausible answer and picks the wrong shape
-  // (/tasks/cargo-version-lies-about-program). The probe therefore asks the
-  // chain for the account that actually differs: GovernanceConfig exists only
-  // under the five-slot program, and the five-slot update_signers cannot be
-  // built without it.
+  // Written when turf-vault shipped BOTH programs reporting metadata.version
+  // 0.25.0: a version check then returned a plausible answer and picked the
+  // WRONG shape. The crate was bumped to 0.26.0 on 2026-09-15 and a guard now
+  // keeps it ahead of the last release (scripts/tests/crate-version.test.js,
+  // /tasks/cargo-version-lies-about-program) — and this probe still does not
+  // read it. A version is a DECLARATION: it is true only because someone wrote
+  // it down, and the cost of it being wrong is silent, because Anchor account
+  // lists are positional. So the probe asks the chain for the account that
+  // actually differs: GovernanceConfig exists only under the five-slot
+  // program, and the five-slot update_signers cannot be built without it.
   const absent = core.detectVaultShape(null);
   assert.equal(absent.slots, 3);
   assert.equal(absent.hasGovernance, false);
