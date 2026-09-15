@@ -227,7 +227,7 @@ and on every push to `main`, `release` and `accepted`:
 | `program` | `cargo check --workspace --all-targets --locked` | the program (and every `#[derive(Accounts)]` expansion) no longer compiles, or `Cargo.lock` is out of sync |
 | `program` | `cargo clippy -- -D clippy::correctness` | code clippy classes as outright wrong |
 | `guards` | `npm run check:doc-op-refs` | a 1Password vault reference in this repo's prose has gone stale |
-| `guards` | `npm run test:scripts` | a shape regression in the deploy scripts, or a lane wired to the Anchor suite — 32 `node:test` cases. 26 cover `scripts/lib/mainnet-config.js` and `scripts/initialize-mainnet.js`; 5 of those 26 drive the real checked-in `scripts/squad.json` and the other 21 are fixture mutations or a source read — the split is measured in [What it covers](docs/VERIFICATION_MATRIX.md#what-it-covers). One case self-skips here, where no `node_modules` is installed. The remaining 6 are the lane guard below |
+| `guards` | `npm run test:scripts` | a shape regression in the deploy scripts, or a lane wired to the Anchor suite — 61 `node:test` cases, counted 2026-09-14. 26 cover `scripts/lib/mainnet-config.js` and `scripts/initialize-mainnet.js`; 5 of those 26 drive the real checked-in `scripts/squad.json` and the other 21 are fixture mutations or a source read — the split is measured in [What it covers](docs/VERIFICATION_MATRIX.md#what-it-covers). One case self-skips here, where no `node_modules` is installed. 24 more grade the Squads upgrade path (the signer planner, the script's text, and the script executed end to end against stubs), 6 are the lane guard below, and 5 hold `bin/release-check` identical to this table |
 
 CI is **build-and-check only** — it never contacts a Solana cluster, holds a
 keypair, or spends SOL.
@@ -236,7 +236,8 @@ keypair, or spends SOL.
 — 30 `it()` blocks, the suite
 [`docs/VERIFICATION_MATRIX.md`](docs/VERIFICATION_MATRIX.md) is organised around
 — is executed by nothing automatic: not the jobs above, and not the studio
-certification path, which certifies nothing in this repo. Nothing parses it
+certification path, which runs the table above and nothing else (see
+[Running the gate locally](#running-the-gate-locally)). Nothing parses it
 either, so a syntax error in it reaches `accepted` green. Both facts are pinned
 by [`scripts/tests/anchor-suite-lane.test.js`](scripts/tests/anchor-suite-lane.test.js),
 which runs in the `guards` lane and fails — naming the workflow line and the doc
@@ -273,6 +274,33 @@ program or the deploy scripts rather than adding a workflow:
   wiring this lane makes the suite READ for the first time: expect
   `scripts/tests/anchor-suite-lane.test.js` to go red, and update the sections it
   names in the same change.
+
+### Running the gate locally
+
+```bash
+bin/release-check          # the four lanes above, cheapest first, ~1s warm
+bin/release-check --list   # print the lane table without running it
+```
+
+[`bin/release-check`](bin/release-check) is this repo's own answer to "is this
+tree certifiable?", and it is what the studio's cert runs: McRitchie Studio's
+`config/release_repos.yml` names it on the `turf-vault` row
+(`release_check: bin/release-check`), so `bin/fast-check` and
+`bin/full-suite-check` execute this script as the whole gate for this repo
+instead of the Rails lanes it has no runner for. Before 2026-09-14 that row
+spelled the four lanes out as a hub-side `&&` chain — a copy of this file's CI,
+kept in another repo.
+
+The lanes are still written twice, here and in
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml), because CI runs `guards`
+and `program` as parallel jobs with separate caches and a single job calling this
+script would serialise the sub-second Node lanes behind a cold Rust compile. So
+the two are held identical by
+[`scripts/tests/release-check-covers-ci.test.js`](scripts/tests/release-check-covers-ci.test.js),
+which runs `--list`, extracts every lane from the workflow, and fails in EITHER
+direction — a lane CI runs and the script does not (the local cert would cover
+less than the verdict it is credited against), or a lane only the script runs
+(a gate `accepted` is never held to). It runs in the `guards` lane itself.
 
 ### Deploy
 
