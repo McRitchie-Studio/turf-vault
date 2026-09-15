@@ -20,27 +20,40 @@ If `anchor test` cannot inherit Node/Yarn, use the direct test path from
 [`../RUNBOOK.md`](../RUNBOOK.md). After any source change, regenerate the IDL and
 re-pin Turf Monster from the freshly built file, not from `anchor idl fetch`.
 
-Latest local proof, 2026-09-06 — **stale as of turf-vault PR #18; see the
-qualification below before citing it**:
+Latest local proof, **2026-09-15**, on the v0.26 governance tree:
 
 ```bash
+yarn install
 anchor build
-solana-test-validator --reset --rpc-port 8898 --faucet-port 9901
-anchor deploy --provider.cluster http://127.0.0.1:8898
-ANCHOR_PROVIDER_URL=http://127.0.0.1:8898 \
-  ANCHOR_WALLET=/Users/alex/.config/solana/id.json \
-  yarn run ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.ts
+anchor test          # spins its own validator, deploys, runs tests/turf_vault.ts
 ```
 
-Result of that run: `27 passing` (was `23`; +4 for `burn_entry_token`), against
-an isolated local validator on `127.0.0.1:8898`.
+Result: **`38 passing`, 0 failing** (was `27` at the 2026-09-06 stamp; +11 for
+the v0.26 governance surface). This is a RUN RESULT, not an `it()` count.
 
-**That number stamps the tree BEFORE turf-vault PR #18, and no run has been made
-since.** #18 (merged 2026-09-07) repaired the suite's rejection helper and its
-lock-gate margin and added three cases exercising the helper itself, so this tree
-carries **30** `it()` blocks — a count read from `tests/turf_vault.ts`, not a run
-result. Re-run the command above and re-stamp both numbers before the next Squads
-upgrade.
+**This stamp is the first one taken AFTER turf-vault PR #18**, which is what the
+qualification below was waiting for. #18 (merged 2026-09-07) repaired the suite's
+`expectRejected` helper — inert until then at all 45 of its call sites — and
+corrected the lock-gate margin. Every rejection assertion in this suite has now
+been observed to run against a repaired helper, so the "no helper-mediated
+rejection has yet been OBSERVED to bite" caveat below is discharged as of this
+run. Re-run and re-stamp before the next Squads upgrade.
+
+Two further lanes now certify this repo, and unlike `anchor test` they run in
+CI on every push and PR:
+
+```bash
+bin/release-check          # the four CI lanes plus, new in v0.26, `cargo test`
+```
+
+`cargo test` matters more than its name suggests here. `cargo check` COMPILES
+`#[cfg(test)]` code without running it, so before this lane existed a unit test
+could report green having never executed. What it runs includes
+`programs/turf_vault/src/governance_tests.rs`, which asserts every `VaultState`
+field BYTE OFFSET — the guard against a widen-in-place edit that would compile,
+deploy, and silently misread both live vaults. It was control-checked on
+2026-09-15 by swapping two same-typed neighbouring fields (a mutation that
+compiles cleanly) and confirming the guard failed with `left: 131, right: 99`.
 
 > **A passing count is not evidence for every row below.** Until turf-vault
 > PR #18, the suite's `expectRejected` helper was INERT at all 45 of its call
@@ -50,16 +63,20 @@ upgrade.
 > for, and self-matched. A call the program ACCEPTED was recorded as a passing
 > refusal, with the blindness exactly one failure mode wide: "the guard did not
 > refuse at all." Accept-path results are unaffected, but no rejection assertion
-> ROUTED THROUGH THE HELPER, before the repair, is evidence of anything — and
-> because no run has followed the repair, no helper-mediated rejection assertion
-> in this suite has yet been OBSERVED to bite. Three refusals escape that,
-> because their evidence never went through the helper.
+> ROUTED THROUGH THE HELPER, before the repair, is evidence of anything. Three
+> refusals escape that, because their evidence never went through the helper.
 > #18 also corrected the **lock-gate** and **post-lock-amend** drift (those tests
 > set a lock one second in the on-chain past against a chain clock running one to
-> two seconds behind wall clock, so the gate they assert was never engaged); the
-> `27 passing` above predates that fix and does not cover it. Which refusals
-> below carry evidence anyway, and which do not, is swept row by row in
-> [What the Suite Evidences](#what-the-suite-evidences).
+> two seconds behind wall clock, so the gate they assert was never engaged).
+>
+> **DISCHARGED 2026-09-15.** This paragraph used to end "because no run has
+> followed the repair, no helper-mediated rejection assertion in this suite has
+> yet been OBSERVED to bite". The `38 passing` run at the top of this file is
+> that run — the first since #18 — so every rejection in the suite has now
+> executed against a helper that bites, and the lock-gate correction is covered
+> too. What remains true is the narrower claim: nothing recorded BEFORE #18 is
+> evidence. Which refusals carry evidence on their own anyway is swept row by
+> row in [What the Suite Evidences](#what-the-suite-evidences).
 
 ## No Lane Runs This Suite
 
@@ -73,7 +90,7 @@ under test:
 
 | Lane | Steps it actually ran | Reaches `tests/turf_vault.ts`? |
 |------|-----------------------|--------------------------------|
-| CI job `program` (20s) | `rustup show active-toolchain`, `cargo check --workspace --all-targets --locked`, `cargo clippy … -D clippy::correctness` | no |
+| CI job `program` (20s) | `rustup show active-toolchain`, `cargo check --workspace --all-targets --locked`, `cargo clippy … -D clippy::correctness`, `cargo test --workspace --locked` | no |
 | CI job `guards` (9s) | `npm run check:doc-op-refs`, `npm run test:scripts` | no |
 
 Those are the workflow's only two jobs, and the steps above are the only ones
@@ -92,8 +109,9 @@ SCRIPT as the whole gate and never reach the Rails lanes this repo has no runner
 for (the test-DB reset does not apply to a repo that declares its own gate, and
 the rubocop lane is declared absent with `lint_lane: none` — this tree ships no
 Ruby). A local cert here is therefore real evidence of a `cargo check`, a clippy
-`correctness` pass, the `check:doc-op-refs` guard and 61 `node:test` cases. It is
-still NOT evidence that the program ran: `bin/release-check` runs exactly what CI
+`correctness` pass, `cargo test` (19 Rust assertions, v0.26), the
+`check:doc-op-refs` guard and 68 `node:test` cases. It is still NOT evidence
+that the PROGRAM ran against a chain: `bin/release-check` runs exactly what CI
 runs, and neither runs `tests/turf_vault.ts`. Read the rest of this section
 before treating a green cert as execution evidence.
 
@@ -138,8 +156,16 @@ control named without them buys confidence it has not earned.
   drifted from `Cargo.toml`.
 - `cargo clippy … -D clippy::correctness` fails on code clippy classes as
   outright wrong.
-- `npm run test:scripts` is a real executing suite: 61 `node:test` cases across
-  six files, measured 2026-09-14 (the count below was written when the suite was
+- `cargo test --workspace --locked` is a real executing suite, new in v0.26: 19
+  assertions in `programs/turf_vault/src/governance_tests.rs`, covering the
+  `VaultState` field offsets, the migration-safety case, the N-of-M threshold,
+  the floors, and the 6046-6059 error boundary. It is the lane `cargo check`
+  cannot substitute for, because `--all-targets` compiles test code without
+  running it.
+- `npm run test:scripts` is a real executing suite: 68 `node:test` cases across
+  seven files, measured 2026-09-15 (61 across six before v0.26 added the
+  vault-layout parity guard, which parses `state.rs` and recomputes every offset
+  so the scripts' copy of the layout cannot drift from the Rust one) (the count below was written when the suite was
   32 across two, and the four files added since are named at the end of this
   bullet). 26 of them are `scripts/tests/mainnet-config.test.js` — 24
   calling `scripts/lib/mainnet-config.js` directly and 2 over
@@ -187,9 +213,27 @@ control named without them buys confidence it has not earned.
   `cargo check` cannot see it, `node --test scripts/tests/` does not glob it, and
   neither `tsc` nor `npm run lint` (Prettier) is wired into a workflow. A syntax
   error in this file reaches `accepted` green.
-- **A Rust test lane would add nothing today.** `programs/` carries zero `#[test]`
-  functions and no `#[cfg(test)]` module, so `cargo test` would execute no
-  assertions. `--all-targets` compiles test targets; there are none to run.
+- **A Rust test lane exists as of v0.26, and it was needed.** This bullet
+  previously read "a Rust test lane would add nothing today — `programs/`
+  carries zero `#[test]` functions", which was true when written and stopped
+  being true in the same change that added `cargo test` to `ci.yml` and
+  `bin/release-check`. `programs/turf_vault/src/governance_tests.rs` now holds
+  19 assertions, and `lib.rs` declares the module.
+
+  **`cargo check` was never enough for them.** `--all-targets` COMPILES test
+  targets; it runs none. So a repo with unit tests and no `cargo test` lane
+  reports green over assertions that never execute — the same "a lane that
+  cannot fail is worth nothing" failure the `guards` lane was added for. What
+  the lane protects is the `VaultState` field OFFSETS: the account is
+  `zero_copy(unsafe)` + `repr(C)`, so an edit that inserts or widens a field
+  rather than appending one shifts every field after it and makes the live
+  devnet and mainnet vaults decode as something else, while compiling,
+  deploying and running without complaint. The guard was control-checked on
+  2026-09-15 by swapping two same-typed neighbouring fields — a mutation that
+  compiles cleanly — and confirming it failed with `left: 131, right: 99`.
+
+  What it still does NOT reach is `tests/turf_vault.ts`: that needs a validator,
+  and no lane starts one.
 - **The script that performs the upgrade is exercised now, but never against a
   chain.** `scripts/squad-upgrade.js` is leg 3 of this very control — the 219
   lines that propose, approve and execute the buffer upgrade against the Squads
@@ -206,8 +250,12 @@ control named without them buys confidence it has not earned.
 - **The stamp ages, and nothing notices.** The local proof records a TREE, not
   `HEAD`. Between stamps no run re-checks it, and this file cannot tell you
   whether the tree it stamped is the tree you are about to upgrade from. The
-  qualification under Baseline Commands is the current example: the `27 passing`
-  count predates PR #18, and no run has followed it.
+  `27 passing` stamp is the worked example: it sat here for nine days across
+  PR #18, which repaired the very helper it was being cited as evidence from,
+  and nothing in this file noticed. It was replaced on 2026-09-15 only because
+  a person ran the suite. **The `cargo test` lane added in v0.26 does not age
+  this way** — it runs on every push and PR — but it reaches only the Rust
+  assertions, never `tests/turf_vault.ts`.
 - **A rotted suite still prints green, measured rather than imagined.**
   `expectRejected` — the suite's only negative-assertion primitive, 45 call
   sites — was inert for the suite's entire life, repaired only in PR #18. While
@@ -264,8 +312,14 @@ survives an inert helper: an assertion AFTER a refusal that re-reads state a
 wrongly-ACCEPTED call would have changed. Three exist, all in the
 `burn_entry_token` block. They are ordinary `expect`s that do not route
 through the helper, and both blocks holding them are among the four
-`burn_entry_token` cases the `27 passing` stamp counts — so these three, alone
-in the file, are refusals that stamp actually evidences:
+`burn_entry_token` cases the old `27 passing` stamp counted — so these three
+were, at that stamp, the only refusals in the file it actually evidenced.
+
+**That qualification is now historical.** The 2026-09-15 run at the top of this
+file (`38 passing`) is the first taken AFTER turf-vault PR #18 repaired the
+helper, so every refusal in the suite has now been observed to run against a
+helper that bites. The table below is kept because it records which three
+refusals stood on their own evidence even while the helper was inert:
 
 | Refusal | The assertion that follows it | Strength |
 |---|---|---|
@@ -300,41 +354,53 @@ seat, but a second one was required", and the suite asserts both with the same
 - `tests/turf_vault.ts:1551`, in `only a vault signer may burn, and the hash
   must name the token`, IS a genuine non-signer check: `burnEntryToken(token,
   stranger)` is called by a key with no seat at all.
-- `tests/turf_vault.ts:1325` and `:1355`, in `enforces set_contest_lock_time
-  and set_contest_conclusion_time rules`, are NOT. Both call as `admin` — a
-  real vault signer — with `cosigner: null`, and both are followed by the
-  identical call succeeding once `signer2` cosigns. They are the
-  post-finality 2-of-3 RE-OPEN gate: an amend after a conclusion time is set,
-  and an amend after the lock has passed. Reading them as non-signer coverage
-  would credit seat checks that nothing here exercises.
+- The two cases in `enforces set_contest_lock_time and
+  set_contest_conclusion_time rules` are NOT. Both call as `admin` — a real
+  vault signer — with `cosigner: null`, and both are followed by the identical
+  call succeeding once further signers cosign. They are the post-finality
+  RE-OPEN gate (v0.26: escalating from 2 to **3**): an amend after a conclusion
+  time is set, and an amend after the lock has passed. Under v0.26 they now
+  assert `InsufficientSigners` (6046) rather than `Unauthorized` (6000), which
+  is the distinction exactly — the caller's SEAT is valid and the COUNT is
+  short. Reading either as non-signer coverage would credit seat checks that
+  nothing here exercises.
 
 ## Instruction Matrix
+
+**THE AUTH CLAUSES BELOW DESCRIBE v0.26 (Unreleased), NOT WHAT IS DEPLOYED.**
+The deployed v0.25 program is structurally 2-of-3 / 1-of-3 and cannot express
+anything else — `validate_multisig` took exactly two signers and never read the
+`threshold` field. v0.26 replaces that with per-action thresholds stored in a
+`GovernanceConfig` PDA, and the numbers below are its SHIPPED DEFAULTS, every
+one of which is retunable by transaction. Live truth for the chain is
+[`CURRENT_DEPLOYMENT.md`](CURRENT_DEPLOYMENT.md); the live numbers, once
+deployed, are in the PDA at seeds `[b"governance"]`.
 
 | Area | Instruction | Required proof |
 |------|-------------|----------------|
 | Vault setup | `initialize` | Creates singleton `VaultState`; pins payout mint, treasury authority, signers, threshold, USDC slot 0, USDT slot 1; mainnet build rejects non-`INIT_AUTHORITY`. |
-| Governance | `update_signers` | Requires two distinct current signers; rejects duplicates, zero/default slots, and rotations that drop either authorizing signer. |
-| Currency registry | `register_currency` | Requires 2-of-3; rejects duplicate mint and full registry; initializes stable `op_rev` ATA for the new slot. |
-| Currency registry | `deactivate_currency` | Requires 2-of-3; flips `active=false`; preserves slot and historical tallies. |
-| Pause control | `pause` | Requires 2-of-3; records reason; blocks `enter_contest` and `enter_contest_with_token` only. |
-| Pause control | `unpause` | Requires 2-of-3; clears pause; paid and token entries work again. |
+| Governance | `update_signers` | Requires **3** (floor 3 — no quorum can lower it); up to FIVE left-packed slots; rejects duplicates, gaps, a set too small for any live threshold, and rotations that keep fewer than `threshold` of the AUTHORIZING signers. |
+| Currency registry | `register_currency` | Requires **3**; rejects duplicate mint and full registry; initializes stable `op_rev` ATA for the new slot. |
+| Currency registry | `deactivate_currency` | Requires **3**; flips `active=false`; preserves slot and historical tallies. |
+| Pause control | `pause` | Requires **2** (floor 1 — `cosigner` is `Option<Signer>` so the account struct cannot out-vote the table, and a retune to 1 really reaches one signature); records reason; blocks `enter_contest` and `enter_contest_with_token` only. |
+| Pause control | `unpause` | Requires **3** (floor 3 — deliberately harder than pausing, so a captured system can brake and never release); clears pause; paid and token entries work again. |
 | User account | `create_user_account` | Permissionless payer can create a wallet account; username charset, length, and reserved-prefix checks hold. |
 | User account | `set_username` | Requires owner signature; rejects non-owner, invalid charset, short names, and reserved prefixes. |
-| User account | `admin_create_user_account` | Requires payer plus 1-of-3 vault signer; waives only reserved-prefix branch; still enforces charset and length. |
-| User account | `admin_set_username` | Requires owner signature plus 1-of-3 vault signer; waives only reserved-prefix branch; rejects non-owner and non-signer admin. |
-| Season | `create_season` | Requires 1-of-3; creates immutable entry seed schedule and quest seed schedule; rejects duplicate season ID. |
-| Contest | `create_contest` | Requires 1-of-3 payer plus creator; funds prize-pool ATA; validates payout tiers sum to prize pool; stores per-currency fees and lock timestamp. |
-| Contest | `set_contest_lock_time` | Requires 1-of-3 before lock; rejects invalid timestamp/order and post-finality changes without required cosign path. |
-| Contest | `set_contest_conclusion_time` | Requires 1-of-3 for first set; rejects invalid timestamp/order and post-finality changes without required cosign path. |
-| Entry | `enter_contest` | Requires user signature plus 1-of-3 payer; validates active currency slot, user ATA funds, max entries, lock/conclusion gate, and season schedule seed award. |
-| Entry | `enter_contest_with_token` | Requires user signature plus 1-of-3 payer; consumes matching `EntryTokenAccount`; awards seeds; charges no currency and cannot be reused. |
-| Free entry | `mint_entry_token` | Requires 1-of-3; PDA is keyed by `sha256(source_ref)`; remint of the same source reference fails. |
-| Free entry | `burn_entry_token` | Requires 1-of-3 and the holder does **not** sign; not pause-gated. TOMBSTONES rather than closing: the account survives, so the on-chain token COUNT that Rails reads as owed is unchanged and nothing re-mints it. Sets `consumed = true` (reusing the constraint `enter_contest_with_token` already carried) and raises `BURNED_FLAG` (`0x80`) in the spare high bit of `source`, inside the EXISTING 124-byte `EntryTokenAccount` layout — so tokens minted before the upgrade still deserialize. Rejects a double burn, with the flag checked FIRST so `EntryTokenAlreadyBurned` is reachable rather than masked by `EntryTokenAlreadyConsumed`; rejects a token already spent. `source_ref_hash` seed-binds the target as a **fat-finger guard**, not as a targeting control: the caller must name the token twice, so naming the wrong account WITHOUT its matching hash fails the seeds check instead of burning it. A self-consistent pair is a different matter — supply `(some other token, that token's own hash)` and BOTH the seeds check and the handler's re-derivation hold, and that token burns. The handler's `require!` adds nothing here: `mint_entry_token` already asserts `sha256(source_ref) == source_ref_hash` and seeds the PDA with it, so every real account satisfies the re-derivation by construction. **A 1-of-3 signer can therefore burn any unspent voucher on the platform** — see [`KEY_ROTATION.md`](KEY_ROTATION.md) R1b. |
-| Seeds | `grant_seeds` | Requires 1-of-3; applies bounded quest/referral seed amount; idempotent per `(wallet, kind, invitee)` guard PDA. |
-| Settlement | `settle_contest` | Requires 2-of-3; requires contest locked/concluded; validates user/entry PDAs and winner ATA owner/mint; pays only from prize pool; rejects duplicate settlement pairs and over-cap payouts. |
-| Cancellation | `cancel_contest` | Requires 2-of-3; refunds live prize-pool balance to creator ATA; status moves to Cancelled; operator revenue remains separate. |
-| Closeout | `close_contest` | Requires 1-of-3; only settled/cancelled contests; dust-sweeps prize pool to USDC `op_rev`; closes contest PDAs. |
-| Treasury | `sweep_operator_revenue` | Requires 2-of-3; drains selected currency `op_rev` to treasury ATA; enforces treasury owner equals `vault_state.treasury_authority`. |
+| User account | `admin_create_user_account` | Requires payer plus **1** vault signer; waives only reserved-prefix branch; still enforces charset and length. |
+| User account | `admin_set_username` | Requires owner signature plus **1** vault signer; waives only reserved-prefix branch; rejects non-owner and non-signer admin. |
+| Season | `create_season` | Requires **3** (it sets the per-entry seed schedule with no ceiling checked); creates immutable entry seed schedule and quest seed schedule; rejects duplicate season ID. |
+| Contest | `create_contest` | Requires **1** payer plus creator; funds prize-pool ATA; validates payout tiers sum to prize pool; stores per-currency fees and lock timestamp. |
+| Contest | `set_contest_lock_time` | Requires **2** before lock and **3** to RE-OPEN a lock that has passed (the results-known vector); rejects invalid timestamp/order and post-finality changes without required cosign path. |
+| Contest | `set_contest_conclusion_time` | Requires **2** for the first set and **3** to AMEND one already set; rejects invalid timestamp/order and post-finality changes without required cosign path. |
+| Entry | `enter_contest` | Requires user signature plus **1** payer; validates active currency slot, user ATA funds, max entries, lock/conclusion gate, and season schedule seed award. |
+| Entry | `enter_contest_with_token` | Requires user signature plus **1** payer; consumes matching `EntryTokenAccount`; awards seeds; charges no currency and cannot be reused. |
+| Free entry | `mint_entry_token` | Requires **1** within the per-window cap and **3** above it — v0.26 closed an uncapped 1-of-N value-creation hole with a `MintWindow` counter PDA; `window_index` is an instruction arg (it is a PDA seed) and the handler pins it to the chain clock, so a caller cannot name an empty window. PDA is keyed by `sha256(source_ref)`; remint of the same source reference fails. |
+| Free entry | `burn_entry_token` | Requires **3** and the holder does **not** sign; not pause-gated. TOMBSTONES rather than closing: the account survives, so the on-chain token COUNT that Rails reads as owed is unchanged and nothing re-mints it. Sets `consumed = true` (reusing the constraint `enter_contest_with_token` already carried) and raises `BURNED_FLAG` (`0x80`) in the spare high bit of `source`, inside the EXISTING 124-byte `EntryTokenAccount` layout — so tokens minted before the upgrade still deserialize. Rejects a double burn, with the flag checked FIRST so `EntryTokenAlreadyBurned` is reachable rather than masked by `EntryTokenAlreadyConsumed`; rejects a token already spent. `source_ref_hash` seed-binds the target as a **fat-finger guard**, not as a targeting control: the caller must name the token twice, so naming the wrong account WITHOUT its matching hash fails the seeds check instead of burning it. A self-consistent pair is a different matter — supply `(some other token, that token's own hash)` and BOTH the seeds check and the handler's re-derivation hold, and that token burns. The handler's `require!` adds nothing here: `mint_entry_token` already asserts `sha256(source_ref) == source_ref_hash` and seeds the PDA with it, so every real account satisfies the re-derivation by construction. Nothing restricts WHICH voucher an authorized quorum may burn, and v0.26 does not change that — it raises WHO HAS TO AGREE, from one signature to three. That is why this instruction, written but never deployed, ships at 3 rather than at the 1 it was drafted with: at one signature a single agent-reachable key could have destroyed every outstanding voucher. |
+| Seeds | `grant_seeds` | Requires **1**; applies bounded quest/referral seed amount; idempotent per `(wallet, kind, invitee)` guard PDA. v0.26: an `INVITE_FRIEND` grant must also pass the invitee's own `UserAccount`, PDA-bound and with `entries > 0` — the guard used to be seeded on a caller-chosen `Pubkey`, so "once per invited friend" was really "once per 32-byte NUMBER" and one signature could mint seeds without bound. |
+| Settlement | `settle_contest` | Requires **3**, with extra cosigners LEADING `remaining_accounts` ahead of the winner triples; requires contest locked/concluded; validates user/entry PDAs and winner ATA owner/mint; pays only from prize pool; rejects duplicate settlement pairs and over-cap payouts. |
+| Cancellation | `cancel_contest` | Requires **3**; refunds live prize-pool balance to creator ATA; status moves to Cancelled; operator revenue remains separate. |
+| Closeout | `close_contest` | Requires **2**; only settled/cancelled contests; dust-sweeps prize pool to USDC `op_rev`; closes contest PDAs. v0.26: BOTH rent refunds (the Contest PDA's and the prize_pool ATA's) are pinned to `vault_state.treasury_authority` rather than paid to whichever signer called it — `InvalidRentDestination` (6056) otherwise. |
+| Treasury | `sweep_operator_revenue` | Requires **3**; drains selected currency `op_rev` to treasury ATA; enforces treasury owner equals `vault_state.treasury_authority`. |
 
 ## Cross-Repo Proof
 

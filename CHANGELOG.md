@@ -4,12 +4,194 @@ All notable changes to TurfVault are documented here. Format based on [Keep a Ch
 
 ## [Unreleased]
 
+### Changed
+
+- **FIVE SIGNER SLOTS, AND A THRESHOLD THAT IS ACTUALLY READ (v0.26).** The
+  headline security change, and the reason for the upgrade window.
+
+  **The finding.** `VaultState.signers` held `{Alex Bot, Alex, Mason}` on both
+  clusters at a structural 2-of-3. Alex Bot and Mason are not two parties:
+  `agent.alex.solana` and `agent.mason.solana` both live in the `studio-agents`
+  1Password vault behind one service account, so any agent with vault access
+  held two of three signatures — which is every governance power the program
+  has. `settle_contest`, `cancel_contest`, `sweep_operator_revenue`,
+  `pause`/`unpause`, `register_currency`/`deactivate_currency`, and
+  `update_signers` were all reachable by one party acting alone. The
+  `update_signers` case is the serious one: an agent could rotate the signer
+  set and lock the operator out of his own vault, and the v0.20 continuity
+  guard did not stop it — `SignerContinuityRequired` only required the two
+  AUTHORIZING keys to survive, and those were the two the agent held.
+
+  **The second bug, found while fixing the first.** `validate_multisig(s1, s2)`
+  was `s1 != s2 && is_signer(s1) && is_signer(s2)`. It never read
+  `self.threshold`. The field was decorative for the program's entire life: a
+  vault storing `threshold: 3` still authorized treasury operations on two
+  signatures, and every doc saying "2-of-3" was describing the only thing the
+  code could express rather than a configured policy. It is replaced by
+  `VaultState::validate_threshold(keys, required)` — distinct keys, all members
+  of the active set, counted against a real number.
+
+  **The account layout — APPENDED, never widened.** `VaultState` is
+  `zero_copy(unsafe)` + `#[repr(C)]`, so a field IS its byte offset. Widening
+  `signers: [Pubkey; 3]` to `[Pubkey; 5]` would shift `threshold`, `bump`,
+  `paused`, `payout_mint`, `treasury_authority` and the entire 1280-byte
+  currency registry 64 bytes to the right — and it would compile, deploy and
+  run, silently reading every live vault as something else. The two slots were
+  therefore appended as `signers_ext: [Pubkey; 2]`, carved out of the 64
+  reserved bytes at the tail, which `scripts/check-signer-slots.js` confirms
+  are all zero on devnet and mainnet. Every pre-existing offset is unchanged,
+  `size_of::<VaultState>()` stays 1507 (account 1515), and **there is no
+  realloc and no migration instruction**. On a vault that has not been rotated
+  the new slots read as `Pubkey::default()` — the "empty" sentinel — so the
+  upgrade is behaviour-neutral on deploy and the signer set changes only when a
+  human runs the rotation ceremony. `_reserved` is now `[u8; 0]`: the reserve
+  is exhausted and a future field needs its own PDA.
+
+  All signer reads route through one accessor, `VaultState::all_signers()`,
+  which concatenates the two arrays and skips empty slots. Nothing outside it
+  knows the set is stored in two pieces.
+
+- **PER-ACTION THRESHOLDS, STORED AS DATA.** New `GovernanceConfig` PDA at
+  `[b"governance"]` holding a threshold per action plus the mint-window policy.
+  It is a separate account because `VaultState`'s reserve was consumed exactly
+  by `signers_ext`, and growing a zero-copy singleton means a realloc.
+
+  Every number below is retunable with one 3-of-N transaction
+  (`set_action_threshold`) instead of a program upgrade — which is the point:
+  no threshold here is a one-way door, so the safe default is always the cheap
+  choice.
+
+  | action | required |
+  |---|---|
+  | `settle_contest`, `cancel_contest`, `sweep_operator_revenue` | 3 |
+  | `register_currency`, `deactivate_currency`, `create_season` | 3 |
+  | `update_signers` | 3 — **immovable floor 3** |
+  | `unpause` | 3 — **immovable floor 3** |
+  | `set_action_threshold`, `set_mint_window_policy` | 3 — **immovable floor 3** |
+  | `burn_entry_token` | 3 |
+  | `mint_entry_token` above the window cap | 3 |
+  | `pause` | 2 |
+  | `close_contest` | 2 |
+  | `set_contest_lock_time`, `set_contest_conclusion_time` | 2 (3 to re-open a passed lock / amend a set conclusion) |
+  | `mint_entry_token` within the cap | 1 |
+  | `grant_seeds`, admin username waiver | 1 |
+  | `create_contest`, `enter_contest{,_with_token}` | 1 + the user's own signature |
+
+  **Pause is cheaper than unpause, deliberately.** A brake must be easier to
+  pull than the attack it stops, and an agent must never be able to lift its
+  own brake. Two rather than one so a single leaked key cannot grief the
+  business by halting entries at will.
+
+  **The floors are what stop the fix undoing itself.** Without one, three
+  signatures could lower `update_signers` to two and the two agent-reachable
+  keys walk in the next day. `set_action_threshold` is floored for the same
+  reason — otherwise the floor could be lowered by lowering its guard. Floors
+  are applied on READ as well as on write, so they hold even against a value
+  some future path stored without checking, and an unset (zero) entry reads as
+  the shipped default rather than as "no signatures required".
+
+  **Extra signatures ride in `remaining_accounts`, leading**, counted as
+  `threshold - named signers`. An instruction whose named signers already meet
+  its threshold needs no client change at all — `pause` at two still takes the
+  same four accounts. It fails CLOSED: a caller that has not been told the
+  threshold rose gets a refused transaction, never a silently
+  under-authorized one.
+
+- **`close_contest` pays reclaimed rent to the TREASURY, not to its caller.**
+  Both refunds — the Contest PDA's and the prize_pool ATA's — landed on
+  whichever vault signer sent the transaction, quietly making "close a finished
+  contest" a routine that pays the caller out of rent the platform funded. Both
+  are now pinned to `vault_state.treasury_authority` via a new `treasury`
+  account (`InvalidRentDestination` 6056 if it is anything else). The caller
+  still pays the fee, so closing is now mildly costly rather than mildly
+  profitable — the right incentive for a janitorial action.
+
+- **`grant_seeds` binds its once-only guard to a REAL ACCOUNT.** The guard PDA
+  was seeded on `invitee`, a caller-chosen `Pubkey` argument that nothing
+  required to correspond to anything — so "once per invited friend" was really
+  "once per 32-byte NUMBER", and a single 1-of-N signature could mint seeds
+  without bound, one cheap transaction at a time, each grant looking
+  individually legitimate on chain. An `INVITE_FRIEND` grant must now pass the
+  invitee's own `UserAccount`, PDA-bound and with `entries > 0` — the quest's
+  own rule, enforced rather than trusted. Manufacturing a fake invitee now
+  costs a real contest entry, which is more than the grant is worth.
+  (`SeedGrantInviteeNotRegistered` 6055.)
+
+- **`mint_entry_token` gains an on-chain per-window cap.** Minting a free entry
+  — a claim on a real prize pool — was 1-of-N with no ceiling of any kind, the
+  largest of the value-creation findings because it CREATES the value it
+  spends. A new `MintWindow` PDA counts mints per window; within the cap the
+  action stays at one signature, above it the same call succeeds but demands
+  three. The cap raises the bar rather than closing the door, so a legitimate
+  spike is never blocked while an agent minting alone hits a ceiling it cannot
+  raise. `window_index` is an instruction argument (it is a PDA seed) and the
+  handler pins it against the chain clock, so a caller cannot name an empty
+  window to dodge the count.
+
+- **`update_signers` takes `[Pubkey; 5]`** and enforces: no gaps (slots are
+  left-packed, so "empty" is only ever a suffix), no duplicates, a set large
+  enough for every live threshold (`SignerSetTooSmall` 6052), and continuity
+  generalized to N-of-M — at least `threshold` of the keys that AUTHORIZED the
+  rotation must survive it. That last rule makes the ceremony two steps by
+  construction: the first rotation can only ADD (all three current authorizers
+  must survive), and the second — signed by three personal wallets no agent can
+  reach — is the eviction. See `docs/SIGNER_ROTATION.md`.
+
 ### Added
+
+- **`init_governance`** — creates the threshold table with the shipped
+  defaults. Takes NO arguments, which is what makes its 2-signature bootstrap
+  safe: it can install the safe numbers and nothing else. **It must be called
+  immediately after the v0.26 program upgrade** — every vault-authorized
+  instruction requires the account. `init` collides on a second call, so a
+  retuned table cannot be reset by re-running it.
+- **`set_action_threshold(action, value)`** and
+  **`set_mint_window_policy(window_seconds, cap)`** — 3-of-N, floored.
+- **Error codes 6046-6059**, a reserved block. The three `ReservedGovernance*`
+  variants at its end are load-bearing, not filler: Anchor assigns codes BY
+  POSITION, so they are what keeps the next appended variant landing on 6060
+  where `username-registry-on-chain` expects to start. Consume them from the
+  top (rename the lowest-numbered one) rather than appending past them.
+- **`scripts/check-signer-slots.js`** — read-only pre-flight and post-flight for
+  the rotation. Before: proves slots 4 and 5 are untouched, so the upgrade
+  changed nothing. After: proves the rotation landed, as an exit code rather
+  than something to eyeball. Successor to the pre-upgrade reserved-bytes check,
+  pointed at the same 64 bytes.
+- **`scripts/rotate-devnet-signers.js`** — the ceremony builder. **Dry run by
+  default; devnet-only by construction** (the mainnet program id is refused by
+  name, and `--cluster`/`--mainnet` are refused outright). Re-checks every
+  program guard locally so a refusal names the problem instead of arriving as a
+  numbered error, and reads the set back from chain after sending.
+- **`scripts/lib/vault-layout.js`** — the byte layout, declared once for the
+  scripts that read the account directly.
+- **A `cargo test` lane** in `.github/workflows/ci.yml` and `bin/release-check`.
+  `cargo check` COMPILES `#[cfg(test)]` code without running it, so until now a
+  unit test could report green having never executed. The tests it runs include
+  `programs/turf_vault/src/governance_tests.rs`, which asserts every
+  `VaultState` field OFFSET — the guard against the widen-in-place edit that
+  would compile, deploy, and silently misread both live vaults.
+- **`scripts/tests/vault-layout.test.js`** — parses `state.rs` and recomputes
+  every offset from the declared field widths, so the JS copy of the layout
+  cannot drift from the Rust one.
+
+### Fixed
+
+- **`InvalidThreshold` (6013)** said "must be 1-3". Code unchanged, message
+  corrected. **`SignerContinuityRequired` (6017)** described the 2-of-3
+  both-cosigners rule; message updated to the N-of-M rule that replaced it.
+- Two doc comments (`burn_entry_token`, and a new one in `governance`) held
+  indented prose that rustdoc was reading as Rust doctests. They failed the
+  moment a `cargo test` lane existed; both are now fenced as `text`.
+
+### Added
+
 
 - **`burn_entry_token` — operator claw-back of an unspent free entry.** The
   counterpart to `mint_entry_token`, for a voucher granted in error, granted to
-  a fraudulent account, or granted against a payment later refunded. 1-of-3
-  vault signer; the holder does NOT sign, which is deliberately the opposite of
+  a fraudulent account, or granted against a payment later refunded.
+  `gov_action::BURN_ENTRY_TOKEN` (3 — see the v0.26 table above; this
+  instruction has never been deployed, so it ships at three and regresses
+  nothing); the holder does NOT sign, which is deliberately the opposite of
   OPSEC-004's ruling on `enter_contest_with_token`. The asymmetry is sound:
   there, an admin-only consume could SPEND a user's token on a contest of the
   admin's choosing, converting their property into an entry they never picked;
@@ -53,9 +235,12 @@ All notable changes to TurfVault are documented here. Format based on [Keep a Ch
   `mint_entry_token` already asserts `sha256(source_ref) == source_ref_hash`
   before writing `source_ref` and seeds the PDA with that hash, so every account
   the program can create satisfies the re-derivation by construction. Nothing
-  restricts WHICH voucher a signer may burn, so **a 1-of-3 signer can burn any
-  unspent voucher on the platform** — see `docs/KEY_ROTATION.md` R1b and the
-  `burn_entry_token` row of `docs/VERIFICATION_MATRIX.md`.
+  restricts WHICH voucher a signer may burn, so **an authorized quorum can burn
+  any unspent voucher on the platform**. That was the reason not to ship this at
+  one signature: at 1-of-N a single agent-reachable key could have destroyed
+  every outstanding voucher. It ships at `BURN_ENTRY_TOKEN` = 3 (v0.26, above),
+  which does not narrow WHICH voucher a burn may target — it raises who has to
+  agree. See the `burn_entry_token` row of `docs/VERIFICATION_MATRIX.md`.
 
   New error `EntryTokenAlreadyBurned` (6045).
 
@@ -68,9 +253,11 @@ All notable changes to TurfVault are documented here. Format based on [Keep a Ch
 
 ### Tests
 
-- Latest local proof, 2026-09-06: `27 passing` against an isolated local
-  validator on `127.0.0.1:8898` (was 23; +4 for `burn_entry_token` — the
-  tombstone the account survives, a burned voucher refused at entry, the
+- Latest local proof, **2026-09-15**: `38 passing`, 0 failing, via `anchor test`
+  on the v0.26 governance tree. Superseded the 2026-09-06 `27 passing` stamp,
+  which predated turf-vault PR #18 and so predated the repair of the suite's own
+  rejection helper. The earlier run recorded (was 23; +4 for `burn_entry_token`
+  — the tombstone the account survives, a burned voucher refused at entry, the
   double-burn and burn-a-spent-token refusals, and the signer + seed-binding
   auth cases).
 

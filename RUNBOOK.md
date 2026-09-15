@@ -94,6 +94,53 @@ Follow in order. Move to next step only if current fails.
 
 Check balance: `solana balance --url devnet` (uses default keypair) or `solana balance <address> --url devnet`.
 
+## v0.26 Upgrade Ordering (governance account)
+
+**When this matters**: the v0.26 upgrade, once. Get the order wrong and every
+vault-authorized instruction fails until you fix it.
+
+v0.26 moved the per-action signature thresholds into a `GovernanceConfig` PDA at
+`[b"governance"]`, and **every vault-authorized instruction now requires that
+account**. It could not live on `VaultState`: that account's 64 reserved bytes
+were consumed exactly by the two appended signer slots, and growing a zero-copy
+singleton means a realloc plus a migration.
+
+So the account has to be created, and there is a window between the program
+upgrade landing and `init_governance` running in which governance instructions
+return `AccountNotInitialized` (3012) — **including `pause`**. Keep the window to
+minutes by running the two back to back.
+
+```bash
+# 1. Upgrade the program through Squads as usual (see Deploy Failures above).
+node scripts/squad-upgrade.js <BUFFER_ADDR>
+
+# 2. IMMEDIATELY: create the governance table. Two signatures, any two current
+#    vault signers. It takes NO arguments — it can only write the shipped
+#    defaults, which is what makes a 2-signature bootstrap safe — and `init`
+#    collides on a second call, so a later retuned table cannot be reset by
+#    re-running it. Dry run first (no --send), read the diff, then arm it.
+node scripts/init-governance.js --cluster mainnet \
+  --signer keys/a.json --signer keys/b.json
+node scripts/init-governance.js --cluster mainnet \
+  --signer keys/a.json --signer keys/b.json --send
+
+# 3. Confirm the vault is untouched and behaviour-neutral:
+node scripts/check-signer-slots.js --expect unrotated
+```
+
+**The signer set does NOT change at deploy.** The two new slots read as
+`Pubkey::default()` from the previously-zeroed reserve, so a deployed-but-not-
+rotated vault behaves exactly as v0.25 did. Rotation is a separate operator
+ceremony — `docs/SIGNER_ROTATION.md`.
+
+**What DOES change at deploy** is the number of signatures several actions
+require. `settle_contest`, `cancel_contest`, `sweep_operator_revenue`,
+`register_currency`, `deactivate_currency` and `create_season` move to 3, and
+with only three signer slots occupied that means 3-of-3 until the rotation
+widens the set. Plan the rotation for the same maintenance window, and expect
+any unattended 2-signature automation (the QA rehearsal driver among them) to
+fail until it is updated.
+
 ## Schema / Account Layout Changes
 
 **When this matters**: After changing account layout in a way that existing PDAs cannot decode safely.
@@ -132,9 +179,19 @@ bin/rails solana:init_vault INIT=true \
   - Contest: `[b"contest", contest_id_32_bytes]`
   - ContestEntry: `[b"entry", contest_id_32_bytes, wallet_pubkey_bytes, entry_num_le_bytes]`
 
-**Unauthorized (error 6000)**
-- Diagnosis: A non-signer tried a privileged action. `VaultState.is_signer()` checks the `signers: [Pubkey; 3]` array; treasury ops additionally require a distinct second signer via `validate_multisig()`.
-- Fix: Verify the signing key is one of the three current vault signers in `docs/CURRENT_DEPLOYMENT.md`. For treasury ops such as settle, cancel, sweep, pause/unpause, currency registry changes, and signer rotation, confirm a second distinct signer also signed. Check `SOLANA_ADMIN_KEY` env var in the Rails app.
+**Unauthorized (error 6000) — a signing key is not IN THE SET**
+- Diagnosis: one of the keys that signed is not a member of the active signer set. Since v0.26 the set is up to FIVE slots — `signers` ++ `signers_ext` — read through `VaultState::all_signers()`, which skips empty slots. `validate_multisig()` no longer exists.
+- Fix: read the live set with `node scripts/check-signer-slots.js --cluster <devnet|mainnet>`, which prints all five slots and marks the empty ones. Cross-check `docs/CURRENT_DEPLOYMENT.md` and the `SOLANA_ADMIN_KEY` env var in the Rails app.
+- **This is NOT the error an under-signed operation returns.** If every key you sent is genuinely in the set, you are looking at 6046 below.
+
+**Insufficient signers (error 6046) — the keys are valid, there are not ENOUGH**
+- Diagnosis: fewer DISTINCT active signers than the action's stored threshold. This is the one that misleads: since v0.26 the number is per-action data in the `GovernanceConfig` PDA, not a fixed 2-of-3 — so counting two valid signers on a `settle_contest` and finding two proves nothing, because settle needs THREE. Two signatures from one keypair count as one (6014).
+- Fix: read the number the chain actually wants rather than assuming. Extra signatures beyond an instruction's named `admin`/`cosigner` ride as LEADING `remaining_accounts`; the count is `threshold - named signers`. Defaults are tabulated in `programs/turf_vault/src/lib.rs`; the live values are in the `GovernanceConfig` PDA at seeds `[b"governance"]`.
+- Related: `CosignerDidNotSign` (6047) means an account was offered as a cosigner in `remaining_accounts` without actually signing the transaction.
+
+**Account not initialized (error 3012) on `governance`**
+- Diagnosis: the v0.26 `GovernanceConfig` PDA does not exist. Every vault-authorized instruction requires it, `pause` included.
+- Fix: run `node scripts/init-governance.js --cluster <cluster> --signer a.json --signer b.json --send`. See **v0.26 Upgrade Ordering** above — this is the step that must follow the program upgrade immediately.
 
 **Settlement overflow (error 6008)**
 - Diagnosis: Total payouts in settlement exceed the contest `prize_pool`. Entry fees are operator revenue and do not increase the settlement cap.

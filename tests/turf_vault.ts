@@ -122,6 +122,7 @@ describe("turf_vault verification matrix", () => {
   let bonusMint: PublicKey;
 
   let vaultStatePda: PublicKey;
+  let governancePda: PublicKey;
   let usdcOpRevPda: PublicKey;
   let usdtOpRevPda: PublicKey;
   let bonusOpRevPda: PublicKey;
@@ -202,6 +203,31 @@ describe("turf_vault verification matrix", () => {
   const contestId = (slug: string): Buffer =>
     createHash("sha256").update(slug).digest();
 
+  // EXTRA COSIGNERS RIDE IN remainingAccounts, LEADING — the wire shape
+  // `instructions::governance::authorize` reads. The count is
+  // `threshold - named signers`, so an instruction whose named signers already
+  // satisfy its threshold needs none of this and its call site is unchanged.
+  const cosigners = (...keypairs: Keypair[]) =>
+    keypairs.map((k) => ({
+      pubkey: k.publicKey,
+      isSigner: true,
+      isWritable: false,
+    }));
+
+  // The mint-cap window the chain clock is currently in. `mint_entry_token`
+  // takes it as an argument because it is a PDA seed, and the program pins it
+  // against its own clock — so a caller cannot name an empty window to dodge
+  // the cap.
+  const MINT_WINDOW_SECONDS = 86_400;
+  const currentWindow = async (): Promise<number> =>
+    Math.floor((await chainNow()) / MINT_WINDOW_SECONDS);
+
+  const i64Le = (value: number): Buffer => {
+    const buf = Buffer.alloc(8);
+    buf.writeBigInt64LE(BigInt(value));
+    return buf;
+  };
+
   const u32Le = (value: number): Buffer => {
     const buffer = Buffer.alloc(4);
     buffer.writeUInt32LE(value);
@@ -221,6 +247,18 @@ describe("turf_vault verification matrix", () => {
   const deriveVault = (): PublicKey =>
     PublicKey.findProgramAddressSync(
       [Buffer.from("vault")],
+      program.programId
+    )[0];
+
+  const deriveGovernance = (): PublicKey =>
+    PublicKey.findProgramAddressSync(
+      [Buffer.from("governance")],
+      program.programId
+    )[0];
+
+  const deriveMintWindow = (windowIndex: number): PublicKey =>
+    PublicKey.findProgramAddressSync(
+      [Buffer.from("mint_window"), i64Le(windowIndex)],
       program.programId
     )[0];
 
@@ -355,9 +393,12 @@ describe("turf_vault verification matrix", () => {
       .accountsStrict({
         admin: admin.publicKey,
         vaultState: vaultStatePda,
+        governance: governancePda,
         season: seasonPda,
         systemProgram: SystemProgram.programId,
       })
+      .remainingAccounts(cosigners(signer2, signer3))
+      .signers([signer2, signer3])
       .rpc();
     return seasonPda;
   };
@@ -396,6 +437,7 @@ describe("turf_vault verification matrix", () => {
         payer: options.payer ?? admin.publicKey,
         creator: options.creator ?? admin.publicKey,
         vaultState: vaultStatePda,
+        governance: governancePda,
         contest: contestPda,
         prizePool: prizePoolPda,
         payoutMint: usdcMint,
@@ -428,6 +470,7 @@ describe("turf_vault verification matrix", () => {
         user: user.publicKey,
         userAccount,
         vaultState: vaultStatePda,
+        governance: governancePda,
         contest: contest.contestPda,
         contestEntry: entryPda,
         currencyMint,
@@ -449,11 +492,14 @@ describe("turf_vault verification matrix", () => {
     const ref = sourceRef(refText);
     const hash = sourceRefHash(ref);
     const pda = deriveEntryToken(hash);
+    const windowIndex = await currentWindow();
     await program.methods
-      .mintEntryToken(0, ref as any, hash as any)
+      .mintEntryToken(0, ref as any, hash as any, bn(windowIndex))
       .accountsStrict({
         admin: admin.publicKey,
         vaultState: vaultStatePda,
+        governance: governancePda,
+        mintWindow: deriveMintWindow(windowIndex),
         userWallet: owner,
         entryToken: pda,
         systemProgram: SystemProgram.programId,
@@ -469,14 +515,21 @@ describe("turf_vault verification matrix", () => {
     token: { pda: PublicKey; hash: number[] },
     signer?: Keypair
   ): Promise<void> => {
+    // BURN_ENTRY_TOKEN is 3-of-N since v0.26, so two cosigners always ride
+    // along. When `signer` names someone else, that key LEADS the collected
+    // set — so an outsider fails on MEMBERSHIP (Unauthorized), which is the
+    // distinction the auth test is actually asserting, rather than failing on
+    // a count it could never have reached anyway.
     await program.methods
       .burnEntryToken(token.hash as any)
       .accountsStrict({
         admin: signer ? signer.publicKey : admin.publicKey,
         vaultState: vaultStatePda,
+        governance: governancePda,
         entryToken: token.pda,
       })
-      .signers(signer ? [signer] : [])
+      .remainingAccounts(cosigners(signer2, signer3))
+      .signers(signer ? [signer, signer2, signer3] : [signer2, signer3])
       .rpc();
   };
 
@@ -495,6 +548,7 @@ describe("turf_vault verification matrix", () => {
         user: user.publicKey,
         userAccount,
         vaultState: vaultStatePda,
+        governance: governancePda,
         contest: contest.contestPda,
         contestEntry: entryPda,
         entryToken,
@@ -511,10 +565,12 @@ describe("turf_vault verification matrix", () => {
       .setContestLockTime(bn(await chainPast()))
       .accountsStrict({
         admin: admin.publicKey,
-        cosigner: null,
+        cosigner: signer2.publicKey,
         vaultState: vaultStatePda,
+        governance: governancePda,
         contest: contest.contestPda,
       })
+      .signers([signer2])
       .rpc();
   };
 
@@ -553,6 +609,7 @@ describe("turf_vault verification matrix", () => {
     );
 
     vaultStatePda = deriveVault();
+    governancePda = deriveGovernance();
     usdcOpRevPda = deriveOpRev(usdcMint);
     usdtOpRevPda = deriveOpRev(usdtMint);
     bonusOpRevPda = deriveOpRev(bonusMint);
@@ -617,6 +674,62 @@ describe("turf_vault verification matrix", () => {
         usdtOpRevPda.toBase58()
       );
       expect(vault.acceptedCurrencies[1].active).to.equal(1);
+
+      // The two appended signer slots must read as EMPTY on a freshly
+      // initialized vault — the same thing the live devnet and mainnet vaults
+      // read today, which is what makes the v0.26 upgrade behaviour-neutral
+      // until a rotation actually runs.
+      expect(
+        vault.signersExt.map((s: PublicKey) => s.toBase58())
+      ).to.deep.equal([DEFAULT_PUBKEY.toBase58(), DEFAULT_PUBKEY.toBase58()]);
+    });
+
+    it("bootstraps the governance table with the shipped defaults", async () => {
+      // BOOTSTRAP_THRESHOLD is 2, and `admin` is one of them — the second
+      // signature rides in remainingAccounts. It is safe at two only because
+      // this instruction takes NO ARGUMENTS: it can install the shipped
+      // defaults and nothing else.
+      await program.methods
+        .initGovernance()
+        .accountsStrict({
+          admin: admin.publicKey,
+          vaultState: vaultStatePda,
+          governance: governancePda,
+          systemProgram: SystemProgram.programId,
+        })
+        .remainingAccounts(cosigners(signer2))
+        .signers([signer2])
+        .rpc();
+
+      const gov = await program.account.governanceConfig.fetch(governancePda);
+      // The agreed table, asserted on chain rather than only in Rust.
+      expect(gov.thresholds[0]).to.equal(3); // settle_contest
+      expect(gov.thresholds[5]).to.equal(2); // pause
+      expect(gov.thresholds[6]).to.equal(3); // unpause
+      expect(gov.thresholds[7]).to.equal(3); // update_signers
+      expect(gov.thresholds[9]).to.equal(2); // close_contest
+      expect(gov.thresholds[12]).to.equal(1); // mint within cap
+      expect(gov.thresholds[13]).to.equal(3); // mint above cap
+      expect(gov.thresholds[14]).to.equal(3); // burn_entry_token
+      expect(gov.mintWindowSeconds.toNumber()).to.equal(MINT_WINDOW_SECONDS);
+      expect(gov.mintWindowCap).to.be.greaterThan(0);
+    });
+
+    it("refuses a second bootstrap, so a retuned table cannot be reset", async () => {
+      await expectRejected(
+        program.methods
+          .initGovernance()
+          .accountsStrict({
+            admin: admin.publicKey,
+            vaultState: vaultStatePda,
+            governance: governancePda,
+            systemProgram: SystemProgram.programId,
+          })
+          .remainingAccounts(cosigners(signer2))
+          .signers([signer2])
+          .rpc(),
+        /already in use/i
+      );
     });
   });
 
@@ -715,6 +828,7 @@ describe("turf_vault verification matrix", () => {
             payer: admin.publicKey,
             admin: stranger.publicKey,
             vaultState: vaultStatePda,
+            governance: governancePda,
             userAccount: housePda,
             systemProgram: SystemProgram.programId,
           })
@@ -730,6 +844,7 @@ describe("turf_vault verification matrix", () => {
             payer: admin.publicKey,
             admin: admin.publicKey,
             vaultState: vaultStatePda,
+            governance: governancePda,
             userAccount: housePda,
             systemProgram: SystemProgram.programId,
           })
@@ -746,6 +861,7 @@ describe("turf_vault verification matrix", () => {
           payer: admin.publicKey,
           admin: admin.publicKey,
           vaultState: vaultStatePda,
+          governance: governancePda,
           userAccount: housePda,
           systemProgram: SystemProgram.programId,
         })
@@ -761,6 +877,7 @@ describe("turf_vault verification matrix", () => {
             wallet: houseWallet.publicKey,
             admin: stranger.publicKey,
             vaultState: vaultStatePda,
+            governance: governancePda,
             userAccount: housePda,
           })
           .signers([houseWallet, stranger])
@@ -774,6 +891,7 @@ describe("turf_vault verification matrix", () => {
           wallet: houseWallet.publicKey,
           admin: admin.publicKey,
           vaultState: vaultStatePda,
+          governance: governancePda,
           userAccount: housePda,
         })
         .signers([houseWallet])
@@ -789,6 +907,7 @@ describe("turf_vault verification matrix", () => {
             wallet: user1.publicKey,
             admin: admin.publicKey,
             vaultState: vaultStatePda,
+            governance: governancePda,
             userAccount: housePda,
           })
           .signers([user1])
@@ -825,6 +944,7 @@ describe("turf_vault verification matrix", () => {
           .accountsStrict({
             admin: admin.publicKey,
             vaultState: vaultStatePda,
+            governance: governancePda,
             season: defaultSeasonPda,
             systemProgram: SystemProgram.programId,
           })
@@ -845,10 +965,17 @@ describe("turf_vault verification matrix", () => {
           .accountsStrict({
             admin: stranger.publicKey,
             vaultState: vaultStatePda,
+            governance: governancePda,
             season: seasonPda,
             systemProgram: SystemProgram.programId,
           })
-          .signers([stranger])
+          // Two REAL signers ride along, so the count is satisfied and the
+          // only thing left to fail is the stranger's MEMBERSHIP — which is
+          // what this case is actually about. Without them the call would be
+          // refused for being one signature short and the assertion would
+          // pass without ever testing membership at all.
+          .remainingAccounts(cosigners(signer2, signer3))
+          .signers([stranger, signer2, signer3])
           .rpc(),
         /Unauthorized/i
       );
@@ -864,8 +991,10 @@ describe("turf_vault verification matrix", () => {
         .accountsStrict({
           admin: admin.publicKey,
           vaultState: vaultStatePda,
+          governance: governancePda,
           userWallet: user1.publicKey,
           userAccount: userPda,
+          inviteeUserAccount: null,
           seedGrant: grantPda,
           systemProgram: SystemProgram.programId,
         })
@@ -880,13 +1009,34 @@ describe("turf_vault verification matrix", () => {
           .accountsStrict({
             admin: admin.publicKey,
             vaultState: vaultStatePda,
+            governance: governancePda,
             userWallet: user1.publicKey,
             userAccount: userPda,
+            inviteeUserAccount: null,
             seedGrant: grantPda,
             systemProgram: SystemProgram.programId,
           })
           .rpc(),
         /already in use|custom program error: 0x0|AccountAlreadyInitialized/i
+      );
+
+      // THE INVITE BONUS IS PAYABLE ONLY ONCE THE FRIEND ACTUALLY ENTERED.
+      // That is the quest's own rule, and since v0.26 the program enforces it
+      // rather than trusting the caller: `invitee_user_account.entries > 0`.
+      // So the friend has to enter something first — which is what makes the
+      // grant below legitimate and the two attempts after it farmed.
+      const inviteContest = await createContest("invite-friend-entered", {
+        fees: { 0: amount(1) },
+      });
+      await enterPaid(
+        inviteContest,
+        user2,
+        deriveUser(user2.publicKey),
+        user2UsdcAta,
+        usdcMint,
+        usdcOpRevPda,
+        0,
+        0
       );
 
       const inviteGrantPda = deriveSeedGrant(
@@ -899,12 +1049,66 @@ describe("turf_vault verification matrix", () => {
         .accountsStrict({
           admin: admin.publicKey,
           vaultState: vaultStatePda,
+          governance: governancePda,
           userWallet: user1.publicKey,
           userAccount: userPda,
+          inviteeUserAccount: deriveUser(user2.publicKey),
           seedGrant: inviteGrantPda,
           systemProgram: SystemProgram.programId,
         })
         .rpc();
+
+      // v0.26 — THE INVITE FARM IS CLOSED. The once-only guard used to be
+      // seeded on a caller-chosen Pubkey, so "once per invited friend" was
+      // really "once per 32-byte NUMBER" and a single signature could mint
+      // seeds without bound. An invitee must now be a wallet with a real
+      // UserAccount that has ENTERED a contest.
+      const madeUpFriend = Keypair.generate().publicKey;
+      await expectRejected(
+        program.methods
+          .grantSeeds(bn(45), 2, madeUpFriend)
+          .accountsStrict({
+            admin: admin.publicKey,
+            vaultState: vaultStatePda,
+            governance: governancePda,
+            userWallet: user1.publicKey,
+            userAccount: userPda,
+            inviteeUserAccount: null,
+            seedGrant: deriveSeedGrant(user1.publicKey, 2, madeUpFriend),
+            systemProgram: SystemProgram.programId,
+          })
+          .rpc(),
+        /SeedGrantInviteeNotRegistered/i
+      );
+
+      // A wallet that HAS an account but has never entered is refused too —
+      // otherwise the farm costs one rent-exempt account instead of nothing.
+      const neverEntered = Keypair.generate();
+      await fund(neverEntered.publicKey, 1);
+      const neverEnteredPda = await createUser(
+        neverEntered.publicKey,
+        "never-entered"
+      );
+      await expectRejected(
+        program.methods
+          .grantSeeds(bn(45), 2, neverEntered.publicKey)
+          .accountsStrict({
+            admin: admin.publicKey,
+            vaultState: vaultStatePda,
+            governance: governancePda,
+            userWallet: user1.publicKey,
+            userAccount: userPda,
+            inviteeUserAccount: neverEnteredPda,
+            seedGrant: deriveSeedGrant(
+              user1.publicKey,
+              2,
+              neverEntered.publicKey
+            ),
+            systemProgram: SystemProgram.programId,
+          })
+          .rpc(),
+        /SeedGrantInviteeNotRegistered/i
+      );
 
       await expectRejected(
         program.methods
@@ -912,8 +1116,10 @@ describe("turf_vault verification matrix", () => {
           .accountsStrict({
             admin: admin.publicKey,
             vaultState: vaultStatePda,
+            governance: governancePda,
             userWallet: user1.publicKey,
             userAccount: userPda,
+            inviteeUserAccount: null,
             seedGrant: deriveSeedGrant(user1.publicKey, 1, DEFAULT_PUBKEY),
             systemProgram: SystemProgram.programId,
           })
@@ -924,86 +1130,444 @@ describe("turf_vault verification matrix", () => {
   });
 
   describe("governance and currency registry", () => {
-    it("rotates signers with 2-of-3 while preserving authorizing cosigners", async () => {
-      const replacement = Keypair.generate();
-      await fund(replacement.publicKey);
+    // The four keypairs standing in for Mr. McRitchie's personal wallets.
+    // They never pay a fee — an extra cosigner only signs — so they need no
+    // funding.
+    const wallet4 = Keypair.generate();
+    const wallet5 = Keypair.generate();
 
-      await program.methods
-        .updateSigners([
+    const rotate = (
+      slots: PublicKey[],
+      lead: Keypair | anchor.Wallet,
+      second: Keypair,
+      extras: Keypair[]
+    ) =>
+      program.methods
+        .updateSigners(
+          [
+            ...slots,
+            ...Array(5 - slots.length).fill(DEFAULT_PUBKEY),
+          ].slice(0, 5) as any
+        )
+        .accountsStrict({
+          admin: (lead as any).publicKey,
+          cosigner: second.publicKey,
+          vaultState: vaultStatePda,
+          governance: governancePda,
+        })
+        .remainingAccounts(cosigners(...extras))
+        .signers(
+          [
+            ...(lead instanceof Keypair ? [lead] : []),
+            second,
+            ...extras,
+          ]
+        );
+
+    it("rotation is ADDITIVE first: continuity holds every authorizer at 3-of-3", async () => {
+      // THE FIRST STEP OF THE CEREMONY. The vault holds three keys and
+      // UPDATE_SIGNERS needs three, so all three must authorize — and
+      // continuity then requires all three to SURVIVE. The first rotation can
+      // therefore only ADD, which is exactly the intended shape: widen to five
+      // now, evict later from a position where the operator no longer needs
+      // the keys he is evicting.
+      await rotate(
+        [
           admin.publicKey,
           signer2.publicKey,
-          replacement.publicKey,
-        ])
+          signer3.publicKey,
+          wallet4.publicKey,
+          wallet5.publicKey,
+        ],
+        admin,
+        signer2,
+        [signer3]
+      ).rpc();
+
+      const vault = await program.account.vaultState.fetch(vaultStatePda);
+      // THE APPEND, READ BACK OFF THE CHAIN. The original three slots are
+      // untouched at their original offsets and the two new keys land in
+      // `signers_ext` — the field carved out of what used to be `_reserved`.
+      expect(vault.signers.map((k: PublicKey) => k.toBase58())).to.deep.equal([
+        admin.publicKey.toBase58(),
+        signer2.publicKey.toBase58(),
+        signer3.publicKey.toBase58(),
+      ]);
+      expect(
+        vault.signersExt.map((k: PublicKey) => k.toBase58())
+      ).to.deep.equal([
+        wallet4.publicKey.toBase58(),
+        wallet5.publicKey.toBase58(),
+      ]);
+
+      // And every slot — including the two that live in the appended field —
+      // now authorizes. A key in `signers_ext` that did not work would mean
+      // something outside `all_signers()` is still reading `signers` alone.
+      await program.methods
+        .pause(reason("five-slot set is live") as any)
         .accountsStrict({
           admin: admin.publicKey,
-          cosigner: signer2.publicKey,
+          cosigner: wallet5.publicKey,
           vaultState: vaultStatePda,
+          governance: governancePda,
         })
-        .signers([signer2])
+        .signers([wallet5])
         .rpc();
-
-      let vault = await program.account.vaultState.fetch(vaultStatePda);
-      expect(vault.signers[2].toBase58()).to.equal(
-        replacement.publicKey.toBase58()
-      );
-      expect(vault.threshold).to.equal(2);
+      expect(
+        (await program.account.vaultState.fetch(vaultStatePda)).paused
+      ).to.equal(1);
 
       await program.methods
-        .updateSigners([admin.publicKey, signer2.publicKey, signer3.publicKey])
+        .unpause()
         .accountsStrict({
           admin: admin.publicKey,
-          cosigner: signer2.publicKey,
+          cosigner: wallet4.publicKey,
           vaultState: vaultStatePda,
+          governance: governancePda,
         })
-        .signers([signer2])
+        .remainingAccounts(cosigners(wallet5))
+        .signers([wallet4, wallet5])
         .rpc();
-
-      vault = await program.account.vaultState.fetch(vaultStatePda);
-      expect(vault.signers[2].toBase58()).to.equal(
-        signer3.publicKey.toBase58()
-      );
+      expect(
+        (await program.account.vaultState.fetch(vaultStatePda)).paused
+      ).to.equal(0);
     });
 
-    it("rejects duplicate, default, or continuity-breaking signer rotations", async () => {
+    it("THE EVICTION: three personal wallets remove the agent-reachable slots", async () => {
+      // THE SECOND STEP, AND THE POINT OF THE WHOLE TASK. `admin` and
+      // `signer2` stand in for the two keys one agent system can reach — the
+      // server identity and the bot identity, both readable from the same
+      // 1Password vault. Here the three PERSONAL wallets authorize alone and
+      // drop both of them. No agent-reachable key signs this transaction, so
+      // a captured system can neither block it nor reverse it.
+      await rotate(
+        [signer3.publicKey, wallet4.publicKey, wallet5.publicKey],
+        signer3,
+        wallet4,
+        [wallet5]
+      ).rpc();
+
+      const vault = await program.account.vaultState.fetch(vaultStatePda);
+      expect(vault.signers.map((k: PublicKey) => k.toBase58())).to.deep.equal([
+        signer3.publicKey.toBase58(),
+        wallet4.publicKey.toBase58(),
+        wallet5.publicKey.toBase58(),
+      ]);
+      // Left-packed: the emptied slots read back as the default key.
+      expect(
+        vault.signersExt.map((k: PublicKey) => k.toBase58())
+      ).to.deep.equal([DEFAULT_PUBKEY.toBase58(), DEFAULT_PUBKEY.toBase58()]);
+
+      // The evicted keys are now strangers. This is the assertion the finding
+      // was about: two keys one agent holds are no longer enough for anything.
       await expectRejected(
         program.methods
-          .updateSigners([admin.publicKey, admin.publicKey, signer3.publicKey])
+          .pause(reason("evicted keys try to act") as any)
           .accountsStrict({
             admin: admin.publicKey,
             cosigner: signer2.publicKey,
             vaultState: vaultStatePda,
+            governance: governancePda,
           })
           .signers([signer2])
           .rpc(),
-        /DuplicateSigner/i
+        /Unauthorized/i
       );
 
-      await expectRejected(
-        program.methods
-          .updateSigners([admin.publicKey, signer2.publicKey, DEFAULT_PUBKEY])
-          .accountsStrict({
-            admin: admin.publicKey,
-            cosigner: signer2.publicKey,
-            vaultState: vaultStatePda,
-          })
-          .signers([signer2])
-          .rpc(),
-        /SignerContinuityRequired/i
-      );
+      // Restore the suite's working set, by the same two-step route — which is
+      // itself the proof that the ceremony is reversible in both directions.
+      await rotate(
+        [
+          signer3.publicKey,
+          wallet4.publicKey,
+          wallet5.publicKey,
+          admin.publicKey,
+          signer2.publicKey,
+        ],
+        signer3,
+        wallet4,
+        [wallet5]
+      ).rpc();
+      await rotate(
+        [admin.publicKey, signer2.publicKey, signer3.publicKey],
+        admin,
+        signer2,
+        [signer3]
+      ).rpc();
 
+      const restored = await program.account.vaultState.fetch(vaultStatePda);
+      expect(
+        restored.signers.map((k: PublicKey) => k.toBase58())
+      ).to.deep.equal([
+        admin.publicKey.toBase58(),
+        signer2.publicKey.toBase58(),
+        signer3.publicKey.toBase58(),
+      ]);
+    });
+
+    it("two signatures cannot rotate the signer set", async () => {
+      // THE HEADLINE REGRESSION. Before v0.26 `update_signers` was
+      // structurally 2-of-3 and `validate_multisig` never read the threshold
+      // field — so the two agent-reachable keys could rotate the operator out
+      // of his own vault. This call is exactly that attempt.
       await expectRejected(
         program.methods
           .updateSigners([
             admin.publicKey,
+            signer2.publicKey,
             Keypair.generate().publicKey,
-            Keypair.generate().publicKey,
-          ])
+            DEFAULT_PUBKEY,
+            DEFAULT_PUBKEY,
+          ] as any)
           .accountsStrict({
             admin: admin.publicKey,
             cosigner: signer2.publicKey,
             vaultState: vaultStatePda,
+            governance: governancePda,
           })
           .signers([signer2])
+          .rpc(),
+        /InsufficientSigners/i
+      );
+    });
+
+    it("the update_signers floor cannot be lowered, even by a full quorum", async () => {
+      // Without an immovable floor the fix undoes itself: three signatures
+      // lower `update_signers` to two, and the two agent-reachable keys walk
+      // in the next day. `SET_GOVERNANCE` is itself floored for the same
+      // reason — otherwise the floor could be lowered by lowering its guard.
+      for (const action of [7 /* update_signers */, 6 /* unpause */, 16 /* set_governance */]) {
+        await expectRejected(
+          program.methods
+            .setActionThreshold(action, 2)
+            .accountsStrict({
+              admin: admin.publicKey,
+              vaultState: vaultStatePda,
+              governance: governancePda,
+            })
+            .remainingAccounts(cosigners(signer2, signer3))
+            .signers([signer2, signer3])
+            .rpc(),
+          /GovernanceFloorViolation/i
+        );
+      }
+    });
+
+    it("retunes a threshold that has no floor, and the new number takes effect", async () => {
+      // The reversibility that makes every shipped default a cheap choice
+      // rather than a commitment. close_contest ships at 2; move it to 3 and
+      // the very next close must bring a third signature.
+      await program.methods
+        .setActionThreshold(9 /* close_contest */, 3)
+        .accountsStrict({
+          admin: admin.publicKey,
+          vaultState: vaultStatePda,
+          governance: governancePda,
+        })
+        .remainingAccounts(cosigners(signer2, signer3))
+        .signers([signer2, signer3])
+        .rpc();
+      expect(
+        (await program.account.governanceConfig.fetch(governancePda))
+          .thresholds[9]
+      ).to.equal(3);
+
+      // ...and back, so the rest of the suite runs against the shipped table.
+      await program.methods
+        .setActionThreshold(9, 2)
+        .accountsStrict({
+          admin: admin.publicKey,
+          vaultState: vaultStatePda,
+          governance: governancePda,
+        })
+        .remainingAccounts(cosigners(signer2, signer3))
+        .signers([signer2, signer3])
+        .rpc();
+      expect(
+        (await program.account.governanceConfig.fetch(governancePda))
+          .thresholds[9]
+      ).to.equal(2);
+    });
+
+    it("pause is genuinely retunable to ONE signature, on chain", async () => {
+      // THE REVIEW FINDING, ASSERTED. `pause` used to declare `admin` AND
+      // `cosigner` as mandatory `Signer` accounts, so the account struct
+      // enforced a floor of 2 that no stored table could lower.
+      // `set_action_threshold(PAUSE, 1)` was ACCEPTED, `threshold_for`
+      // returned 1, the on-chain log and every doc said 1 — and a lone signer
+      // was still rejected. On the brake, discovered during an incident.
+      //
+      // Retuning it and then actually pausing with ONE signature is the only
+      // assertion that distinguishes a fixed instruction from a documented one.
+      await program.methods
+        .setActionThreshold(5 /* pause */, 1)
+        .accountsStrict({
+          admin: admin.publicKey,
+          vaultState: vaultStatePda,
+          governance: governancePda,
+        })
+        .remainingAccounts(cosigners(signer2, signer3))
+        .signers([signer2, signer3])
+        .rpc();
+
+      await program.methods
+        .pause(reason("one-signature brake") as any)
+        .accountsStrict({
+          admin: admin.publicKey,
+          cosigner: null,
+          vaultState: vaultStatePda,
+          governance: governancePda,
+        })
+        .rpc();
+      expect(
+        (await program.account.vaultState.fetch(vaultStatePda)).paused
+      ).to.equal(1);
+
+      // THE ASYMMETRY SURVIVES THE RETUNE. unpause is floored at 3, so even
+      // with pause down at one, a captured system still cannot lift its own
+      // brake. Two signatures are refused on the count.
+      await expectRejected(
+        program.methods
+          .unpause()
+          .accountsStrict({
+            admin: admin.publicKey,
+            cosigner: signer2.publicKey,
+            vaultState: vaultStatePda,
+            governance: governancePda,
+          })
+          .signers([signer2])
+          .rpc(),
+        /InsufficientSigners/i
+      );
+
+      await program.methods
+        .unpause()
+        .accountsStrict({
+          admin: admin.publicKey,
+          cosigner: signer2.publicKey,
+          vaultState: vaultStatePda,
+          governance: governancePda,
+        })
+        .remainingAccounts(cosigners(signer3))
+        .signers([signer2, signer3])
+        .rpc();
+      expect(
+        (await program.account.vaultState.fetch(vaultStatePda)).paused
+      ).to.equal(0);
+
+      // Back to the shipped 2 for the rest of the suite.
+      await program.methods
+        .setActionThreshold(5, 2)
+        .accountsStrict({
+          admin: admin.publicKey,
+          vaultState: vaultStatePda,
+          governance: governancePda,
+        })
+        .remainingAccounts(cosigners(signer2, signer3))
+        .signers([signer2, signer3])
+        .rpc();
+      expect(
+        (await program.account.governanceConfig.fetch(governancePda))
+          .thresholds[5]
+      ).to.equal(2);
+    });
+
+    it("refuses a threshold no signer set could satisfy", async () => {
+      // Storing a threshold above the number of keys that exist would brick
+      // the action — and for update_signers it would brick the only way back.
+      await expectRejected(
+        program.methods
+          .setActionThreshold(0 /* settle_contest */, 5)
+          .accountsStrict({
+            admin: admin.publicKey,
+            vaultState: vaultStatePda,
+            governance: governancePda,
+          })
+          .remainingAccounts(cosigners(signer2, signer3))
+          .signers([signer2, signer3])
+          .rpc(),
+        /ThresholdExceedsSignerSet/i
+      );
+    });
+
+    it("rejects duplicate, gapped, undersized, and continuity-breaking rotations", async () => {
+      const three = (extra: Keypair[] = [signer3]) => ({
+        admin: admin.publicKey,
+        cosigner: signer2.publicKey,
+        vaultState: vaultStatePda,
+        governance: governancePda,
+      });
+
+      // A duplicated key silently shrinks the effective set: one holder would
+      // cast two of the three votes.
+      await expectRejected(
+        program.methods
+          .updateSigners([
+            admin.publicKey,
+            admin.publicKey,
+            signer3.publicKey,
+            DEFAULT_PUBKEY,
+            DEFAULT_PUBKEY,
+          ] as any)
+          .accountsStrict(three())
+          .remainingAccounts(cosigners(signer3))
+          .signers([signer2, signer3])
+          .rpc(),
+        /DuplicateSigner/i
+      );
+
+      // A GAP — a live key after an empty slot. It would WORK, because
+      // `all_signers()` skips defaults, and that is exactly why it is refused:
+      // it would make "how many signers does this vault have" depend on which
+      // reader you ask.
+      await expectRejected(
+        program.methods
+          .updateSigners([
+            admin.publicKey,
+            signer2.publicKey,
+            DEFAULT_PUBKEY,
+            signer3.publicKey,
+            DEFAULT_PUBKEY,
+          ] as any)
+          .accountsStrict(three())
+          .remainingAccounts(cosigners(signer3))
+          .signers([signer2, signer3])
+          .rpc(),
+        /SignerSetTooSmall/i
+      );
+
+      // A set too small for a live threshold would brick every 3-of-N action.
+      await expectRejected(
+        program.methods
+          .updateSigners([
+            admin.publicKey,
+            signer2.publicKey,
+            DEFAULT_PUBKEY,
+            DEFAULT_PUBKEY,
+            DEFAULT_PUBKEY,
+          ] as any)
+          .accountsStrict(three())
+          .remainingAccounts(cosigners(signer3))
+          .signers([signer2, signer3])
+          .rpc(),
+        /SignerSetTooSmall/i
+      );
+
+      // Continuity: a rotation to three keys none of which just signed leaves
+      // nobody who has DEMONSTRATED they can sign — the fat-fingered-paste
+      // case, which bricks governance permanently.
+      await expectRejected(
+        program.methods
+          .updateSigners([
+            Keypair.generate().publicKey,
+            Keypair.generate().publicKey,
+            Keypair.generate().publicKey,
+            DEFAULT_PUBKEY,
+            DEFAULT_PUBKEY,
+          ] as any)
+          .accountsStrict(three())
+          .remainingAccounts(cosigners(signer3))
+          .signers([signer2, signer3])
           .rpc(),
         /SignerContinuityRequired/i
       );
@@ -1016,13 +1580,15 @@ describe("turf_vault verification matrix", () => {
           admin: admin.publicKey,
           cosigner: signer2.publicKey,
           vaultState: vaultStatePda,
+          governance: governancePda,
           mint: bonusMint,
           opRevAta: bonusOpRevPda,
           tokenProgram: TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
           rent: anchor.web3.SYSVAR_RENT_PUBKEY,
         })
-        .signers([signer2])
+        .remainingAccounts(cosigners(signer3))
+        .signers([signer2, signer3])
         .rpc();
 
       let vault = await program.account.vaultState.fetch(vaultStatePda);
@@ -1047,13 +1613,15 @@ describe("turf_vault verification matrix", () => {
             admin: admin.publicKey,
             cosigner: signer2.publicKey,
             vaultState: vaultStatePda,
+            governance: governancePda,
             mint: bonusMint,
             opRevAta: bonusOpRevPda,
             tokenProgram: TOKEN_PROGRAM_ID,
             systemProgram: SystemProgram.programId,
             rent: anchor.web3.SYSVAR_RENT_PUBKEY,
           })
-          .signers([signer2])
+          .remainingAccounts(cosigners(signer3))
+          .signers([signer2, signer3])
           .rpc(),
         /already in use|CurrencyAlreadyRegistered|custom program error: 0x0/i
       );
@@ -1064,8 +1632,10 @@ describe("turf_vault verification matrix", () => {
           admin: admin.publicKey,
           cosigner: signer2.publicKey,
           vaultState: vaultStatePda,
+          governance: governancePda,
         })
-        .signers([signer2])
+        .remainingAccounts(cosigners(signer3))
+        .signers([signer2, signer3])
         .rpc();
 
       vault = await program.account.vaultState.fetch(vaultStatePda);
@@ -1293,10 +1863,12 @@ describe("turf_vault verification matrix", () => {
         .setContestLockTime(bn(lockAt))
         .accountsStrict({
           admin: admin.publicKey,
-          cosigner: null,
+          cosigner: signer2.publicKey,
           vaultState: vaultStatePda,
+          governance: governancePda,
           contest: timingContest.contestPda,
         })
+        .signers([signer2])
         .rpc();
 
       await expectRejected(
@@ -1306,6 +1878,7 @@ describe("turf_vault verification matrix", () => {
             admin: admin.publicKey,
             cosigner: null,
             vaultState: vaultStatePda,
+            governance: governancePda,
             contest: timingContest.contestPda,
           })
           .rpc(),
@@ -1316,10 +1889,12 @@ describe("turf_vault verification matrix", () => {
         .setContestConclusionTime(bn(conclusionAt))
         .accountsStrict({
           admin: admin.publicKey,
-          cosigner: null,
+          cosigner: signer2.publicKey,
           vaultState: vaultStatePda,
+          governance: governancePda,
           contest: timingContest.contestPda,
         })
+        .signers([signer2])
         .rpc();
 
       await expectRejected(
@@ -1329,10 +1904,13 @@ describe("turf_vault verification matrix", () => {
             admin: admin.publicKey,
             cosigner: null,
             vaultState: vaultStatePda,
+            governance: governancePda,
             contest: timingContest.contestPda,
           })
           .rpc(),
-        /Unauthorized/i
+        // AMENDING an already-set conclusion escalates to 3. One signature is
+        // now short of the count, where in v0.25 it was short of a cosigner.
+        /InsufficientSigners/i
       );
 
       await program.methods
@@ -1341,9 +1919,11 @@ describe("turf_vault verification matrix", () => {
           admin: admin.publicKey,
           cosigner: signer2.publicKey,
           vaultState: vaultStatePda,
+          governance: governancePda,
           contest: timingContest.contestPda,
         })
-        .signers([signer2])
+        .remainingAccounts(cosigners(signer3))
+        .signers([signer2, signer3])
         .rpc();
 
       const postLockContest = await createContest("post-lock-amend-contest", {
@@ -1359,10 +1939,12 @@ describe("turf_vault verification matrix", () => {
             admin: admin.publicKey,
             cosigner: null,
             vaultState: vaultStatePda,
+            governance: governancePda,
             contest: postLockContest.contestPda,
           })
           .rpc(),
-        /Unauthorized/i
+        // RE-OPENING a passed lock escalates to 3 — the results-known vector.
+        /InsufficientSigners/i
       );
       await program.methods
         .setContestLockTime(bn(now() + 300))
@@ -1370,9 +1952,11 @@ describe("turf_vault verification matrix", () => {
           admin: admin.publicKey,
           cosigner: signer2.publicKey,
           vaultState: vaultStatePda,
+          governance: governancePda,
           contest: postLockContest.contestPda,
         })
-        .signers([signer2])
+        .remainingAccounts(cosigners(signer3))
+        .signers([signer2, signer3])
         .rpc();
     });
   });
@@ -1395,10 +1979,17 @@ describe("turf_vault verification matrix", () => {
 
       await expectRejected(
         program.methods
-          .mintEntryToken(0, token.ref as any, token.hash as any)
+          .mintEntryToken(
+            0,
+            token.ref as any,
+            token.hash as any,
+            bn(await currentWindow())
+          )
           .accountsStrict({
             admin: admin.publicKey,
             vaultState: vaultStatePda,
+            governance: governancePda,
+            mintWindow: deriveMintWindow(await currentWindow()),
             userWallet: user1.publicKey,
             entryToken: token.pda,
             systemProgram: SystemProgram.programId,
@@ -1562,6 +2153,7 @@ describe("turf_vault verification matrix", () => {
           .accountsStrict({
             admin: admin.publicKey,
             vaultState: vaultStatePda,
+            governance: governancePda,
             entryToken: token.pda,
           })
           .rpc(),
@@ -1591,8 +2183,10 @@ describe("turf_vault verification matrix", () => {
           admin: admin.publicKey,
           cosigner: signer2.publicKey,
           vaultState: vaultStatePda,
+          governance: governancePda,
         })
-        .signers([signer2])
+        .remainingAccounts(cosigners(signer3))
+        .signers([signer2, signer3])
         .rpc();
 
       let vault = await program.account.vaultState.fetch(vaultStatePda);
@@ -1634,6 +2228,7 @@ describe("turf_vault verification matrix", () => {
             admin: admin.publicKey,
             cosigner: stranger.publicKey,
             vaultState: vaultStatePda,
+            governance: governancePda,
           })
           .signers([stranger])
           .rpc(),
@@ -1646,8 +2241,10 @@ describe("turf_vault verification matrix", () => {
           admin: admin.publicKey,
           cosigner: signer2.publicKey,
           vaultState: vaultStatePda,
+          governance: governancePda,
         })
-        .signers([signer2])
+        .remainingAccounts(cosigners(signer3))
+        .signers([signer2, signer3])
         .rpc();
 
       vault = await program.account.vaultState.fetch(vaultStatePda);
@@ -1699,12 +2296,18 @@ describe("turf_vault verification matrix", () => {
           admin: admin.publicKey,
           cosigner: signer2.publicKey,
           vaultState: vaultStatePda,
+          governance: governancePda,
           contest: paidContest.contestPda,
           prizePool: paidContest.prizePoolPda,
           payoutMint: usdcMint,
           tokenProgram: TOKEN_PROGRAM_ID,
         })
         .remainingAccounts([
+          // SETTLE_CONTEST is 3-of-N, and `admin` + `cosigner` are only two —
+          // so one extra cosigner LEADS the winner triples. The program splits
+          // at exactly `threshold - 2`, a boundary both sides read off the
+          // stored table rather than guessing from the payload length.
+          ...cosigners(signer3),
           { pubkey: user1Pda, isSigner: false, isWritable: true },
           { pubkey: user1Entry, isSigner: false, isWritable: true },
           { pubkey: user1UsdcAta, isSigner: false, isWritable: true },
@@ -1712,7 +2315,7 @@ describe("turf_vault verification matrix", () => {
           { pubkey: user2Entry, isSigner: false, isWritable: true },
           { pubkey: user2UsdcAta, isSigner: false, isWritable: true },
         ])
-        .signers([signer2])
+        .signers([signer2, signer3])
         .rpc();
 
       const contest = await program.account.contest.fetch(
@@ -1749,12 +2352,14 @@ describe("turf_vault verification matrix", () => {
             admin: admin.publicKey,
             cosigner: signer2.publicKey,
             vaultState: vaultStatePda,
+            governance: governancePda,
             contest: unlockedContest.contestPda,
             prizePool: unlockedContest.prizePoolPda,
             payoutMint: usdcMint,
             tokenProgram: TOKEN_PROGRAM_ID,
           })
-          .signers([signer2])
+          .remainingAccounts(cosigners(signer3))
+          .signers([signer2, signer3])
           .rpc(),
         /ContestNotLocked/i
       );
@@ -1775,12 +2380,14 @@ describe("turf_vault verification matrix", () => {
             admin: admin.publicKey,
             cosigner: signer2.publicKey,
             vaultState: vaultStatePda,
+            governance: governancePda,
             contest: duplicateContest.contestPda,
             prizePool: duplicateContest.prizePoolPda,
             payoutMint: usdcMint,
             tokenProgram: TOKEN_PROGRAM_ID,
           })
-          .signers([signer2])
+          .remainingAccounts(cosigners(signer3))
+          .signers([signer2, signer3])
           .rpc(),
         /DuplicateEntry/i
       );
@@ -1818,12 +2425,14 @@ describe("turf_vault verification matrix", () => {
             admin: admin.publicKey,
             cosigner: signer2.publicKey,
             vaultState: vaultStatePda,
+            governance: governancePda,
             contest: badDestinationContest.contestPda,
             prizePool: badDestinationContest.prizePoolPda,
             payoutMint: usdcMint,
             tokenProgram: TOKEN_PROGRAM_ID,
           })
           .remainingAccounts([
+            ...cosigners(signer3),
             {
               pubkey: deriveUser(user1.publicKey),
               isSigner: false,
@@ -1836,7 +2445,7 @@ describe("turf_vault verification matrix", () => {
             },
             { pubkey: user2UsdcAta, isSigner: false, isWritable: true },
           ])
-          .signers([signer2])
+          .signers([signer2, signer3])
           .rpc(),
         /InvalidPayoutDestination/i
       );
@@ -1867,13 +2476,15 @@ describe("turf_vault verification matrix", () => {
           admin: admin.publicKey,
           cosigner: signer2.publicKey,
           vaultState: vaultStatePda,
+          governance: governancePda,
           contest: cancelContest.contestPda,
           prizePool: cancelContest.prizePoolPda,
           payoutMint: usdcMint,
           creatorTokenAccount: adminUsdcAta,
           tokenProgram: TOKEN_PROGRAM_ID,
         })
-        .signers([signer2])
+        .remainingAccounts(cosigners(signer3))
+        .signers([signer2, signer3])
         .rpc();
 
       const contest = await program.account.contest.fetch(
@@ -1899,12 +2510,14 @@ describe("turf_vault verification matrix", () => {
           admin: admin.publicKey,
           cosigner: signer2.publicKey,
           vaultState: vaultStatePda,
+          governance: governancePda,
           contest: dustContest.contestPda,
           prizePool: dustContest.prizePoolPda,
           payoutMint: usdcMint,
           tokenProgram: TOKEN_PROGRAM_ID,
         })
-        .signers([signer2])
+        .remainingAccounts(cosigners(signer3))
+        .signers([signer2, signer3])
         .rpc();
 
       const opBefore = await tokenAmount(usdcOpRevPda);
@@ -1913,12 +2526,16 @@ describe("turf_vault verification matrix", () => {
         .accountsStrict({
           admin: admin.publicKey,
           vaultState: vaultStatePda,
+          governance: governancePda,
+          treasury: treasury.publicKey,
           contest: dustContest.contestPda,
           prizePool: dustContest.prizePoolPda,
           payoutMint: usdcMint,
           opRevUsdcAta: usdcOpRevPda,
           tokenProgram: TOKEN_PROGRAM_ID,
         })
+        .remainingAccounts(cosigners(signer2))
+        .signers([signer2])
         .rpc();
 
       expect(await connection.getAccountInfo(dustContest.contestPda)).to.equal(
@@ -1940,15 +2557,86 @@ describe("turf_vault verification matrix", () => {
           .accountsStrict({
             admin: admin.publicKey,
             vaultState: vaultStatePda,
+            governance: governancePda,
+            treasury: treasury.publicKey,
             contest: openContest.contestPda,
             prizePool: openContest.prizePoolPda,
             payoutMint: usdcMint,
             opRevUsdcAta: usdcOpRevPda,
             tokenProgram: TOKEN_PROGRAM_ID,
           })
+          .remainingAccounts(cosigners(signer2))
+          .signers([signer2])
           .rpc(),
         /ContestNotSettled/i
       );
+
+      // v0.26: the rent must land on the PINNED treasury, and naming any
+      // other account is refused — the whole point of the change is that the
+      // destination is not the caller's to choose.
+      const rentThief = await createContest("close-rent-thief", {
+        fees: { 0: amount(1) },
+        prizePool: amount(1),
+        payouts: [amount(1)],
+      });
+      await lockContestNow(rentThief);
+      await program.methods
+        .settleContest([])
+        .accountsStrict({
+          admin: admin.publicKey,
+          cosigner: signer2.publicKey,
+          vaultState: vaultStatePda,
+          governance: governancePda,
+          contest: rentThief.contestPda,
+          prizePool: rentThief.prizePoolPda,
+          payoutMint: usdcMint,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .remainingAccounts(cosigners(signer3))
+        .signers([signer2, signer3])
+        .rpc();
+
+      await expectRejected(
+        program.methods
+          .closeContest()
+          .accountsStrict({
+            admin: admin.publicKey,
+            vaultState: vaultStatePda,
+            governance: governancePda,
+            treasury: stranger.publicKey,
+            contest: rentThief.contestPda,
+            prizePool: rentThief.prizePoolPda,
+            payoutMint: usdcMint,
+            opRevUsdcAta: usdcOpRevPda,
+            tokenProgram: TOKEN_PROGRAM_ID,
+          })
+          .remainingAccounts(cosigners(signer2))
+          .signers([signer2])
+          .rpc(),
+        /InvalidRentDestination/i
+      );
+
+      // And the honest close CREDITS the treasury rather than the caller.
+      const treasuryBefore = await connection.getBalance(treasury.publicKey);
+      await program.methods
+        .closeContest()
+        .accountsStrict({
+          admin: admin.publicKey,
+          vaultState: vaultStatePda,
+          governance: governancePda,
+          treasury: treasury.publicKey,
+          contest: rentThief.contestPda,
+          prizePool: rentThief.prizePoolPda,
+          payoutMint: usdcMint,
+          opRevUsdcAta: usdcOpRevPda,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .remainingAccounts(cosigners(signer2))
+        .signers([signer2])
+        .rpc();
+      expect(
+        await connection.getBalance(treasury.publicKey)
+      ).to.be.greaterThan(treasuryBefore);
     });
 
     it("sweeps operator revenue only to pinned treasury ATA", async () => {
@@ -1959,12 +2647,14 @@ describe("turf_vault verification matrix", () => {
             admin: admin.publicKey,
             cosigner: signer2.publicKey,
             vaultState: vaultStatePda,
+            governance: governancePda,
             currencyMint: usdtMint,
             opRevAta: usdtOpRevPda,
             treasuryAta: wrongTreasuryUsdtAta,
             tokenProgram: TOKEN_PROGRAM_ID,
           })
-          .signers([signer2])
+          .remainingAccounts(cosigners(signer3))
+          .signers([signer2, signer3])
           .rpc(),
         /TreasuryAuthorityMismatch/i
       );
@@ -1979,12 +2669,14 @@ describe("turf_vault verification matrix", () => {
           admin: admin.publicKey,
           cosigner: signer2.publicKey,
           vaultState: vaultStatePda,
+          governance: governancePda,
           currencyMint: usdcMint,
           opRevAta: usdcOpRevPda,
           treasuryAta: treasuryUsdcAta,
           tokenProgram: TOKEN_PROGRAM_ID,
         })
-        .signers([signer2])
+        .remainingAccounts(cosigners(signer3))
+        .signers([signer2, signer3])
         .rpc();
 
       expect(await tokenAmount(usdcOpRevPda)).to.equal(0);
@@ -1999,12 +2691,14 @@ describe("turf_vault verification matrix", () => {
             admin: admin.publicKey,
             cosigner: signer2.publicKey,
             vaultState: vaultStatePda,
+            governance: governancePda,
             currencyMint: usdcMint,
             opRevAta: usdcOpRevPda,
             treasuryAta: treasuryUsdcAta,
             tokenProgram: TOKEN_PROGRAM_ID,
           })
-          .signers([signer2])
+          .remainingAccounts(cosigners(signer3))
+          .signers([signer2, signer3])
           .rpc(),
         /EmptyRevenueAccount/i
       );
@@ -2017,12 +2711,14 @@ describe("turf_vault verification matrix", () => {
           admin: admin.publicKey,
           cosigner: signer2.publicKey,
           vaultState: vaultStatePda,
+          governance: governancePda,
           currencyMint: usdtMint,
           opRevAta: usdtOpRevPda,
           treasuryAta: treasuryUsdtAta,
           tokenProgram: TOKEN_PROGRAM_ID,
         })
-        .signers([signer2])
+        .remainingAccounts(cosigners(signer3))
+        .signers([signer2, signer3])
         .rpc();
       expect(usdtOpBefore - (await tokenAmount(usdtOpRevPda))).to.equal(
         amount(3)
@@ -2047,13 +2743,15 @@ describe("turf_vault verification matrix", () => {
             admin: admin.publicKey,
             cosigner: signer2.publicKey,
             vaultState: vaultStatePda,
+            governance: governancePda,
             mint,
             opRevAta: deriveOpRev(mint),
             tokenProgram: TOKEN_PROGRAM_ID,
             systemProgram: SystemProgram.programId,
             rent: anchor.web3.SYSVAR_RENT_PUBKEY,
           })
-          .signers([signer2])
+          .remainingAccounts(cosigners(signer3))
+          .signers([signer2, signer3])
           .rpc();
       }
 
@@ -2071,13 +2769,15 @@ describe("turf_vault verification matrix", () => {
             admin: admin.publicKey,
             cosigner: signer2.publicKey,
             vaultState: vaultStatePda,
+            governance: governancePda,
             mint: overflowMint,
             opRevAta: deriveOpRev(overflowMint),
             tokenProgram: TOKEN_PROGRAM_ID,
             systemProgram: SystemProgram.programId,
             rent: anchor.web3.SYSVAR_RENT_PUBKEY,
           })
-          .signers([signer2])
+          .remainingAccounts(cosigners(signer3))
+          .signers([signer2, signer3])
           .rpc(),
         /CurrencyRegistryFull/i
       );

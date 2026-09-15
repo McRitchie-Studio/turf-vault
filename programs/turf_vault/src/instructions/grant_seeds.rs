@@ -1,9 +1,14 @@
 use anchor_lang::prelude::*;
 
 use crate::errors::VaultError;
-use crate::state::{seed_grant_kind, SeedGrant, UserAccount, VaultState, MAX_GRANT_SEEDS};
+use crate::instructions::governance::authorize;
+use crate::state::{
+    gov_action, seed_grant_kind, GovernanceConfig, SeedGrant, UserAccount, VaultState,
+    MAX_GRANT_SEEDS,
+};
 
-/// Admin-signed standalone seed grant (Rails "quest" bonuses). 1-of-3 vault signer.
+/// Admin-signed standalone seed grant (Rails "quest" bonuses).
+/// Auth: `gov_action::GRANT_SEEDS` (default 1 — unchanged from v0.25).
 ///
 /// Credits a fixed `amount` of loyalty seeds into a user's UserAccount PDA
 /// OUTSIDE the normal enter_contest flow — used for: first manual username
@@ -29,12 +34,13 @@ pub struct GrantSeeds<'info> {
     #[account(mut)]
     pub admin: Signer<'info>,
 
-    #[account(
-        seeds = [b"vault"],
-        bump = vault_state.load()?.bump,
-        constraint = vault_state.load()?.is_signer(&admin.key()) @ VaultError::Unauthorized,
-    )]
+    #[account(seeds = [b"vault"], bump = vault_state.load()?.bump)]
     pub vault_state: AccountLoader<'info, VaultState>,
+
+    /// Per-action threshold table. Required by every vault-authorized
+    /// instruction since v0.26 — see `instructions::governance::authorize`.
+    #[account(seeds = [b"governance"], bump = governance.bump)]
+    pub governance: Account<'info, GovernanceConfig>,
 
     /// CHECK: recipient wallet. Not a signer — the admin credits seeds on the
     /// user's behalf (like settle_contest). Used to derive + bind the
@@ -48,6 +54,43 @@ pub struct GrantSeeds<'info> {
         constraint = user_account.wallet == user_wallet.key() @ VaultError::Unauthorized,
     )]
     pub user_account: Account<'info, UserAccount>,
+
+    /// THE INVITEE'S OWN UserAccount — required for INVITE_FRIEND, forbidden
+    /// otherwise (v0.26).
+    ///
+    /// ── WHY THIS ACCOUNT EXISTS ───────────────────────────────────────────
+    ///
+    /// The once-only guard below is seeded on `invitee`, a CALLER-CHOSEN
+    /// Pubkey argument. Nothing required that pubkey to correspond to anything
+    /// — so for INVITE_FRIEND, every distinct 32-byte value opened a fresh
+    /// guard PDA and a fresh grant. `invitee = [1u8; 32]`, `[2u8; 32]`, and so
+    /// on: the "once per invited friend" lock was once per NUMBER, and the
+    /// supply of numbers is 2^256. A single 1-of-N signature could mint seeds
+    /// without bound, one cheap transaction at a time, and each grant looked
+    /// individually legitimate on chain.
+    ///
+    /// Binding the guard to a REAL ACCOUNT closes the farm. The invitee must
+    /// now be a wallet that actually has a `UserAccount` PDA, and the account
+    /// is bound by BOTH its PDA seeds and its stored `wallet` field, so it
+    /// cannot be some other user's record renamed.
+    ///
+    /// ── AND IT MUST HAVE ENTERED A CONTEST ────────────────────────────────
+    ///
+    /// Existence alone would only raise the price of a fake invitee to one
+    /// rent-exempt account. The quest this instruction pays out for is "a
+    /// friend you invited ENTERED a contest", so the check is the business
+    /// rule itself: `entries > 0`. Manufacturing a fake invitee now costs a
+    /// real contest entry, which is more than the grant is worth — the farm is
+    /// not merely gated, it is unprofitable.
+    #[account(
+        seeds = [b"user", invitee.as_ref()],
+        bump = invitee_user_account.bump,
+        constraint = invitee_user_account.wallet == invitee
+            @ VaultError::SeedGrantInviteeNotRegistered,
+        constraint = invitee_user_account.entries > 0
+            @ VaultError::SeedGrantInviteeNotRegistered,
+    )]
+    pub invitee_user_account: Option<Account<'info, UserAccount>>,
 
     /// Idempotency guard — `init`-once per (user, kind[, invitee]).
     #[account(
@@ -68,6 +111,18 @@ pub fn handle_grant_seeds(
     kind: u8,
     invitee: Pubkey,
 ) -> Result<()> {
+    // AUTHORIZATION — the single path (v0.26).
+    {
+        let vault = ctx.accounts.vault_state.load()?;
+        authorize(
+            &vault,
+            &ctx.accounts.governance,
+            gov_action::GRANT_SEEDS,
+            &[ctx.accounts.admin.key()],
+            ctx.remaining_accounts,
+        )?;
+    }
+
     // Flexible kinds (v0.23): any 0..=MAX_SEED_GRANT_KIND is a valid quest, so a
     // new quest needs only a Rails kind constant — never another redeploy. The
     // per-kind guard PDA keeps each quest's once-ever lock distinct; the bound
@@ -84,9 +139,23 @@ pub fn handle_grant_seeds(
             invitee != Pubkey::default(),
             VaultError::InvalidSeedGrantInvitee
         );
+        // v0.26: and that invitee must be a REAL contest-entering user. The
+        // account's own constraints prove `wallet == invitee` and
+        // `entries > 0`; this require is what makes PASSING it mandatory,
+        // since an `Option` account that is simply omitted skips them all.
+        require!(
+            ctx.accounts.invitee_user_account.is_some(),
+            VaultError::SeedGrantInviteeNotRegistered
+        );
     } else {
         require!(
             invitee == Pubkey::default(),
+            VaultError::InvalidSeedGrantInvitee
+        );
+        // Symmetrically: a non-invite grant must not smuggle one in, or the
+        // account list would differ between kinds for no stated reason.
+        require!(
+            ctx.accounts.invitee_user_account.is_none(),
             VaultError::InvalidSeedGrantInvitee
         );
     }

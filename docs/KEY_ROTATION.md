@@ -1,5 +1,13 @@
 # TurfVault — Key-Rotation Redeploy Plan (Alex Bot key compromise)
 
+> **HISTORICAL — v0.20 incident plan, not a rotation procedure.** This file
+> documents the one-off redeploy that followed the Alex Bot key compromise.
+> The LIVE signer-rotation runbook is [`SIGNER_ROTATION.md`](SIGNER_ROTATION.md),
+> which covers the v0.26 five-slot set and its two-step ceremony. The signer
+> set, threshold model and continuity rule described below were all superseded
+> by v0.26 — in particular, this document's 2-of-3 is no longer how the program
+> authorizes anything.
+
 > **HISTORICAL SUPERSEDED PLAN. DO NOT EXECUTE AS CURRENT PROCEDURE.**
 > The retired Alex Bot key `F6f8...KzhZ` has zero devnet authority in the
 > current deployment record. Current live signer facts live in

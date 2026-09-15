@@ -1,6 +1,9 @@
 use anchor_lang::prelude::*;
-use crate::state::{UserAccount, VaultState};
+use crate::state::{
+    UserAccount, VaultState, GovernanceConfig, gov_action,
+};
 use crate::errors::VaultError;
+use crate::instructions::governance::authorize;
 use crate::instructions::set_username::validate_username_charset_len;
 
 /// `admin_set_username` — `set_username` with an admin-authorized
@@ -28,9 +31,13 @@ pub struct AdminSetUsername<'info> {
     #[account(
         seeds = [b"vault"],
         bump = vault_state.load()?.bump,
-        constraint = vault_state.load()?.is_signer(&admin.key()) @ VaultError::Unauthorized,
     )]
     pub vault_state: AccountLoader<'info, VaultState>,
+
+    /// Per-action threshold table. Required by every vault-authorized
+    /// instruction since v0.26 — see `instructions::governance::authorize`.
+    #[account(seeds = [b"governance"], bump = governance.bump)]
+    pub governance: Account<'info, GovernanceConfig>,
 
     #[account(
         mut,
@@ -45,6 +52,21 @@ pub fn handle_admin_set_username(
     ctx: Context<AdminSetUsername>,
     username: [u8; 32],
 ) -> Result<()> {
+    // AUTHORIZATION — the single path (v0.26). `admin` is the instruction's
+    // one NAMED vault signer; any further signatures the stored threshold
+    // demands are taken from the leading `remaining_accounts`. At a threshold
+    // of 1 that count is zero and the account list is unchanged from v0.25.
+    {
+        let vault = ctx.accounts.vault_state.load()?;
+        authorize(
+            &vault,
+            &ctx.accounts.governance,
+            gov_action::ADMIN_USERNAME,
+            &[ctx.accounts.admin.key()],
+            ctx.remaining_accounts,
+        )?;
+    }
+
     // Reserved-prefix check waived (admin co-signed); charset + min-length
     // are NOT waivable on any path.
     validate_username_charset_len(&username)?;

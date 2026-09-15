@@ -60,6 +60,7 @@ LANES=(
   "npm run test:scripts"
   "cargo check --workspace --all-targets --locked"
   "cargo clippy --workspace --all-targets --locked -- -D clippy::correctness"
+  "cargo test --workspace --locked"
 )
 
 case "${1:-}" in

@@ -6,6 +6,18 @@ Solana escrow program for contest entry fees and prize distribution. Built with 
 
 **Docs index**: see [`docs/README.md`](docs/README.md) before following historical specs, audits, or generated reports.
 
+> **THE `Auth` COLUMN BELOW, THE `Architecture` BLOCK AND THE `Security`
+> SECTION STILL DESCRIBE v0.25 — THE DEPLOYED PROGRAM, NOT THIS TREE.**
+> v0.26 (Unreleased) replaces the fixed 2-of-3 / 1-of-3 model with five signer
+> slots and a per-action threshold table stored in the `governance` PDA, so
+> most thresholds written below are now wrong for the source in this repo —
+> `burn_entry_token` and `update_signers` are 3, not the 1-of-3 / 2-of-3 shown.
+> Authoritative for this tree: `DEFAULT_THRESHOLDS` in
+> [`programs/turf_vault/src/state.rs`](programs/turf_vault/src/state.rs) and the
+> instruction matrix in
+> [`docs/VERIFICATION_MATRIX.md`](docs/VERIFICATION_MATRIX.md). Authoritative
+> for the chain: [`docs/CURRENT_DEPLOYMENT.md`](docs/CURRENT_DEPLOYMENT.md).
+
 ![Anchor 0.32.1](https://img.shields.io/badge/Anchor-0.32.1-blue)
 ![Solana](https://img.shields.io/badge/Solana-Devnet-purple)
 ![License: MIT](https://img.shields.io/badge/License-MIT-green)
@@ -226,8 +238,9 @@ and on every push to `main`, `release` and `accepted`:
 |-----|------|---------|
 | `program` | `cargo check --workspace --all-targets --locked` | the program (and every `#[derive(Accounts)]` expansion) no longer compiles, or `Cargo.lock` is out of sync |
 | `program` | `cargo clippy -- -D clippy::correctness` | code clippy classes as outright wrong |
+| `program` | `cargo test --workspace --locked` | a `VaultState` field offset moved, a governance threshold or floor changed, or the reserved error block stopped ending at 6059. Added 2026-09-15 — `cargo check` above COMPILES `#[cfg(test)]` code without running it, so these assertions could have reported green having never executed |
 | `guards` | `npm run check:doc-op-refs` | a 1Password vault reference in this repo's prose has gone stale |
-| `guards` | `npm run test:scripts` | a shape regression in the deploy scripts, or a lane wired to the Anchor suite — 61 `node:test` cases, counted 2026-09-14. 26 cover `scripts/lib/mainnet-config.js` and `scripts/initialize-mainnet.js`; 5 of those 26 drive the real checked-in `scripts/squad.json` and the other 21 are fixture mutations or a source read — the split is measured in [What it covers](docs/VERIFICATION_MATRIX.md#what-it-covers). One case self-skips here, where no `node_modules` is installed. 24 more grade the Squads upgrade path (the signer planner, the script's text, and the script executed end to end against stubs), 6 are the lane guard below, and 5 hold `bin/release-check` identical to this table |
+| `guards` | `npm run test:scripts` | a shape regression in the deploy scripts, or a lane wired to the Anchor suite — 68 `node:test` cases, counted 2026-09-15 (was 61; +7 for the vault-layout parity guard). 26 cover `scripts/lib/mainnet-config.js` and `scripts/initialize-mainnet.js`; 5 of those 26 drive the real checked-in `scripts/squad.json` and the other 21 are fixture mutations or a source read — the split is measured in [What it covers](docs/VERIFICATION_MATRIX.md#what-it-covers). One case self-skips here, where no `node_modules` is installed. 24 more grade the Squads upgrade path (the signer planner, the script's text, and the script executed end to end against stubs), 6 are the lane guard below, and 5 hold `bin/release-check` identical to this table |
 
 CI is **build-and-check only** — it never contacts a Solana cluster, holds a
 keypair, or spends SOL.

@@ -3,7 +3,13 @@
 // `#[program]` that delegate here.
 //
 // Instructions are grouped roughly by lifecycle:
-//   Vault setup & governance — initialize, update_signers
+//   Vault setup & governance — initialize, update_signers,
+//                              init_governance, set_action_threshold,
+//                              set_mint_window_policy
+//
+// `governance` also holds `authorize`, the SINGLE authorization path every
+// vault-authorized instruction in this program routes through. Nothing else
+// reads `VaultState.signers` for auth.
 //   Currency registry        — register_currency, deactivate_currency
 //   Pause control            — pause, unpause
 //   User accounts            — create_user_account, set_username,
@@ -16,6 +22,7 @@
 //   Free entries             — mint_entry_token, burn_entry_token
 //   Treasury                 — sweep_operator_revenue
 
+pub mod governance;
 pub mod initialize;
 pub mod register_currency;
 pub mod deactivate_currency;
@@ -40,6 +47,7 @@ pub mod pause;
 pub mod unpause;
 pub mod update_signers;
 
+pub use governance::*;
 pub use initialize::*;
 pub use register_currency::*;
 pub use deactivate_currency::*;

@@ -1,8 +1,9 @@
 use anchor_lang::prelude::*;
 use crate::state::{
-    VaultState, UserAccount, Contest, ContestEntry, ContestStatus, EntryStatus, EntryTokenAccount, Season,
+    VaultState, UserAccount, Contest, ContestEntry, ContestStatus, EntryStatus, EntryTokenAccount, Season, GovernanceConfig, gov_action,
 };
 use crate::errors::VaultError;
+use crate::instructions::governance::authorize;
 
 /// `enter_contest_with_token` — entry funded by consuming an
 /// EntryTokenAccount instead of paying any currency.
@@ -38,9 +39,13 @@ pub struct EnterContestWithToken<'info> {
     #[account(
         seeds = [b"vault"],
         bump = vault_state.load()?.bump,
-        constraint = vault_state.load()?.is_signer(&payer.key()) @ VaultError::Unauthorized,
     )]
     pub vault_state: AccountLoader<'info, VaultState>,
+
+    /// Per-action threshold table. Required by every vault-authorized
+    /// instruction since v0.26 — see `instructions::governance::authorize`.
+    #[account(seeds = [b"governance"], bump = governance.bump)]
+    pub governance: Account<'info, GovernanceConfig>,
 
     // H1 prelaunch audit: PDA-seed-bind Contest.
     #[account(
@@ -89,6 +94,21 @@ pub fn handle_enter_contest_with_token(
     ctx: Context<EnterContestWithToken>,
     entry_num: u32,
 ) -> Result<()> {
+    // AUTHORIZATION — the single path (v0.26). `payer` is the instruction's
+    // one NAMED vault signer; any further signatures the stored threshold
+    // demands are taken from the leading `remaining_accounts`. At a threshold
+    // of 1 that count is zero and the account list is unchanged from v0.25.
+    {
+        let vault = ctx.accounts.vault_state.load()?;
+        authorize(
+            &vault,
+            &ctx.accounts.governance,
+            gov_action::ENTER_CONTEST,
+            &[ctx.accounts.payer.key()],
+            ctx.remaining_accounts,
+        )?;
+    }
+
     // Pause guard. Scope the Ref so it drops before other borrows.
     {
         let vault = ctx.accounts.vault_state.load()?;

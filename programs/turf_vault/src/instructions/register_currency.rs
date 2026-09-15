@@ -1,7 +1,8 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token::{Mint, Token, TokenAccount};
-use crate::state::{VaultState, AcceptedCurrency, MAX_CURRENCIES};
+use crate::state::{VaultState, AcceptedCurrency, MAX_CURRENCIES, GovernanceConfig, gov_action};
 use crate::errors::VaultError;
+use crate::instructions::governance::{authorize, named_signers};
 
 /// `register_currency` — add a new currency to the on-chain registry.
 ///
@@ -23,15 +24,23 @@ pub struct RegisterCurrency<'info> {
     #[account(mut)]
     pub admin: Signer<'info>,
 
-    pub cosigner: Signer<'info>,
+    /// Second vault signer. OPTIONAL since the threshold became data: a
+    /// mandatory `Signer` here would be a floor of 2 that no stored table
+    /// could lower, and the table and the account struct would disagree in
+    /// silence. See `named_signers`.
+    pub cosigner: Option<Signer<'info>>,
 
     #[account(
         mut,
         seeds = [b"vault"],
         bump = vault_state.load()?.bump,
-        constraint = vault_state.load()?.validate_multisig(&admin.key(), &cosigner.key()) @ VaultError::Unauthorized,
     )]
     pub vault_state: AccountLoader<'info, VaultState>,
+
+    /// Per-action threshold table. Required by every vault-authorized
+    /// instruction since v0.26 — see `instructions::governance::authorize`.
+    #[account(seeds = [b"governance"], bump = governance.bump)]
+    pub governance: Account<'info, GovernanceConfig>,
 
     pub mint: Account<'info, Mint>,
 
@@ -57,6 +66,23 @@ pub fn handle_register_currency(
     ctx: Context<RegisterCurrency>,
     kind: u8,
 ) -> Result<()> {
+    // AUTHORIZATION — the single path (v0.26). `admin`, plus `cosigner` when
+    // one was supplied, are the NAMED signers; any further signatures the
+    // stored threshold demands are taken from the leading `remaining_accounts`.
+    {
+        let vault = ctx.accounts.vault_state.load()?;
+        authorize(
+            &vault,
+            &ctx.accounts.governance,
+            gov_action::REGISTER_CURRENCY,
+            &named_signers(
+                ctx.accounts.admin.key(),
+                ctx.accounts.cosigner.as_ref().map(|s| s.key()),
+            ),
+            ctx.remaining_accounts,
+        )?;
+    }
+
     let mint_key = ctx.accounts.mint.key();
     let op_rev_key = ctx.accounts.op_rev_ata.key();
 
