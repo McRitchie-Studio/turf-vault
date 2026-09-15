@@ -31,6 +31,24 @@ anchor test          # spins its own validator, deploys, runs tests/turf_vault.t
 Result: **`38 passing`, 0 failing** (was `27` at the 2026-09-06 stamp; +11 for
 the v0.26 governance surface). This is a RUN RESULT, not an `it()` count.
 
+> **THE STAMP ABOVE PREDATES THE USERNAME REGISTRY, AND IS NOT EVIDENCE FOR
+> IT.** The registry change added seven `it()` blocks to the suite, rewrote two
+> more, and changed the account list of `create_user_account` and
+> `set_username` — so the tree this stamp was taken on no longer exists. It is
+> deliberately NOT refreshed here: re-dating a proof stamp asserts every row
+> under it, and no run has been taken since. The registry rows in the
+> instruction matrix below are marked **UNPROVEN** for exactly as long as that
+> is true.
+>
+> The unit lanes ARE current and did run on this tree — see `bin/release-check`
+> below, now **48 `cargo test` cases** (was 19) and **79 `node:test` cases**.
+> They carry the registry's uniqueness and threshold properties; what they
+> cannot carry is whether the instructions reach them, which is what the
+> unstamped Anchor cases exist to prove.
+>
+> **Re-run `anchor test` and re-stamp before the Squads upgrade**, and only
+> then clear the UNPROVEN marks.
+
 **This stamp is the first one taken AFTER turf-vault PR #18**, which is what the
 qualification below was waiting for. #18 (merged 2026-09-07) repaired the suite's
 `expectRejected` helper — inert until then at all 45 of its call sites — and
@@ -45,6 +63,10 @@ CI on every push and PR:
 ```bash
 bin/release-check          # the four CI lanes plus, new in v0.26, `cargo test`
 ```
+
+Both Node lanes and both Rust lanes were run green on the username-registry
+tree on **2026-09-15** (`cargo test`: 48 passed; `npm run test:scripts`: 79
+passed).
 
 `cargo test` matters more than its name suggests here. `cargo check` COMPILES
 `#[cfg(test)]` code without running it, so before this lane existed a unit test
@@ -338,6 +360,17 @@ the pause cosigner, `sweep_operator_revenue`'s treasury-owner check, the
 username rules, the `mint_entry_token` remint bar, and the burn row's
 "rejects a token already spent".
 
+**The username registry's refusals are a separate case, and a stronger one.**
+They rest neither on the helper nor on source review alone: the uniqueness
+rule, the claim rule, the rename rule and the thresholds are asserted directly
+in `programs/turf_vault/src/username_registry_tests.rs`, which CI runs on every
+push. Those 29 cases were control-checked on 2026-09-15 by mutation — removing
+the already-claimed refusal, letting a rename keep its old name, and lowering
+`overwrite_username`'s floor to 1 — and each mutation was caught by exactly the
+test written for it. What they do NOT evidence is that the instructions reach
+those functions with the right arguments, which is the unstamped Anchor tier's
+job.
+
 `sweep_operator_revenue` earns a second mention: its refusal is what stands
 between operator revenue and an attacker-named treasury ATA, and the
 assertions that follow it read a DIFFERENT currency's accounts, so the account
@@ -384,10 +417,12 @@ deployed, are in the PDA at seeds `[b"governance"]`.
 | Currency registry | `deactivate_currency` | Requires **3**; flips `active=false`; preserves slot and historical tallies. |
 | Pause control | `pause` | Requires **2** (floor 1 — `cosigner` is `Option<Signer>` so the account struct cannot out-vote the table, and a retune to 1 really reaches one signature); records reason; blocks `enter_contest` and `enter_contest_with_token` only. |
 | Pause control | `unpause` | Requires **3** (floor 3 — deliberately harder than pausing, so a captured system can brake and never release); clears pause; paid and token entries work again. |
-| User account | `create_user_account` | Permissionless payer can create a wallet account; username charset, length, and reserved-prefix checks hold. |
-| User account | `set_username` | Requires owner signature; rejects non-owner, invalid charset, short names, and reserved prefixes. |
-| User account | `admin_create_user_account` | Requires payer plus **1** vault signer; waives only reserved-prefix branch; still enforces charset and length. |
-| User account | `admin_set_username` | Requires owner signature plus **1** vault signer; waives only reserved-prefix branch; rejects non-owner and non-signer admin. |
+| User account | `create_user_account` | Permissionless payer can create a wallet account; username charset, length, and reserved-prefix checks hold. **UNPROVEN since the registry change:** it now also CLAIMS the name in the same transaction, so a signup for a taken or reserved name fails with `UsernameAlreadyClaimed` (6060) rather than creating an account that displays a name it does not hold. Takes `name_key` (the lowercased, zero-padded form — the record's PDA seed). |
+| User account | `set_username` | Requires owner signature; rejects non-owner, invalid charset, short names, and reserved prefixes — now including `xan`. **UNPROVEN since the registry change:** claims `name_key` in the registry and CLOSES the record for the name given up, refunding its rent to the wallet. A rename that omits the old record is refused (`UsernameRecordMissing`, 6062) — without that, a holder keeps every name they ever had at ~0.0015 SOL each. A case-only change keeps the same key and closes nothing. |
+| Username registry | `overwrite_username` | **UNPROVEN.** Requires **3** (floor 3) and the renamed user does **NOT** sign — the point of the instruction. Replaces `admin_set_username`, which required the owner's consent and was therefore useless against the only two things it was wanted for: a squatter and a slur. Emits `UsernameOverwritten` (who, before, after, which vault signer was named, how many signatures the table demanded, when) — a log line, so no rent and no storage. Waives the reserved-prefix branch and nothing else. Does NOT lock the vacated name; `reserve_username` is the follow-up. |
+| Username registry | `reserve_username` | **UNPROVEN.** Requires **3** (floor 3). The blocked list, as a claim rather than a list: the vault takes a free name, and every claim path then refuses it through the SAME check that stops a second player. Idempotent; refuses a name a player already holds. |
+| Username registry | `release_reserved_username` | **UNPROVEN.** Requires **3** (floor 3) — a reservation is a brake, and nothing an agent reaches alone lifts a brake, the same asymmetry as `pause`/`unpause`. Rent goes to the pinned treasury (`InvalidRentDestination`, 6056, otherwise). Refuses a record the vault does not hold (`UsernameNotReserved`, 6066), so a player's name can never be closed through this path. |
+| Username registry | `backfill_username_record` | **UNPROVEN.** MIGRATION ONLY, and permissionless BY DESIGN: it takes both the name and the owner from the `UserAccount`'s own fields, so it has no discretion and can only assert what the chain already says. Refuses a `name_key` that is not that account's own name, and refuses a blank name (every blank account would collide on one record). Idempotent. 47 production users, 47 with usernames, zero case-insensitive duplicates (measured 2026-09-15) — so this reconciles nothing. |
 | Season | `create_season` | Requires **3** (it sets the per-entry seed schedule with no ceiling checked); creates immutable entry seed schedule and quest seed schedule; rejects duplicate season ID. |
 | Contest | `create_contest` | Requires **1** payer plus creator; funds prize-pool ATA; validates payout tiers sum to prize pool; stores per-currency fees and lock timestamp. |
 | Contest | `set_contest_lock_time` | Requires **2** before lock and **3** to RE-OPEN a lock that has passed (the results-known vector); rejects invalid timestamp/order and post-finality changes without required cosign path. |

@@ -247,7 +247,16 @@ fn shipped_defaults_match_the_agreed_table() {
         (gov_action::SET_CONTEST_CONCLUSION_TIME, 2, "set_contest_conclusion_time"),
         (gov_action::MINT_ENTRY_TOKEN, 1, "mint within cap"),
         (gov_action::GRANT_SEEDS, 1, "grant_seeds"),
-        (gov_action::ADMIN_USERNAME, 1, "admin username waiver"),
+        // RETIRED — its two instructions were deleted with the username
+        // registry. Pinned anyway: the id indexes a stored table, so its
+        // number must stay put even though nothing reads it.
+        (gov_action::ADMIN_USERNAME, 1, "admin username waiver (retired)"),
+        // The username registry. Three each, and each FLOORED at three — see
+        // `username_registry_tests` for why the floor rather than the default
+        // is what makes that true on a live account.
+        (gov_action::OVERWRITE_USERNAME, 3, "overwrite_username"),
+        (gov_action::RESERVE_USERNAME, 3, "reserve_username"),
+        (gov_action::RELEASE_USERNAME, 3, "release_reserved_username"),
     ] {
         assert_eq!(g.threshold_for(action), expected, "{name}");
     }
@@ -345,10 +354,11 @@ fn window_index_partitions_time_and_refuses_a_zero_length_window() {
 #[test]
 fn governance_error_codes_occupy_exactly_6046_through_6059() {
     // Anchor assigns codes BY POSITION in the enum. The three reserved
-    // variants are what keep the next appended variant landing on 6060, where
-    // `username-registry-on-chain` expects to start. Without them a second
-    // branch appending in the same upgrade window would silently claim 6057
-    // and every code below it would shift under Rails' integer decoding.
+    // variants are what kept the next appended variant landing on 6060, and
+    // the username registry has now CLAIMED the range from there — see
+    // `username_registry_tests::the_username_registry_owns_error_codes_6060_upward`.
+    // Without them that second branch would have claimed 6057 and every code
+    // below it would have shifted under Rails' integer decoding.
     assert_eq!(VaultError::InsufficientSigners as u32 + 6000, 6046);
     assert_eq!(VaultError::InvalidRentDestination as u32 + 6000, 6056);
     assert_eq!(VaultError::ReservedGovernance6059 as u32 + 6000, 6059);
@@ -400,9 +410,19 @@ const MANDATORY_NAMED: &[(u8, u8, &str)] = &[
     (gov_action::MINT_ENTRY_TOKEN, 1, "mint_entry_token"),
     (gov_action::BURN_ENTRY_TOKEN, 1, "burn_entry_token"),
     (gov_action::GRANT_SEEDS, 1, "grant_seeds"),
-    (gov_action::ADMIN_USERNAME, 1, "admin username waiver"),
+    // ADMIN_USERNAME (17) has NO ROW because it has no instruction: both
+    // `admin_create_user_account` and `admin_set_username` were deleted with
+    // the username registry. The id itself stays declared and can never be
+    // reused — it indexes a stored threshold table.
     (gov_action::CREATE_CONTEST, 1, "create_contest"),
     (gov_action::ENTER_CONTEST, 1, "enter_contest"),
+    // The username registry. All three take `cosigner` as `Option<Signer>`
+    // even though their floors are 3 and a mandatory one would be legal here —
+    // the optional form is never wrong, and it keeps the account struct from
+    // ever out-voting the table if a floor is lowered later.
+    (gov_action::OVERWRITE_USERNAME, 1, "overwrite_username"),
+    (gov_action::RESERVE_USERNAME, 1, "reserve_username"),
+    (gov_action::RELEASE_USERNAME, 1, "release_reserved_username"),
 ];
 
 #[test]

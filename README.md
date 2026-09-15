@@ -17,6 +17,12 @@ Solana escrow program for contest entry fees and prize distribution. Built with 
 > instruction matrix in
 > [`docs/VERIFICATION_MATRIX.md`](docs/VERIFICATION_MATRIX.md). Authoritative
 > for the chain: [`docs/CURRENT_DEPLOYMENT.md`](docs/CURRENT_DEPLOYMENT.md).
+>
+> **The instruction LIST is v0.25's too.** Unreleased v0.26 DELETES
+> `admin_create_user_account` and `admin_set_username` and adds four username
+> registry instructions; the rows below still show the deployed pair. The
+> "v0.26 — the username registry" subsection under
+> [Instructions](#instructions) is authoritative for the difference.
 
 ![Anchor 0.32.1](https://img.shields.io/badge/Anchor-0.32.1-blue)
 ![Solana](https://img.shields.io/badge/Solana-Devnet-purple)
@@ -44,6 +50,9 @@ VaultState (PDA: "vault")
 │   ├── username ([u8; 32]), seeds
 │   ├── entries, wins, cashes, total_won
 │   └── wallet
+│
+├── UsernameRecord (PDA: "username" + lowercased name)   [v0.26, unreleased]
+│   └── owner — a wallet holds the name; the ["vault"] PDA RESERVES it
 │
 ├── Season (PDA: "season" + season_id)
 │   └── name, seed_schedule ([u64; 5]), quest_seeds ([u64; 16]), start_at
@@ -74,6 +83,9 @@ VaultState (PDA: "vault")
 | ContestEntry | `["entry", contest_id, wallet, entry_num (LE bytes)]` |
 | Season | `["season", season_id (u32 LE bytes)]` |
 | EntryTokenAccount | `["entry_token", sha256(source_ref)]` |
+| GovernanceConfig *(v0.26, unreleased)* | `["governance"]` |
+| MintWindow *(v0.26, unreleased)* | `["mint_window", window_index (i64 LE bytes)]` |
+| UsernameRecord *(v0.26, unreleased)* | `["username", name lowercased + zero-padded to 32]` |
 
 ## Instructions
 
@@ -102,6 +114,47 @@ VaultState (PDA: "vault")
 | `cancel_contest` | — | 2-of-3 | Refund the live prize-pool balance to the creator |
 | `close_contest` | — | 1-of-3 | Close settled/cancelled contest accounts and reclaim rent |
 | `sweep_operator_revenue` | `amount` | 2-of-3 | Move operator-revenue funds to the pinned treasury ATA |
+
+### v0.26 (Unreleased) — the username registry
+
+Not in the table above, which describes the deployed v0.25 program.
+
+**One mechanism, not two.** A small PDA per name, keyed on the lowercased form,
+holding the owner: absent means the name is free, a wallet owner means that
+player holds it, and the `["vault"]` PDA as owner means the name is RESERVED.
+So the blocked list is simply the set of names the vault claimed first — no
+list to walk, nothing to resize, and each name pays its own rent. It is the
+same init-as-a-lock technique `mint_entry_token` and `grant_seeds` have used
+since v0.19, applied to names.
+
+| Instruction | Params | Auth | Description |
+|-------------|--------|------|-------------|
+| `overwrite_username` | `username, name_key` | **3** (floor 3) | Rename any user, **without that user's signature**. Emits `UsernameOverwritten`. Waives the reserved-prefix branch; never the charset or length bar |
+| `reserve_username` | `name_key` | **3** (floor 3) | Vault claims a free name — "add to the blocked list" |
+| `release_reserved_username` | `name_key` | **3** (floor 3) | Vault returns a name to the pool — "lift a block". Rent goes to the pinned treasury |
+| `backfill_username_record` | `name_key` | Permissionless payer | Migration only: lock the name a `UserAccount` already displays. No discretion — name and owner both come from the account's own fields |
+
+**Changed:** `create_user_account` and `set_username` each take a `name_key`
+(the username lowercased and zero-padded to 32 bytes — the record's PDA seed,
+so it must be an argument; the handler re-derives it) and claim the record in
+the same transaction. `set_username` additionally CLOSES the record for the
+name given up, refunding its rent to the wallet.
+
+**Deleted:** `admin_create_user_account` and `admin_set_username`. Both had
+zero callers in Turf Monster, and `admin_set_username`'s one job — waiving the
+reserved-prefix rule — now lives on `overwrite_username` at three signatures
+instead of one. It required the renamed user to co-sign, which made it useless
+against the only two things it was ever wanted for.
+
+**Reserved prefixes stay.** A registry is exact-match, so it stops `admin` and
+says nothing about `admin123`. The prefix list catches the lookalikes;
+`xan` is added to it. Two mechanisms, clean division: prefix list = patterns,
+registry = uniqueness and reservations. Homoglyph normalisation and rate
+limiting remain Rails' concerns, deliberately.
+
+**Off-chain derivation:** `scripts/lib/username-key.js`
+(`canonicalKey`, `usernameRecordSeeds`), pinned against the program source by
+`scripts/tests/username-key.test.js`.
 
 ### Settlement Struct
 
@@ -140,6 +193,17 @@ Settlement accounts are passed as `remaining_accounts` — triples of `[user_acc
 | `cashes` | u32 | Lifetime payout finishes |
 | `total_won` | u64 | Lifetime USDC payouts received |
 | `bump` | u8 | PDA bump seed |
+| `username_registered` | u8 | *(v0.26, unreleased)* 1 once the username is locked by a `UsernameRecord`. Carved from the first byte of the reserved padding, so the account size is unchanged and every live account still deserializes |
+
+### UsernameRecord *(v0.26, unreleased)*
+| Field | Type | Description |
+|-------|------|-------------|
+| `owner` | Pubkey | A wallet holds the name; the `["vault"]` PDA means RESERVED. Never the zero key |
+| `name` | [u8; 32] | The canonical (lowercased) name — the same bytes that seed the PDA |
+| `claimed_at` | i64 | Chain time the record was created |
+| `bump` | u8 | PDA bump seed |
+
+97 bytes, about 0.0015 SOL of rent, refunded when the name is given up.
 
 ### Contest
 | Field | Type | Description |

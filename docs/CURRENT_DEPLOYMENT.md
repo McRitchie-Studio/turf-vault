@@ -125,6 +125,25 @@ identically. The absence is the control: it shows the probe discriminates
 rather than matching whatever it is handed. So mainnet dispatches v0.25.0's
 instruction surface, not v0.24.0's and not the unreleased tree's.
 
+> **THE PROBE ABOVE GOES BLIND THE MOMENT v0.26 LANDS — use the second one
+> below from that day on.** v0.26 DELETES `admin_create_user_account` and
+> `admin_set_username`, so after the upgrade every name in that command answers
+> **absent**, including the control. "absent, absent, absent" matches no row in
+> this section, and the natural reading of a probe that finds nothing is that
+> the dump or the command is wrong — not that the binary moved on. Swap the
+> names rather than the conclusion:
+>
+> ```bash
+> ruby -rdigest -e 'b = File.binread("/tmp/mainnet.so"); %w[init_governance set_action_threshold overwrite_username reserve_username backfill_username_record admin_set_username].each { |n| puts "#{n}: #{b.include?(Digest::SHA256.digest("global:#{n}")[0, 8]) ? "PRESENT" : "absent"}" }'
+> ```
+>
+> On a v0.26 binary the first five answer **PRESENT** and `admin_set_username`
+> answers **absent** — and that last one is the control, in the same way
+> `burn_entry_token` was the control for the v0.25 reading: a probe where
+> everything answers PRESENT is a probe that has stopped discriminating. Until
+> the upgrade lands, the v0.25 command above is still the right one and its
+> 2026-09-07 measurement still stands.
+
 The pinned IDL agrees from the other side, and it is the weaker of the two
 readings: `EXPECTED_IDL_HASH` on `turf-monster-mainnet` is the sha256 of
 `turf-monster/config/turf_vault.mainnet.idl.json`, which declares

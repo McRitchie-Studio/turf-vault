@@ -4,6 +4,122 @@ All notable changes to TurfVault are documented here. Format based on [Keep a Ch
 
 ## [Unreleased]
 
+### Added
+
+- **THE USERNAME REGISTRY — UNIQUENESS AND THE BLOCKED LIST AS ONE MECHANISM.**
+
+  **The idea.** A small PDA per name, `[b"username", <name lowercased and
+  zero-padded to 32>]`, holding an owner:
+
+  ```text
+  absent                 the name is free
+  owned by a wallet      that player holds it
+  owned by the VAULT     reserved — nobody can take it
+  ```
+
+  The blocked list is therefore not a second structure; it is the set of names
+  the vault claimed first. Adding a block is `reserve_username`, lifting one is
+  `release_reserved_username`. Nothing to resize, no list to walk, and growth
+  is unbounded because each name pays its own rent (97 bytes, ~0.0015 SOL).
+
+  **It is an existing technique, not a new one.** `mint_entry_token` keys its
+  voucher PDA on `sha256(source_ref)` and `grant_seeds` guards on
+  `[b"seed_grant", …]`; both have used init-as-a-lock for idempotency since
+  v0.19. This applies it to names.
+
+  **Uniqueness had to move on chain.** `set_username.rs` said uniqueness
+  "stays off-chain in Rails" — but a caller who skips Rails skips the check
+  with it, and the whole point of putting the master copy of the username on
+  chain is that the chain is the thing you cannot go around. Homoglyph
+  normalisation and rate limiting DO stay in Rails; the original note was right
+  that those are policy rather than consensus.
+
+  **The reserved-prefix list stays, and gains `xan`.** A registry is
+  exact-match: it stops a second "admin" and says nothing about "admin123". Two
+  mechanisms with a clean division — prefix list = patterns, registry =
+  uniqueness and reservations. `xan` is an operator identity and is not
+  claimable; like every other entry it is a PREFIX, so it also blocks "xanadu",
+  which is the existing design rather than a new behaviour (`mod` has always
+  blocked "modern").
+
+- **`overwrite_username` — three signatures, and the user does NOT sign.**
+  Replaces `admin_set_username`, which required the account OWNER to co-sign.
+  That read like a protection and worked like a dead end: the two cases anyone
+  ever wanted the instruction for are a SQUATTER and a SLUR, and the holder of
+  either has no reason to consent to their own eviction. So it could not do the
+  one job it existed for.
+
+  Removing the signature is safe only because of what replaced it. The agent
+  system reaches two of five signer slots and no more, so three is a number no
+  agent can assemble — and the FLOOR is what keeps that true against a retune.
+
+  **It emits an event on every use.** An instruction that renames people
+  without asking them needs a trail, and an Anchor event is a transaction log
+  line: no rent, no account, no storage. `UsernameOverwritten` records who was
+  renamed, the name before and after, the registry key now held, which vault
+  signer was named, how many signatures the stored table demanded, and when.
+  `UsernameClaimed`, `UsernameReservationCreated` and
+  `UsernameReservationReleased` do the same for the other write paths, which is
+  also what lets an off-chain reconciler follow the log forward instead of
+  enumerating every PDA the program owns.
+
+  It does NOT lock the vacated name — accepted deliberately; `reserve_username`
+  is one more transaction at the same quorum.
+
+- **`backfill_username_record` — the migration, and it needs no signatures.**
+  Permissionless by design rather than by omission: it takes the name AND the
+  owner from the `UserAccount`'s own fields, so it has no discretion and can
+  only assert what the chain already says. It cannot take a name from anybody
+  or give one to anybody; the worst a hostile caller achieves is paying rent to
+  ratify a name its rightful holder already displays.
+
+  Measured on production 2026-09-15: **47 users, 47 with usernames, ZERO
+  case-insensitive duplicates.** So uniqueness switches on retroactively with
+  no reconciliation — about 0.07 SOL of rent in total, refunded to each user
+  when they later rename.
+
+- **Three new governance actions, all floored at three.** `OVERWRITE_USERNAME`
+  (22), `RESERVE_USERNAME` (23), `RELEASE_USERNAME` (24); `gov_action::COUNT`
+  is 25. The floors are unusual on the reserve side, and the reason is a
+  MIGRATION HAZARD rather than a security argument:
+
+  `DEFAULT_THRESHOLDS` starts as `[1u8; 32]` and then overwrites the ids it
+  knows about, so a `GovernanceConfig` bootstrapped by the SIBLING governance
+  binary — which has no ids 22-24 — stores a literal **1** at those indices.
+  Not a zero. `threshold_for` treats zero as "unset" and falls back to the
+  shipped default; it cannot treat a one as unset, and must not, because one is
+  a legitimate retune. On such an account the new defaults would never be read
+  and `overwrite_username` would authorize on ONE signature.
+
+  A floor is applied on READ, which makes it the only mechanism here that
+  cannot be forgotten: no post-upgrade transaction, no runbook step, nothing to
+  remember at 2am. `username_registry_tests` asserts exactly this by writing a
+  table of ones and demanding three back.
+
+  The floors are also right on their own merits — `overwrite_username` renames
+  a non-signing user, and a reservation is a brake, so releasing one is subject
+  to the same asymmetry that makes `unpause` cost more than `pause`.
+
+- **Error codes 6060-6066**, claimed from the range the governance block
+  reserved with three unreachable variants. Anchor assigns codes by POSITION,
+  so without that reservation this branch would have landed on 6057 and shifted
+  every governance code under Rails' integer decoding.
+
+### Removed
+
+- **`admin_create_user_account` and `admin_set_username` are DELETED**, not
+  deprecated. Both were verified to have ZERO callers across `app/`, `lib/`,
+  `bin/` and `db/` in Turf Monster — `admin_create_user_account`'s only mention
+  is a comment in a view describing the deployed instruction set. Nothing to
+  repoint.
+
+  `admin_set_username`'s one real job was waiving the reserved-prefix rule, and
+  that waiver now lives on `overwrite_username` and `reserve_username`, at
+  three signatures instead of one. `gov_action::ADMIN_USERNAME` (17) is RETIRED
+  but stays declared at its shipped default — an action id indexes a stored
+  threshold table, so reusing one would hand a new action whatever number a
+  live account happens to hold at that index.
+
 ### Changed
 
 - **FIVE SIGNER SLOTS, AND A THRESHOLD THAT IS ACTUALLY READ (v0.26).** The
@@ -50,6 +166,23 @@ All notable changes to TurfVault are documented here. Format based on [Keep a Ch
   All signer reads route through one accessor, `VaultState::all_signers()`,
   which concatenates the two arrays and skips empty slots. Nothing outside it
   knows the set is stored in two pieces.
+
+- **`UserAccount` gained a flag and did NOT change size.** `username_registered`
+  is carved from the FIRST byte of `_reserved`, which drops from 32 to 31.
+  `INIT_SPACE` stays 125 and every live account deserializes exactly as before.
+  Appending after `_reserved` would have grown the account by one byte and made
+  all 47 of them too small to load — the same widen-in-place mistake
+  `VaultState`'s offset test exists to catch, in the one place the reserve was
+  still there to spend.
+
+  The flag exists because a rename must CLOSE the record for the name it
+  leaves, or the holder keeps it: claim "alice", rename to "bob" while omitting
+  the old record from the account list, and you hold both for ~0.0015 SOL,
+  repeatable. A program cannot distinguish an account deliberately OMITTED from
+  one that is absent, so "this user has no record yet" had to become a fact
+  stored on chain rather than a claim the caller makes. It reads 0 on every
+  pre-upgrade account, and if it somehow read 1 without a record the failure is
+  a refused rename pointing at `backfill_username_record` — it fails closed.
 
 - **PER-ACTION THRESHOLDS, STORED AS DATA.** New `GovernanceConfig` PDA at
   `[b"governance"]` holding a threshold per action plus the mint-window policy.
