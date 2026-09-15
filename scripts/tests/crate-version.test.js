@@ -143,6 +143,17 @@ function unreleasedBodyBySplit(changelog) {
   return "";
 }
 
+/** `## ` headings naming Unreleased in a form `unreleasedBody` cannot match — anything
+ *  but the live `## [Unreleased]` or the dated historical `## [Unreleased] - <date>`.
+ *  A near-miss is SILENT: both readings return "", so they AGREE and `refusal` takes
+ *  its nothing-unreleased branch while the tree carries the defect this guards. */
+function strayUnreleasedHeadings(changelog) {
+  return changelog
+    .split("\n")
+    .filter((l) => /^## .*[Uu]nreleased/.test(l))
+    .filter((l) => !/^## \[Unreleased\]$/.test(l) && !/^## \[Unreleased\] - \d{4}-\d{2}-\d{2}/.test(l));
+}
+
 function semverParts(v) {
   const m = v.match(/^(\d+)\.(\d+)\.(\d+)$/);
   assert.ok(m, `not a semver triple: ${v}`);
@@ -215,6 +226,12 @@ test("the guard is WIRED to the real file — two independent readings agree", (
     unreleasedBody(changelog),
     unreleasedBodyBySplit(changelog),
     "the two readings of the live [Unreleased] section disagree — one of them is broken"
+  );
+  assert.deepEqual(
+    strayUnreleasedHeadings(changelog),
+    [],
+    "a heading names Unreleased in a form the parser cannot match — measured 2026-09-15: with " +
+      "`## Unreleased` or `## [Unreleased] (next: …)` and the crate un-bumped, this file ran 9/9 GREEN"
   );
 });
 
@@ -289,4 +306,12 @@ test("a RELEASE CUT passes — the heading is renamed away, not emptied", () => 
   // fixture, so this doubles as the proof it is never mistaken for the live section —
   // picking it up would make the empty-section branch unreachable on the real file.
   assert.match(RELEASED_SECTIONS, /^## \[Unreleased\] - 2026-05-18/m);
+
+  // A near-miss FORM reaches that same empty branch from a tree that is NOT at a cut and
+  assert.deepEqual(strayUnreleasedHeadings(cut), [], "the dated historical heading is legal");
+  for (const bad of ["## Unreleased", "## [Unreleased] (next: v0.26)"]) {
+    const planted = ["# Changelog", "", bad, "", "- work", "", RELEASED_SECTIONS].join("\n");
+    assert.equal(refusal("0.25.0", planted), null, "precondition: the near-miss passes vacuously");
+    assert.equal(strayUnreleasedHeadings(planted).length, 1, `not named: ${bad}`);
+  }
 });
