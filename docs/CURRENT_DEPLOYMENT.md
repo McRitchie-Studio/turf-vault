@@ -245,10 +245,67 @@ this yourself** B, decoding the same offsets — deliberately, so a rotation and
 this reference cannot disagree about what the vault holds. Change one and change
 the other.
 
-`VaultState`'s in-program 2-of-3 is a separate mechanism from the Squads vault that holds the program upgrade authority. Both are 2-of-3; they are not the same multisig.
+`VaultState`'s in-program 2-of-3 is a separate mechanism from the Squads vault
+that holds the program upgrade authority, and **they no longer even have the same
+shape**. `VaultState` is still 2-of-3 with the signers listed in the tables above;
+both Squads multisigs are 3-of-5 as of 2026-09-15. Two multisigs, two vocabularies
+— see **Squads Governance** below, and read `scripts/squad.json`'s `_members_are`
+note before touching that file.
+
+## Squads Governance — who can upgrade, per cluster
+
+**Do not read the membership out of this section.** It is a snapshot, it changed
+twice on 2026-09-15 alone, and every written copy of it has gone stale faster than
+anyone re-read it. The live answer is one command:
+
+```bash
+node scripts/squad-inventory.js              # both clusters, read-only, no keys
+node scripts/squad-inventory.js --cluster=mainnet
+```
+
+What it reports, and what the numbers mean, as of **2026-09-15**:
+
+| Cluster | Multisig | Threshold | Agent-held seats | An upgrade run would |
+|---------|----------|-----------|------------------|----------------------|
+| devnet | `7nRuVw3VZFC6z85tYVDitPnaUHZCkqLpJRSTBNtPmtZB` | 3 of 5 | 3 — `system.devnet` `2eGs8G3w…`, `admin` `BLSBw8fX…`, Xan `8K81w4e6…` | run **AUTONOMOUS**, end to end |
+| mainnet | `4H3fP3otjMtupk1DQDjKXYY1dWjT6LNM4H4ZWZ1XcKSX` | 3 of 5 | 2 — `system` `7auwTLSv…`, `admin` `BLSBw8fX…` | **HAND OFF** one approval and the execute to Mr. McRitchie |
+
+**The asymmetry is the design, not a gap.** Devnet is meant to run unattended;
+mainnet is meant to need Mr. McRitchie. His three wallets — `7ZDJp7FU…` (Alex
+Phantom), `3Qj4v9qj…` (Alex two), `9gACbz…` (Alex three) — sit on mainnet, and any
+one of them closes the mainnet quorum. Mainnet crossing into AUTONOMOUS is a
+governance regression to investigate, and devnet falling out of it is a broken
+automation lane; `squad-inventory.js` prints either in one line.
+
+Every seat holds mask 7 (Initiate|Vote|Execute) today, so any agent seat can open
+a transaction and cast a vote. Confirm rather than assume — the mask, not the
+membership, is what decides whether a seat can do the step being asked of it.
+
+**Retired 2026-09-15, with Mr. McRitchie's authorization:** Xan `8K81w4e6…` off
+mainnet (still seated on devnet) and Mason `CytJS23p…` off both. Neither is a
+Squads member on the cluster the old tooling named them for. They remain
+`VaultState` signers, which is a different multisig — see above.
+
+The scripts that ran that rotation are preserved in
+[`scripts/ceremony/`](../scripts/ceremony/README.md), with what each one did and
+the three failure modes they found the hard way. They are a record, not a
+toolkit: each validates its plan against live membership and now refuses.
 
 ## Upgrade Rule
 
-`anchor deploy` is not the upgrade path for an existing deployed program under Squads authority. Build the program, write a buffer, set the buffer authority to the Squads vault PDA, then execute the upgrade through `scripts/squad-upgrade.js`.
+`anchor deploy` is not the upgrade path for an existing deployed program under
+Squads authority. Build the program, write a buffer, set the buffer authority to
+the Squads vault PDA, then execute the upgrade through `scripts/squad-upgrade.js`:
 
-After any upgrade, re-pin Turf Monster from the built IDL, not from `anchor idl fetch`; Squads upgrades do not update the on-chain IDL account.
+```bash
+node scripts/squad-upgrade.js --cluster=mainnet <BUFFER_ADDR>          # dry run
+node scripts/squad-upgrade.js --cluster=mainnet <BUFFER_ADDR> --send   # armed
+```
+
+`--cluster` is required and has no default; the run is a dry run until `--send`.
+A dry run reads no key material at all, so it is free to run before the buffer
+even exists — which is the order the money wants, because a mainnet buffer costs
+~2.76 SOL to write.
+
+After any upgrade, re-pin Turf Monster from the built IDL, not from `anchor idl
+fetch`; Squads upgrades do not update the on-chain IDL account.

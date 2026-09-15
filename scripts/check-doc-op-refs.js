@@ -52,7 +52,17 @@ const path = require("path");
 const { execFileSync } = require("child_process");
 
 const ROOT = path.resolve(__dirname, "..");
-const AGENT_VAULT_EXPANSION = "${MCR_OP_VAULT_AGENT:-agents-studio}";
+// THE DEFAULT IS `studio-agents`, AND THE ORDER OF THOSE TWO WORDS MATTERS.
+// It must match mcritchie-studio's bin/lib/op_vaults.rb, which is the single
+// source for lane -> vault: LANES[:agent][:default_vault] == "studio-agents".
+// This constant read `agents-studio` from 2026-08-29 until 2026-09-15 — a
+// transposition, not a rename — so every prose command in this repo defaulted to
+// a vault that does not exist on any machine, and `op` answers that with
+// `"agents-studio" isn't a vault in this account`. The STATIC check could never
+// catch it: it compares each reference against this constant, so the constant
+// and the prose agreed with each other and disagreed with 1Password. Only
+// `--live` reaches the real vault, and CI has no credential to run it.
+const AGENT_VAULT_EXPANSION = "${MCR_OP_VAULT_AGENT:-studio-agents}";
 const SKIP_DIRS = new Set([
   "node_modules",
   "target",
@@ -116,7 +126,8 @@ function main() {
           vault
         )}. ` +
           `Use op://${AGENT_VAULT_EXPANSION}/... — a literal breaks fleet-wide on the next ` +
-          `rename, exactly as "agents" did on 2026-08-28.`
+          `rename, exactly as "agents" did on 2026-08-28. If the literal you see is ` +
+          `"agents-studio", it is the 2026-09-15 transposition: the vault is "studio-agents".`
       );
       continue;
     }
@@ -131,7 +142,14 @@ function main() {
   }
 
   if (live && problems.length === 0) {
-    const vault = process.env.MCR_OP_VAULT_AGENT || "agents-studio";
+    // DERIVED from AGENT_VAULT_EXPANSION, never re-typed. A second literal of
+    // the default is how the 2026-09-15 transposition survived its own fix: the
+    // constant was corrected and this line still said "agents-studio", so
+    // `--live` kept resolving against a vault that does not exist while the
+    // static pass reported three references OK.
+    const vault =
+      process.env.MCR_OP_VAULT_AGENT ||
+      AGENT_VAULT_EXPANSION.replace(/^\$\{[^:]+:-/, "").replace(/\}$/, "");
     for (const r of refs) {
       const resolved = r.ref.replace(AGENT_VAULT_EXPANSION, vault);
       try {

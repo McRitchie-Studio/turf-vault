@@ -345,9 +345,10 @@ program or the deploy scripts rather than adding a workflow:
   two of which need real logic changes. They still print as warnings in the
   `program` job, so the debt stays visible.
 - **`npm run lint`** (Prettier) — two scripts are unformatted, and reformatting
-  `scripts/squad-upgrade.js` turns its 219 lines into 326: a 107-line diff across
-  the mainnet upgrade path (re-measured 2026-09-13 by running `npx prettier`
-  against the checked-in file). Note that its glob also covers `tests/turf_vault.ts`, so
+  `scripts/squad-upgrade.js` produces a large diff across the mainnet upgrade
+  path. The 219→326-line figure recorded here on 2026-09-13 no longer describes
+  the file: the 2026-09-15 rewrite replaced it wholesale, so re-measure with
+  `npx prettier --check scripts/squad-upgrade.js` before quoting a number. Note that its glob also covers `tests/turf_vault.ts`, so
   wiring this lane makes the suite READ for the first time: expect
   `scripts/tests/anchor-suite-lane.test.js` to go red, and update the sections it
   names in the same change.
@@ -381,7 +382,9 @@ less than the verdict it is credited against), or a lane only the script runs
 
 ### Deploy
 
-The program upgrade authority is a Squads V4 2-of-3 multisig (OPSEC-002, 2026-05-19), so **`anchor deploy` is not the upgrade path for an existing deployed program**. Upgrades go through the Squad via `scripts/squad-upgrade.js`; see [`docs/CURRENT_DEPLOYMENT.md`](docs/CURRENT_DEPLOYMENT.md) for the current authority and upgrade rule.
+The program upgrade authority is a Squads V4 multisig (OPSEC-002, 2026-05-19), so **`anchor deploy` is not the upgrade path for an existing deployed program**. Upgrades go through the Squad via `scripts/squad-upgrade.js --cluster=<devnet|mainnet> <BUFFER>`, which is a dry run until `--send`.
+
+Both multisigs are **3-of-5** as of 2026-09-15, and deliberately asymmetric: the agent holds three devnet seats and can upgrade devnet alone, but only two mainnet seats, so a mainnet run creates the transaction, casts what it can, and **stops for Mr. McRitchie's approval**. `node scripts/squad-inventory.js` reads both multisigs and says which path an upgrade would take. See [`docs/CURRENT_DEPLOYMENT.md`](docs/CURRENT_DEPLOYMENT.md) for the current authority and upgrade rule.
 
 ```bash
 # Verify the deployed program
@@ -401,7 +404,7 @@ Each deploy is tagged (e.g. `v0.1.0`) and documented in the changelog. See `Carg
 ## Security
 
 - **2-of-3 multisig**: Treasury/governance ops (`settle_contest`, `cancel_contest`, `sweep_operator_revenue`, currency registry changes, pause/unpause, signer rotation) require two distinct signers; routine ops require any 1-of-3
-- **Squads upgrade authority**: Program upgrades require a Squads V4 2-of-3 cosign (OPSEC-002) — no single-key code deployment
+- **Squads upgrade authority**: Program upgrades require a Squads V4 cosign (OPSEC-002) — no single-key code deployment. Both clusters are 3-of-5 since 2026-09-15; on mainnet the agent holds only two seats, so a mainnet upgrade cannot complete without Mr. McRitchie
 - **PDA verification**: Settlement uses manual PDA derivation to verify all remaining accounts
 - **Checked arithmetic**: All math uses `checked_add`/`checked_sub` with overflow errors
 - **Payout cap**: Settlement validates total payouts ≤ `prize_pool`

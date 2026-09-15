@@ -169,8 +169,12 @@ control named without them buys confidence it has not earned.
 2. **A hand-run local-validator proof**, stamped with its date and its passing
    count under [Baseline Commands](#baseline-commands) in this file.
 3. **The rollout gate** — the program is upgraded by hand through
-   `scripts/squad-upgrade.js` against a Squads 2-of-3 multisig, and this matrix
-   is the checklist that upgrade is read against.
+   `scripts/squad-upgrade.js` against a Squads multisig (3-of-5 on both clusters
+   since 2026-09-15), and this matrix is the checklist that upgrade is read
+   against. On mainnet that script cannot finish the upgrade: it holds two of the
+   five seats, so it creates the transaction, casts what it can, and stops for
+   Mr. McRitchie. **That pause is part of the gate, not an obstacle to it** — it
+   is where a human reads this matrix.
 
 ### What it covers
 
@@ -214,15 +218,22 @@ control named without them buys confidence it has not earned.
   other 4 are controls that fail if the guard's comment stripper, its step
   extractor, its Prettier premise or its own doc citations stop working, so it
   cannot pass by reading nothing.
-  The last 29 are the four files added since that split was measured, counted
-  2026-09-14 but not otherwise re-analysed here: 14 in
-  `scripts/tests/squad-roles.test.js` (who may sign each upgrade step, graded
-  against the planner), 5 in `scripts/tests/squad-upgrade-flow.test.js` (the real
-  `scripts/squad-upgrade.js` executed end to end against stubs), 5 in
+  The rest are the upgrade-path files, recounted 2026-09-15 after the Squads
+  rewrite: 13 in `scripts/tests/squad-roles.test.js` (which of the two behaviours
+  a run takes, graded against the planner, including the three cases that are
+  still refusals), 14 in `scripts/tests/squad-upgrade-flow.test.js` (the real
+  `scripts/squad-upgrade.js` executed end to end against stubs — and the only
+  place the autonomous and handoff paths are proven to be two), 15 in
   `scripts/tests/squad-upgrade-signers.test.js` (which member each call in that
-  script names), and 5 in `scripts/tests/release-check-covers-ci.test.js`, which
-  holds `bin/release-check` — the local gate the studio's cert now runs for this
-  repo — identical to the lanes this workflow runs.
+  script names, and that no retired identity has crept back in), 19 in
+  `scripts/tests/upgrade-instruction.test.js` (the read-back that refuses to
+  approve a transaction that is not the planned upgrade, graded field by field),
+  16 in `scripts/tests/squad-clusters.test.js` (which chain, which addresses, and
+  the two vocabularies inside `squad.json`), and 5 in
+  `scripts/tests/release-check-covers-ci.test.js`, which holds `bin/release-check`
+  — the local gate the studio's cert now runs for this repo — identical to the
+  lanes this workflow runs. `npm run test:scripts` reported **132 passing** on
+  2026-09-15; re-derive rather than trust the number.
 - `npm run check:doc-op-refs` fails on a stale 1Password vault reference in this
   repo's prose.
 
@@ -259,18 +270,28 @@ control named without them buys confidence it has not earned.
   What it still does NOT reach is `tests/turf_vault.ts`: that needs a validator,
   and no lane starts one.
 - **The script that performs the upgrade is exercised now, but never against a
-  chain.** `scripts/squad-upgrade.js` is leg 3 of this very control — the 219
-  lines that propose, approve and execute the buffer upgrade against the Squads
-  2-of-3 vault. Until 2026-09-13 no test ran a line of it (measured 2026-09-08:
+  chain.** `scripts/squad-upgrade.js` is leg 3 of this very control — the script
+  that proposes, approves and (on devnet) executes the buffer upgrade against the
+  Squads vault. Until 2026-09-13 no test ran a line of it (measured 2026-09-08:
   the only occurrence of `squad-upgrade` under `scripts/tests/` was a COMMENT at
-  `mainnet-config.test.js:114`). /tasks/narrow-bot-squads-permissions added
-  three suites: the signer planner's refusals, a text scan of who each call
-  names, and an END-TO-END run of the real script with `@solana/web3.js` and
-  `@sqds/multisig` replaced in the module loader. **What that still is not:** no transaction is
-  built against a validator and none is sent, so the upgrade's on-chain
-  behaviour — whether the vault PDA can actually authorise the BPF `upgrade` —
-  remains proved only by having been run by hand on devnet. The rent-payer file
-  self-skips wherever `node_modules` is absent, which is CI's `guards` lane.
+  `mainnet-config.test.js:114`). /tasks/narrow-bot-squads-permissions added three
+  suites; /tasks/upgrade-script-names-retired-keys rewrote them for the two-mode
+  script and added two more — the read-back comparison and the cluster table.
+  **What that still is not:** no transaction is built against a validator and
+  none is sent, so the upgrade's on-chain behaviour — whether the vault PDA can
+  actually authorise the BPF `upgrade` — remains proved only by having been run
+  by hand on devnet. Two files self-skip wherever `node_modules` is absent, which
+  is CI's `guards` lane: the rent-payer file, and the discriminator cross-check
+  in `squad-clusters.test.js`.
+
+  **What IS proved against the real chain, read-only.** On 2026-09-15 the
+  rewritten script's read-back was run against devnet Squads transaction index
+  13 — a genuine past upgrade — and matched the reconstructed plan exactly; run
+  against the same index with a different buffer it refused, naming the field;
+  and run against index 11, a config transaction, it refused as "a config
+  transaction changes the multisig's MEMBERSHIP or THRESHOLD". Those are dry
+  runs: nothing was signed or sent. Re-derive with
+  `node scripts/squad-upgrade.js --cluster=devnet <BUFFER> --index=13`.
 - **The stamp ages, and nothing notices.** The local proof records a TREE, not
   `HEAD`. Between stamps no run re-checks it, and this file cannot tell you
   whether the tree it stamped is the tree you are about to upgrade from. The
