@@ -68,7 +68,7 @@ thing.
 > absence for as long as nothing ran them.
 >
 > The unit lanes ARE current and did run on this tree — see `bin/release-check`
-> below, now **48 `cargo test` cases** (was 19) and **79 `node:test` cases**.
+> below, now **48 `cargo test` cases** (was 19) and **170 `node:test` cases**.
 > They carry the registry's uniqueness and threshold properties; what they
 > cannot carry is whether the instructions reach them, which is what the
 > unstamped Anchor cases exist to prove.
@@ -237,10 +237,13 @@ not earned, so the gaps below are kept even where they shrank.
   drifted from `Cargo.toml`.
 - `cargo clippy … -D clippy::correctness` fails on code clippy classes as
   outright wrong.
-- `cargo test --workspace --locked` is a real executing suite, new in v0.26: 19
-  assertions in `programs/turf_vault/src/governance_tests.rs`, covering the
-  `VaultState` field offsets, the migration-safety case, the N-of-M threshold,
-  the floors, and the 6046-6059 error boundary. It is the lane `cargo check`
+- `cargo test --workspace --locked` is a real executing suite, new in v0.26:
+  **48 cases** (measured 2026-09-15; the bullet said 19 while
+  `username_registry_tests.rs` was adding 29 more) across
+  `programs/turf_vault/src/governance_tests.rs` and
+  `username_registry_tests.rs`, covering the `VaultState` field offsets, the
+  migration-safety case, the N-of-M threshold, the floors, the 6046-6059 error
+  boundary, and the registry's key canonicalization and reservation rules. It is the lane `cargo check`
   cannot substitute for, because `--all-targets` compiles test code without
   running it.
 - `npm run test:scripts` is a real executing suite: 170 `node:test` cases across
@@ -329,8 +332,9 @@ not earned, so the gaps below are kept even where they shrank.
   previously read "a Rust test lane would add nothing today — `programs/`
   carries zero `#[test]` functions", which was true when written and stopped
   being true in the same change that added `cargo test` to `ci.yml` and
-  `bin/release-check`. `programs/turf_vault/src/governance_tests.rs` now holds
-  19 assertions, and `lib.rs` declares the module.
+  `bin/release-check`. `programs/turf_vault/src/governance_tests.rs` and
+  `username_registry_tests.rs` now hold 48 cases between them, and `lib.rs`
+  declares both modules.
 
   **`cargo check` was never enough for them.** `--all-targets` COMPILES test
   targets; it runs none. So a repo with unit tests and no `cargo test` lane
