@@ -1,5 +1,7 @@
 use anchor_lang::prelude::*;
 
+use crate::errors::VaultError;
+
 // ──────────────────────────────────────────────────────────────────────────
 // Program-wide constants (compile-time, immutable)
 // ──────────────────────────────────────────────────────────────────────────
@@ -15,6 +17,16 @@ use anchor_lang::prelude::*;
 //   default (devnet) — uses devnet test mints
 //   --features mainnet — uses canonical mainnet USDC + USDT mints
 // ──────────────────────────────────────────────────────────────────────────
+
+/// Maximum number of multisig signer slots the vault can hold.
+///
+/// FIVE IS A HARD CEILING SET BY THE ACCOUNT, not a policy choice. `VaultState`
+/// had exactly 64 reserved bytes and a Pubkey is 32, so two appended slots
+/// consume the reserve precisely. A sixth slot would have to grow the account,
+/// which for a `zero_copy` singleton means a realloc + a migration instruction
+/// and a window in which the vault is half-written. Raise this ONLY together
+/// with that migration.
+pub const MAX_SIGNERS: usize = 5;
 
 /// Maximum number of currencies in the on-chain registry. Capped at 16 to
 /// keep `accepted_currencies` at 1280 bytes (16 × 80) and `entry_fee_by_currency`
@@ -105,59 +117,164 @@ unsafe impl anchor_lang::__private::bytemuck::Zeroable for AcceptedCurrency {}
 // Accounts
 // ──────────────────────────────────────────────────────────────────────────
 
-/// Singleton vault account. Holds the 2-of-3 multisig signer set, the
-/// pinned payout mint (USDC), the per-currency registry, a treasury
-/// authority pin (Squads vault PDA), and a pause flag.
+/// Singleton vault account. Holds the multisig signer set (up to
+/// `MAX_SIGNERS`), the pinned payout mint (USDC), the per-currency registry,
+/// a treasury authority pin, and a pause flag.
 ///
 /// PDA seeds: [b"vault"]
 ///
-/// Zero-copy: VaultState is too large (~1475 data bytes) to deserialize
+/// Zero-copy: VaultState is too large (~1507 data bytes) to deserialize
 /// onto BPF's 4KB stack via borsh. Anchor's `#[account(zero_copy)]` maps
 /// the account data buffer directly as a typed reference via bytemuck::Pod,
 /// avoiding the full-struct stack alloc that borsh's deserialize_reader
 /// would perform.
 ///
+/// ── LAYOUT IS POSITIONAL. READ THIS BEFORE EDITING A FIELD ────────────────
+///
+/// `zero_copy(unsafe)` + `#[repr(C)]` means every field's OFFSET is its
+/// identity. There is no name-keyed decode and no version tag: the program
+/// reads byte range 96..97 and calls it `threshold` because that is where
+/// `threshold` sits, not because anything on chain says so.
+///
+/// So a field may only ever be APPENDED, never inserted and never widened in
+/// place. v0.26 needed two more signer slots and the tempting edit was
+/// `signers: [Pubkey; 3]` → `[Pubkey; 5]`. That single character shifts
+/// `threshold`, `bump`, `paused`, `payout_mint`, `treasury_authority` and the
+/// entire 1280-byte currency registry 64 bytes to the right — and it COMPILES,
+/// DEPLOYS, AND RUNS. The live vaults on devnet and mainnet would then be read
+/// with `threshold` taken from the first byte of what is physically signer[3],
+/// `payout_mint` taken from the middle of the old treasury pin, and the
+/// currency registry off by 64 bytes. Nothing would error; the vault would
+/// simply mean something else.
+///
+/// The slots were therefore APPENDED as `signers_ext`, carved out of the
+/// 64 reserved bytes at the tail. Every pre-existing offset is unchanged,
+/// `size_of::<VaultState>()` is unchanged at 1507, and the account needs no
+/// realloc and no migration instruction. `scripts/check-reserved.js` proved
+/// those 64 bytes were ALL ZERO on both clusters before the claim, which is
+/// what makes the read safe: on a vault that has not yet been rotated the two
+/// new slots decode as `Pubkey::default()` — exactly the "empty slot"
+/// sentinel `all_signers()` skips. The upgrade is therefore behaviour-neutral
+/// on deploy; the signer set changes only when a human later runs the
+/// rotation ceremony.
+///
+/// THE RESERVE IS NOW FULLY CONSUMED. A future field cannot be carved from
+/// this account — it needs a PDA of its own, which is why the per-action
+/// threshold table lives in `GovernanceConfig` and the mint cap counter in
+/// `MintWindow` rather than here.
+///
 /// `paused` is u8 (0/1) rather than bool for Pod safety.
 #[account(zero_copy(unsafe))]
 #[repr(C)]
 pub struct VaultState {
-    /// The three multisig signers. 1-of-3 can run routine ops; 2-of-3
-    /// needed for treasury ops (settle, register/deactivate_currency,
-    /// cancel_contest, sweep_operator_revenue, pause/unpause).
-    pub signers: [Pubkey; 3],                          //   96
-    /// Number of distinct signatures required for treasury ops. Currently 2.
-    pub threshold: u8,                                 //    1
+    /// The first three multisig signer slots. Historically the WHOLE set;
+    /// since v0.26 the set is `signers` ++ `signers_ext`, read through
+    /// `all_signers()`. OFFSET 0 — never move, never widen (see above).
+    pub signers: [Pubkey; 3],                          //   96  @0
+    /// LEGACY global threshold, written once by `initialize`. Since v0.26 the
+    /// authoritative numbers are PER-ACTION and live in `GovernanceConfig`;
+    /// this field is retained only because moving it would shift every field
+    /// below it. Nothing reads it for authorization.
+    pub threshold: u8,                                 //    1  @96
     /// PDA bump.
-    pub bump: u8,                                      //    1
+    pub bump: u8,                                      //    1  @97
     /// Emergency pause flag. When 1, enter_contest and
     /// enter_contest_with_token return VaultPaused. Other ops remain
     /// available so operators can wind down in-flight state.
     /// u8 instead of bool for Pod safety (zero-copy compatibility).
-    pub paused: u8,                                    //    1
+    pub paused: u8,                                    //    1  @98
     /// Payout mint — pinned at `initialize`, immutable thereafter.
     /// All `settle_contest` / `cancel_contest` / `close_contest` flows
     /// constrain this. In a mainnet build, must equal EXPECTED_USDC_MINT.
-    pub payout_mint: Pubkey,                           //   32
+    pub payout_mint: Pubkey,                           //   32  @99
     /// Squads vault PDA — pinned at `initialize`. `sweep_operator_revenue`
-    /// enforces `treasury_ata.owner == treasury_authority`, so leaked admin
-    /// keys can't drain swept revenue elsewhere.
-    pub treasury_authority: Pubkey,                    //   32
+    /// enforces `treasury_ata.owner == treasury_authority`, and since v0.26
+    /// `close_contest` pays reclaimed rent here rather than to its caller.
+    pub treasury_authority: Pubkey,                    //   32  @131
     /// On-chain currency registry. Slot 0 holds the payout currency (USDC),
     /// slot 1 holds USDT, slots 2-15 are populated via `register_currency`.
-    pub accepted_currencies: [AcceptedCurrency; 16],   // 1280
-    /// Reserved padding for forward-compat (governance, fee policy, etc.).
-    pub _reserved: [u8; 64],                           //   64
+    pub accepted_currencies: [AcceptedCurrency; 16],   // 1280  @163
+    /// Signer slots 4 and 5 (v0.26). APPENDED into what was `_reserved`, so
+    /// every offset above is untouched and the account size is unchanged.
+    /// `Pubkey::default()` means the slot is EMPTY — which is how a vault
+    /// deployed but not yet rotated reads, and why this upgrade changes no
+    /// behaviour until the rotation ceremony runs.
+    ///
+    /// Slots are LEFT-PACKED: `update_signers` refuses a set with a gap, so
+    /// "empty" can only ever be a suffix and `all_signers()` cannot silently
+    /// skip a live key.
+    pub signers_ext: [Pubkey; 2],                      //   64  @1443
+    /// Reserve EXHAUSTED by `signers_ext` (v0.26). Kept at length zero so the
+    /// next reader sees, in the layout itself, that there is nothing left to
+    /// carve: a new field needs its own PDA.
+    pub _reserved: [u8; 0],                            //    0  @1507
 }
 
 impl VaultState {
-    /// Any signer can perform routine ops (single-signer).
-    pub fn is_signer(&self, key: &Pubkey) -> bool {
-        self.signers.contains(key)
+    /// Every signer slot the vault holds, in order, with EMPTY slots skipped.
+    ///
+    /// This is the ONLY place that knows the set is stored in two pieces.
+    /// `signers` and `signers_ext` are never read directly for authorization
+    /// anywhere else in the program — route new checks through here (or
+    /// through `is_signer` / `authorize`, which both do) so a rotated 5-slot
+    /// vault and a never-rotated 3-slot vault behave identically.
+    pub fn all_signers(&self) -> impl Iterator<Item = &Pubkey> {
+        self.signers
+            .iter()
+            .chain(self.signers_ext.iter())
+            .filter(|k| **k != Pubkey::default())
     }
 
-    /// Treasury ops require `threshold` distinct signers (currently 2-of-3).
-    pub fn validate_multisig(&self, s1: &Pubkey, s2: &Pubkey) -> bool {
-        s1 != s2 && self.is_signer(s1) && self.is_signer(s2)
+    /// How many signer slots are occupied (1..=MAX_SIGNERS).
+    pub fn active_signer_count(&self) -> u8 {
+        self.all_signers().count() as u8
+    }
+
+    /// Is `key` a member of the active signer set?
+    ///
+    /// The `Pubkey::default()` guard is not redundant with the filter in
+    /// `all_signers`: it states the invariant at the point a caller could
+    /// otherwise pass the zero key and match an empty slot if the filter were
+    /// ever relaxed. The zero key is never a signer.
+    pub fn is_signer(&self, key: &Pubkey) -> bool {
+        *key != Pubkey::default() && self.all_signers().any(|s| s == key)
+    }
+
+    /// Genuine N-of-M: `keys` must hold at least `required` DISTINCT members
+    /// of the active signer set.
+    ///
+    /// This REPLACES the v0.16 `validate_multisig(s1, s2)`, which was
+    /// `s1 != s2 && is_signer(s1) && is_signer(s2)` — structurally exactly two
+    /// signatures, and it NEVER READ `self.threshold`. The threshold field was
+    /// decorative for the program's entire life: a vault storing `threshold: 3`
+    /// still authorized treasury operations on two signatures, and the docs
+    /// said 2-of-3 because two was all the code could ever mean.
+    ///
+    /// Callers do not invoke this directly — they go through
+    /// `instructions::governance::authorize`, which collects the signing keys
+    /// and looks the per-action `required` up in `GovernanceConfig`.
+    pub fn validate_threshold(&self, keys: &[Pubkey], required: u8) -> Result<()> {
+        require!(required >= 1, VaultError::GovernanceThresholdInvalid);
+
+        let mut distinct = 0u8;
+        let mut seen: [Pubkey; MAX_SIGNERS] = [Pubkey::default(); MAX_SIGNERS];
+
+        for key in keys.iter() {
+            require!(self.is_signer(key), VaultError::Unauthorized);
+            // Reject a repeat of a key already counted — N signatures from one
+            // keypair is one signature. `seen` is bounded by MAX_SIGNERS
+            // because a distinct member of the set cannot exceed it.
+            require!(
+                !seen[..distinct as usize].contains(key),
+                VaultError::DuplicateSigner
+            );
+            require!((distinct as usize) < MAX_SIGNERS, VaultError::DuplicateSigner);
+            seen[distinct as usize] = *key;
+            distinct += 1;
+        }
+
+        require!(distinct >= required, VaultError::InsufficientSigners);
+        Ok(())
     }
 }
 
@@ -187,8 +304,33 @@ pub struct UserAccount {
     pub total_won: u64,           //  8
     /// PDA bump.
     pub bump: u8,                 //  1
+    /// 1 once this account's `username` is locked by a `UsernameRecord`.
+    ///
+    /// ── WHY A FLAG, AND WHY IT COSTS NO BYTES ─────────────────────────────
+    ///
+    /// A rename must CLOSE the record for the old name, or a user simply keeps
+    /// it: claim "alice", rename to "bob" while omitting the old record from
+    /// the account list, and now hold both — at about 0.0015 SOL a name, which
+    /// is not a deterrent. The old record is therefore a required account on
+    /// the rename path. But a program cannot prove an account was OMITTED
+    /// rather than absent, so "the user has no record yet" had to become a fact
+    /// stored on chain rather than a claim made by the caller.
+    ///
+    /// It is carved from the FIRST BYTE of `_reserved`, which drops to 31. For
+    /// a Borsh `#[account]` what matters is field ORDER and total size, and
+    /// both are unchanged: `INIT_SPACE` stays 125 and every live account
+    /// deserializes exactly as before. Appending after `_reserved` would have
+    /// grown the account by one byte and made every existing one too small to
+    /// load — the mistake `VaultState`'s layout test exists to catch, in the
+    /// one place the reserve was still there to spend.
+    ///
+    /// Reads 0 on all 47 production accounts (created at v0.16+, which zeroes
+    /// the reserve). And if it somehow read 1 on an account with no record, the
+    /// failure is a REFUSED RENAME pointing at `backfill_username_record`, not
+    /// a lost name — the flag fails closed.
+    pub username_registered: u8,  //  1
     /// Reserved padding for forward-compat (referral, kyc tier, etc.).
-    pub _reserved: [u8; 32],      // 32
+    pub _reserved: [u8; 31],      // 31
 }
 
 /// Lifecycle of a Contest.
@@ -430,4 +572,432 @@ pub struct SeedGrant {
     pub bump: u8,             //  1
     /// Reserved padding for forward-compat.
     pub _reserved: [u8; 16],  // 16
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Governance — per-action thresholds, stored as DATA
+// ──────────────────────────────────────────────────────────────────────────
+
+/// Governance action ids. These index `GovernanceConfig.thresholds`, so the
+/// numbers are PERMANENT: changing one silently re-points a stored threshold
+/// at a different action. Append new actions at the end and never renumber —
+/// the same discipline `errors.rs` keeps, and for the same reason.
+pub mod gov_action {
+    pub const SETTLE_CONTEST: u8 = 0;
+    pub const CANCEL_CONTEST: u8 = 1;
+    pub const SWEEP_OPERATOR_REVENUE: u8 = 2;
+    pub const REGISTER_CURRENCY: u8 = 3;
+    pub const DEACTIVATE_CURRENCY: u8 = 4;
+    pub const PAUSE: u8 = 5;
+    pub const UNPAUSE: u8 = 6;
+    pub const UPDATE_SIGNERS: u8 = 7;
+    pub const CREATE_SEASON: u8 = 8;
+    pub const CLOSE_CONTEST: u8 = 9;
+    pub const SET_CONTEST_LOCK_TIME: u8 = 10;
+    pub const SET_CONTEST_CONCLUSION_TIME: u8 = 11;
+    /// A mint that stays WITHIN the current window's cap.
+    pub const MINT_ENTRY_TOKEN: u8 = 12;
+    /// A mint that would take the current window ABOVE its cap.
+    pub const MINT_ENTRY_TOKEN_OVER_CAP: u8 = 13;
+    pub const BURN_ENTRY_TOKEN: u8 = 14;
+    pub const GRANT_SEEDS: u8 = 15;
+    /// Retuning the table itself, and the mint-window policy.
+    pub const SET_GOVERNANCE: u8 = 16;
+    /// RETIRED in the username-registry change: both instructions that read
+    /// this id (`admin_create_user_account`, `admin_set_username`) were
+    /// DELETED. The id itself can never be reused — it indexes a stored
+    /// threshold table, and re-pointing it at a new action would silently
+    /// hand that action whatever number a live account happens to hold here.
+    /// It stays declared, at its shipped default, exactly like the retired
+    /// error codes in `errors.rs`.
+    pub const ADMIN_USERNAME: u8 = 17;
+    /// Creating a contest (the vault-signer half; the creator signs too).
+    pub const CREATE_CONTEST: u8 = 18;
+    /// Facilitating a user entry (the vault-signer half; the player signs too).
+    pub const ENTER_CONTEST: u8 = 19;
+    /// RE-OPENING an entry window whose lock has already PASSED. Escalated
+    /// above the ordinary reschedule because it is the results-known
+    /// late-entry vector: by the time a lock has engaged, outcomes may be
+    /// knowable, and moving the lock forward lets an entry in against them.
+    pub const SET_CONTEST_LOCK_TIME_REOPEN: u8 = 20;
+    /// AMENDING an already-set conclusion. Same vector one step back: the
+    /// conclusion is what makes a lock final, so clearing or postponing it
+    /// re-arms the re-open above.
+    pub const SET_CONTEST_CONCLUSION_TIME_AMEND: u8 = 21;
+
+    // ── The username registry ─────────────────────────────────────────────
+    /// Rename any user WITHOUT that user's consent. The consent requirement is
+    /// what made the old `admin_set_username` useless against the two cases it
+    /// was wanted for — a squatter and a slur — because both are held by
+    /// someone with no reason to co-sign their own eviction. Removing consent
+    /// is safe only because the number is high enough that no agent can reach
+    /// it alone, which is why this one carries a FLOOR (see `THRESHOLD_FLOORS`).
+    pub const OVERWRITE_USERNAME: u8 = 22;
+    /// The vault claims a free name for itself — "add to the blocked list".
+    pub const RESERVE_USERNAME: u8 = 23;
+    /// The vault gives a name it holds back to the pool — "lift a block".
+    pub const RELEASE_USERNAME: u8 = 24;
+
+    /// One past the highest live action id.
+    pub const COUNT: usize = 25;
+}
+
+/// Stored width of the threshold table. Wider than `gov_action::COUNT` so new
+/// actions can be added by a program upgrade without resizing the account.
+pub const GOV_TABLE_LEN: usize = 32;
+
+/// The thresholds this program ships with, indexed by `gov_action`.
+///
+/// These are DEFAULTS, not constants in the authorization path — the stored
+/// table wins wherever it is non-zero. Shipping a default for every action is
+/// what lets `threshold_for` treat a zero as "unset" and fall back rather than
+/// authorize on zero signatures.
+///
+/// Decided by Mr. McRitchie 2026-09-14/15. The design intent, in one line:
+/// anything that MOVES MONEY or CHANGES WHO GOVERNS needs three; the brake
+/// needs fewer signatures than the attack; and nothing that an agent can reach
+/// on its own may lift a brake the agent's own capture would have triggered.
+pub const DEFAULT_THRESHOLDS: [u8; GOV_TABLE_LEN] = {
+    let mut t = [1u8; GOV_TABLE_LEN];
+    t[gov_action::SETTLE_CONTEST as usize] = 3;
+    t[gov_action::CANCEL_CONTEST as usize] = 3;
+    t[gov_action::SWEEP_OPERATOR_REVENUE as usize] = 3;
+    t[gov_action::REGISTER_CURRENCY as usize] = 3;
+    t[gov_action::DEACTIVATE_CURRENCY as usize] = 3;
+    // A brake must be EASIER to pull than the attack it stops. Two, not one:
+    // the agent can still stop the platform, but a single leaked key cannot
+    // grief the business by halting entries at will.
+    t[gov_action::PAUSE as usize] = 2;
+    // ...and three to release it. An agent must never be able to lift its own
+    // brake, which is the whole asymmetry.
+    t[gov_action::UNPAUSE as usize] = 3;
+    t[gov_action::UPDATE_SIGNERS as usize] = 3;
+    t[gov_action::CREATE_SEASON as usize] = 3;
+    t[gov_action::CLOSE_CONTEST as usize] = 2;
+    t[gov_action::SET_CONTEST_LOCK_TIME as usize] = 2;
+    t[gov_action::SET_CONTEST_CONCLUSION_TIME as usize] = 2;
+    t[gov_action::MINT_ENTRY_TOKEN as usize] = 1;
+    t[gov_action::MINT_ENTRY_TOKEN_OVER_CAP as usize] = 3;
+    // burn_entry_token destroys user property, the holder never signs, and
+    // pause does not stop it. It is WRITTEN BUT NEVER DEPLOYED, so shipping it
+    // at three regresses nothing — and three is the reversible choice, since
+    // lowering it later is one transaction and un-burning a voucher is not.
+    t[gov_action::BURN_ENTRY_TOKEN as usize] = 3;
+    t[gov_action::GRANT_SEEDS as usize] = 1;
+    t[gov_action::SET_GOVERNANCE as usize] = 3;
+    t[gov_action::ADMIN_USERNAME as usize] = 1;
+    t[gov_action::CREATE_CONTEST as usize] = 1;
+    t[gov_action::ENTER_CONTEST as usize] = 1;
+    // The two ESCALATED branches. Their base actions sit at two on Mr.
+    // McRitchie's own call; these are the results-known paths the v0.19 audit
+    // (#5) already escalated, carried forward and raised from two to three.
+    // Raising them is the reversible direction — if three proves to cost real
+    // operational time, `set_action_threshold` puts it back at two in one
+    // transaction, whereas a contest graded against a re-opened window cannot
+    // be un-graded.
+    t[gov_action::SET_CONTEST_LOCK_TIME_REOPEN as usize] = 3;
+    t[gov_action::SET_CONTEST_CONCLUSION_TIME_AMEND as usize] = 3;
+    // The username registry. All three are three, and all three are FLOORED at
+    // three — which is unusual enough to state the reason rather than leave it
+    // to be inferred. See `THRESHOLD_FLOORS` below: a `GovernanceConfig`
+    // bootstrapped by the PREVIOUS binary already stores a literal `1` at these
+    // indices, so a default alone would never be read.
+    t[gov_action::OVERWRITE_USERNAME as usize] = 3;
+    t[gov_action::RESERVE_USERNAME as usize] = 3;
+    t[gov_action::RELEASE_USERNAME as usize] = 3;
+    t
+};
+
+/// Immovable floors. `set_action_threshold` refuses to store a value below
+/// these, and `threshold_for` raises a stored value up to them on READ — so a
+/// floor holds even against a table written by some future path that forgot to
+/// check, and against a corrupted or partially-written account.
+///
+/// WHY FLOORS EXIST AT ALL. Without one, three signatures could lower
+/// `update_signers` to two, and the next day the two agent-reachable keys
+/// rotate the operator out of his own vault — the precise attack this whole
+/// change exists to close, reintroduced through the retuning mechanism. The
+/// same argument covers `unpause` (an agent must not be able to lower the bar
+/// for lifting its own brake) and `set_governance` itself (or the floor could
+/// be lowered by lowering the thing that guards the floors).
+pub const THRESHOLD_FLOORS: [u8; GOV_TABLE_LEN] = {
+    let mut f = [1u8; GOV_TABLE_LEN];
+    f[gov_action::UPDATE_SIGNERS as usize] = 3;
+    f[gov_action::UNPAUSE as usize] = 3;
+    f[gov_action::SET_GOVERNANCE as usize] = 3;
+
+    // ── THE USERNAME REGISTRY, AND WHY ALL THREE ARE FLOORED ──────────────
+    //
+    // THE MIGRATION HAZARD FIRST, because it is the reason a DEFAULT would not
+    // have been enough. `DEFAULT_THRESHOLDS` starts life as `[1u8; 32]` and
+    // then overwrites the ids it knows about, so a table written by a binary
+    // that predates these three actions stores a literal `1` at 22, 23 and 24
+    // — not a zero. `threshold_for` treats zero as "unset" and falls back to
+    // the shipped default; it has no way to treat a ONE as unset, and must
+    // not, because one is a legitimate retune. So on a `GovernanceConfig`
+    // bootstrapped by the sibling governance binary, the defaults above are
+    // simply never read, and these actions would authorize on ONE signature.
+    //
+    // The floor is applied on READ, which makes it the only mechanism here
+    // that cannot be forgotten: no post-upgrade `set_action_threshold` call, no
+    // runbook step, nothing an operator has to remember at 2am.
+    //
+    // AND THE FLOOR IS RIGHT ON ITS OWN MERITS, per action:
+    //
+    //   OVERWRITE_USERNAME — it renames a user who does not sign. Consent was
+    //     removed precisely because three signatures replace it; a quorum able
+    //     to retune this to one would be handing a single agent-reachable key
+    //     the power to rename anybody on the platform.
+    //
+    //   RELEASE_USERNAME — a reservation is a BRAKE on a name, and this
+    //     program's stated asymmetry is that nothing an agent reaches alone may
+    //     lift a brake (see `PAUSE`/`UNPAUSE` above). Releasing "slur" back
+    //     into the pool is exactly that lift.
+    //
+    //   RESERVE_USERNAME — the brake side, and the one where a lower number
+    //     would be defensible on its own: blocking a slur fast is a good thing
+    //     to be able to do cheaply. It is floored anyway, because the migration
+    //     hazard above applies to it identically and a stored `1` here is
+    //     indistinguishable from a deliberate retune to one. Lowering it is a
+    //     one-line change to this table plus a program upgrade — deliberately
+    //     the same cost as any other floor, and flagged as Mr. McRitchie's call.
+    f[gov_action::OVERWRITE_USERNAME as usize] = 3;
+    f[gov_action::RESERVE_USERNAME as usize] = 3;
+    f[gov_action::RELEASE_USERNAME as usize] = 3;
+    f
+};
+
+/// Default mint-cap window: one day.
+pub const DEFAULT_MINT_WINDOW_SECONDS: i64 = 86_400;
+
+/// Default number of entry tokens mintable in one window at the low threshold.
+/// Above it the mint still succeeds, but demands `MINT_ENTRY_TOKEN_OVER_CAP`
+/// signatures — the cap raises the BAR, it does not close the door.
+pub const DEFAULT_MINT_WINDOW_CAP: u32 = 250;
+
+/// Per-action governance thresholds + the mint-window policy.
+///
+/// PDA seeds: [b"governance"]
+///
+/// ── WHY THIS IS AN ACCOUNT AND NOT A `const` ──────────────────────────────
+///
+/// Every number in here was a judgment call made in one evening, and a
+/// judgment call baked into a `const` can only be revised by a program
+/// upgrade — which for this program means assembling the Squads 2-of-3 vault,
+/// rebuilding, re-pinning the IDL hash and a devnet rehearsal. That cost is
+/// what turns "is three the right number for settle?" into a question worth
+/// stalling on. Stored as data, it is one transaction, so the safe default is
+/// always the cheap choice and no number here is a one-way door.
+///
+/// ── WHY IT IS A SEPARATE PDA AND NOT A FIELD ON `VaultState` ──────────────
+///
+/// It could not be a field. `VaultState`'s 64 reserved bytes were consumed
+/// EXACTLY by `signers_ext`, and growing a `zero_copy` singleton means a
+/// realloc plus a migration instruction. A fresh PDA costs one rent-exempt
+/// account and no migration.
+///
+/// Borsh (`#[account]`), not zero-copy: at ~117 bytes it is nowhere near the
+/// BPF stack limit that forced `VaultState` zero-copy.
+#[account]
+pub struct GovernanceConfig {
+    /// Required signature count per `gov_action`. A ZERO means "never set" and
+    /// reads back as `DEFAULT_THRESHOLDS` — see `threshold_for`.
+    pub thresholds: [u8; GOV_TABLE_LEN],   // 32
+    /// Length of a mint-cap window in seconds.
+    pub mint_window_seconds: i64,          //  8
+    /// Entry tokens mintable per window before the threshold escalates.
+    pub mint_window_cap: u32,              //  4
+    /// PDA bump.
+    pub bump: u8,                          //  1
+    /// Reserved padding for forward-compat. Unlike `VaultState`'s, this one is
+    /// real headroom — this account can also simply be reallocated.
+    pub _reserved: [u8; 64],               // 64
+}
+
+impl GovernanceConfig {
+    /// 8 discriminator + 32 + 8 + 4 + 1 + 64.
+    pub const LEN: usize = 8 + GOV_TABLE_LEN + 8 + 4 + 1 + 64;
+
+    /// Required signatures for `action`.
+    ///
+    /// THREE PROPERTIES, AND EACH ONE IS LOAD-BEARING:
+    ///   1. An UNSET (zero) entry falls back to the shipped default. A zeroed
+    ///      or partially-written table must never read as "zero signatures
+    ///      required" — that would turn a corrupt account into an open vault.
+    ///   2. The floor is applied on READ, not only on write, so a floor holds
+    ///      even against a value some future write path stored without
+    ///      checking.
+    ///   3. An out-of-range action id reads as its default rather than
+    ///      indexing past the table.
+    pub fn threshold_for(&self, action: u8) -> u8 {
+        let idx = action as usize;
+        let stored = if idx < GOV_TABLE_LEN { self.thresholds[idx] } else { 0 };
+        let defaulted = if stored == 0 { Self::default_for(action) } else { stored };
+        let floor = Self::floor_for(action);
+        if defaulted < floor {
+            floor
+        } else {
+            defaulted
+        }
+    }
+
+    pub fn default_for(action: u8) -> u8 {
+        let idx = action as usize;
+        if idx < GOV_TABLE_LEN {
+            DEFAULT_THRESHOLDS[idx]
+        } else {
+            1
+        }
+    }
+
+    pub fn floor_for(action: u8) -> u8 {
+        let idx = action as usize;
+        if idx < GOV_TABLE_LEN {
+            THRESHOLD_FLOORS[idx]
+        } else {
+            1
+        }
+    }
+
+    /// The largest threshold any live action requires.
+    ///
+    /// `update_signers` checks the incoming set against this so a rotation can
+    /// never leave the vault with fewer keys than some action needs — which
+    /// would brick that action with no way back except another rotation.
+    pub fn max_live_threshold(&self) -> u8 {
+        let mut max = 1u8;
+        let mut action = 0u8;
+        while (action as usize) < gov_action::COUNT {
+            let t = self.threshold_for(action);
+            if t > max {
+                max = t;
+            }
+            action += 1;
+        }
+        max
+    }
+
+    /// Which window a timestamp falls in. `mint_window_seconds` is validated
+    /// positive on write, and defended again here so a zero can never divide.
+    pub fn window_index_for(&self, unix_timestamp: i64) -> Result<i64> {
+        require!(
+            self.mint_window_seconds > 0,
+            VaultError::InvalidMintWindowPolicy
+        );
+        Ok(unix_timestamp.div_euclid(self.mint_window_seconds))
+    }
+}
+
+/// Per-window mint counter for `mint_entry_token`.
+///
+/// PDA seeds: [b"mint_window", window_index.to_le_bytes()]
+///
+/// Uncapped value creation was the worst of the three earlier findings: a
+/// single 1-of-N signature could mint unlimited free entries, each one a claim
+/// on a real prize pool. This account is what makes the cap observable on
+/// chain rather than a Rails-side convention a captured Rails would not honour.
+///
+/// One account per window, created on that window's first mint via
+/// `init_if_needed`. Nothing closes a `MintWindow`, so the counter cannot be
+/// reset by closing and re-initialising it.
+#[account]
+pub struct MintWindow {
+    /// `unix_timestamp.div_euclid(mint_window_seconds)` — also the PDA seed,
+    /// stored so the account is self-describing to an off-chain reader.
+    pub window_index: i64,    //  8
+    /// Entry tokens minted in this window.
+    pub minted: u32,          //  4
+    /// PDA bump.
+    pub bump: u8,             //  1
+    /// Reserved padding for forward-compat.
+    pub _reserved: [u8; 16],  // 16
+}
+
+impl MintWindow {
+    /// 8 discriminator + 8 + 4 + 1 + 16.
+    pub const LEN: usize = 8 + 8 + 4 + 1 + 16;
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// The username registry
+// ──────────────────────────────────────────────────────────────────────────
+
+/// One account per claimed name. Its EXISTENCE is the lock, and its `owner`
+/// says who holds it.
+///
+/// PDA seeds: `[b"username", canonical_username_key(name)]`
+///
+/// ── THE WHOLE MECHANISM, IN THREE STATES ──────────────────────────────────
+///
+///   absent                 the name is free
+///   owner == some wallet   that player holds it
+///   owner == the vault PDA the name is RESERVED — nobody can take it
+///
+/// Uniqueness and the blocked list are therefore ONE mechanism rather than
+/// two. Blocking a name is the vault claiming it first; lifting a block is
+/// closing the account. There is no list to walk, nothing to resize, and
+/// growth is unbounded because each name pays its own rent.
+///
+/// ── IT IS AN EXISTING TECHNIQUE, NOT A NEW ONE ────────────────────────────
+///
+/// `mint_entry_token` keys its voucher PDA on `sha256(source_ref)` and
+/// `grant_seeds` guards on `[b"seed_grant", ...]`; both use init-as-a-lock for
+/// idempotency, and both have been in this program since v0.19. This applies
+/// the same trick to names.
+///
+/// ── WHY THE VAULT PDA AND NOT A SENTINEL ──────────────────────────────────
+///
+/// `owner` is the vault's own `[b"vault"]` PDA for a reservation. That address
+/// is off-curve, so no keypair can produce it — a player-held record is
+/// written from a `Signer`'s key and can therefore never collide with it. An
+/// off-chain reader needs no side table: derive `[b"vault"]` once and the
+/// owner field answers "taken or reserved?" by itself.
+///
+/// `Pubkey::default()` is NOT a reservation sentinel, but `is_reserved` treats
+/// it as one anyway — see that method.
+#[account]
+#[derive(InitSpace)]
+pub struct UsernameRecord {
+    /// Holder: a wallet for a player-held name, the `[b"vault"]` PDA for a
+    /// reservation. Never `Pubkey::default()` on any account this program
+    /// writes — which is what lets `init_if_needed` callers tell a
+    /// freshly-created record from one that already existed.
+    pub owner: Pubkey,        // 32
+    /// The canonical (lowercased, zero-padded) name — the same 32 bytes that
+    /// seed this PDA. Stored so the account is self-describing to an
+    /// off-chain reader and so a caller naming the wrong record fails a field
+    /// check rather than acting on it.
+    pub name: [u8; 32],       // 32
+    /// Chain time the record was created.
+    pub claimed_at: i64,      //  8
+    /// PDA bump.
+    pub bump: u8,             //  1
+    /// Reserved padding for forward-compat.
+    pub _reserved: [u8; 16],  // 16
+}
+
+impl UsernameRecord {
+    /// 8 discriminator + 32 + 32 + 8 + 1 + 16 = 97 bytes.
+    pub const LEN: usize = 8 + UsernameRecord::INIT_SPACE;
+
+    /// True when NO WALLET can act on this record.
+    ///
+    /// Two cases, and the second is the defensive one:
+    ///   - the vault holds it (a real reservation), or
+    ///   - `owner` is unset, which no write path in this program produces. A
+    ///     zeroed or partially-written record must read as UNCLAIMABLE rather
+    ///     than fall open to whoever asks first, so the unreachable case is
+    ///     folded in here deliberately rather than left to chance.
+    ///
+    /// `release_reserved_username` deliberately does NOT use this — it demands
+    /// an exact match on the vault key, so the release path can never be
+    /// pointed at a record the vault does not actually hold.
+    pub fn is_reserved(&self, vault: &Pubkey) -> bool {
+        self.owner == *vault || self.owner == Pubkey::default()
+    }
+
+    /// True when `wallet` is the player holding this name.
+    pub fn is_held_by(&self, wallet: &Pubkey) -> bool {
+        *wallet != Pubkey::default() && self.owner == *wallet
+    }
 }

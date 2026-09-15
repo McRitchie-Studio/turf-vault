@@ -1,6 +1,7 @@
 use anchor_lang::prelude::*;
-use crate::state::{VaultState, Contest, ContestStatus};
+use crate::state::{VaultState, Contest, ContestStatus, GovernanceConfig, gov_action};
 use crate::errors::VaultError;
+use crate::instructions::governance::authorize;
 
 /// `set_contest_conclusion_time` — set (or clear) a contest's conclusion
 /// timestamp (v0.18). The conclusion marks when the contest is considered done:
@@ -8,11 +9,13 @@ use crate::errors::VaultError;
 /// lock time is final. Derived like the lock (compared against the chain Clock,
 /// no oracle).
 ///
-/// Auth (v0.19, audit #5):
-///   - Setting it for the FIRST time (current conclusion == 0): 1-of-3.
-///   - AMENDING an already-set conclusion (the finality marker): 2-of-3
-///     (admin + distinct `cosigner`). Clearing/postponing it at 1-of-3 would
-///     let a single key re-arm the relock — the same late-entry vector as #5.
+/// Auth (v0.19 audit #5, re-expressed as data in v0.26):
+///   - Setting it for the FIRST time (current conclusion == 0):
+///     `gov_action::SET_CONTEST_CONCLUSION_TIME` (default 2).
+///   - AMENDING an already-set conclusion (the finality marker): escalates to
+///     `gov_action::SET_CONTEST_CONCLUSION_TIME_AMEND` (default 3). Clearing
+///     or postponing it cheaply would let a small key set re-arm the relock —
+///     the same late-entry vector as #5, one step back.
 ///   - Always rejected once the contest is settled/cancelled or has concluded.
 ///
 /// Timestamps must be non-negative; a set conclusion must follow a set lock.
@@ -23,16 +26,20 @@ pub struct SetContestConclusionTime<'info> {
     #[account(mut)]
     pub admin: Signer<'info>,
 
-    /// Optional second vault signer. Required (2-of-3) ONLY to amend an
-    /// already-set conclusion; omitted for the initial 1-of-3 set.
+    /// Second vault signer, named for wire compatibility with v0.25 callers.
+    /// Since v0.26 it simply counts toward whichever threshold applies.
     pub cosigner: Option<Signer<'info>>,
 
     #[account(
         seeds = [b"vault"],
         bump = vault_state.load()?.bump,
-        constraint = vault_state.load()?.is_signer(&admin.key()) @ VaultError::Unauthorized,
     )]
     pub vault_state: AccountLoader<'info, VaultState>,
+
+    /// Per-action threshold table. Required by every vault-authorized
+    /// instruction since v0.26 — see `instructions::governance::authorize`.
+    #[account(seeds = [b"governance"], bump = governance.bump)]
+    pub governance: Account<'info, GovernanceConfig>,
 
     #[account(
         mut,
@@ -74,25 +81,33 @@ pub fn handle_set_contest_conclusion_time(
         }
     }
 
-    // Audit #5: amending an already-set conclusion (clear/postpone) requires
-    // 2-of-3 so a single key can't defeat the "lock is final once concluded"
-    // guarantee. Setting it the first time (0 -> value) stays 1-of-3.
-    if current_conclusion != 0 {
+    // AUTHORIZATION (v0.26). Audit #5's escalation survives as a choice of
+    // ACTION ID: amending an already-set conclusion (clear/postpone) is what
+    // defeats the "lock is final once concluded" guarantee, so it looks up the
+    // higher number. Setting it the first time (0 -> value) does not.
+    let action = if current_conclusion != 0 {
+        gov_action::SET_CONTEST_CONCLUSION_TIME_AMEND
+    } else {
+        gov_action::SET_CONTEST_CONCLUSION_TIME
+    };
+    {
         let vault_state = ctx.accounts.vault_state.load()?;
-        let cosigner = ctx
-            .accounts
-            .cosigner
-            .as_ref()
-            .ok_or(VaultError::Unauthorized)?;
-        require!(
-            vault_state.validate_multisig(&ctx.accounts.admin.key(), &cosigner.key()),
-            VaultError::Unauthorized
-        );
+        let mut named: Vec<Pubkey> = vec![ctx.accounts.admin.key()];
+        if let Some(cosigner) = ctx.accounts.cosigner.as_ref() {
+            named.push(cosigner.key());
+        }
+        authorize(
+            &vault_state,
+            &ctx.accounts.governance,
+            action,
+            &named,
+            ctx.remaining_accounts,
+        )?;
     }
 
     ctx.accounts.contest.conclusion_timestamp = new_conclusion_timestamp;
     msg!(
-        "Contest conclusion_timestamp set to {} for contest_id={:?} (2-of-3 amend: {})",
+        "Contest conclusion_timestamp set to {} for contest_id={:?} (amend: {})",
         new_conclusion_timestamp,
         ctx.accounts.contest.contest_id,
         current_conclusion != 0

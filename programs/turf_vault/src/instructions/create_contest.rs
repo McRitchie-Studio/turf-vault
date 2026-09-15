@@ -1,7 +1,10 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Mint, Token, TokenAccount, Transfer};
-use crate::state::{VaultState, Contest, ContestStatus, MAX_CURRENCIES};
+use crate::state::{
+    VaultState, Contest, ContestStatus, MAX_CURRENCIES, GovernanceConfig, gov_action,
+};
 use crate::errors::VaultError;
+use crate::instructions::governance::authorize;
 
 /// `create_contest` — set up a new contest with a per-currency fee schedule
 /// and a USDC prize pool.
@@ -44,9 +47,13 @@ pub struct CreateContest<'info> {
     #[account(
         seeds = [b"vault"],
         bump = vault_state.load()?.bump,
-        constraint = vault_state.load()?.is_signer(&payer.key()) @ VaultError::Unauthorized,
     )]
     pub vault_state: AccountLoader<'info, VaultState>,
+
+    /// Per-action threshold table. Required by every vault-authorized
+    /// instruction since v0.26 — see `instructions::governance::authorize`.
+    #[account(seeds = [b"governance"], bump = governance.bump)]
+    pub governance: Account<'info, GovernanceConfig>,
 
     #[account(
         init,
@@ -99,6 +106,21 @@ pub fn handle_create_contest(
     prize_pool: u64,
     lock_timestamp: i64,
 ) -> Result<()> {
+    // AUTHORIZATION — the single path (v0.26). `payer` is the instruction's
+    // one NAMED vault signer; any further signatures the stored threshold
+    // demands are taken from the leading `remaining_accounts`. At a threshold
+    // of 1 that count is zero and the account list is unchanged from v0.25.
+    {
+        let vault = ctx.accounts.vault_state.load()?;
+        authorize(
+            &vault,
+            &ctx.accounts.governance,
+            gov_action::CREATE_CONTEST,
+            &[ctx.accounts.payer.key()],
+            ctx.remaining_accounts,
+        )?;
+    }
+
     // Validation #2: payout sum == prize_pool (checked add — OPSEC-025).
     let total_payouts: u64 = payout_amounts
         .iter()

@@ -6,6 +6,24 @@ Solana escrow program for contest entry fees and prize distribution. Built with 
 
 **Docs index**: see [`docs/README.md`](docs/README.md) before following historical specs, audits, or generated reports.
 
+> **THE `Auth` COLUMN BELOW, THE `Architecture` BLOCK AND THE `Security`
+> SECTION STILL DESCRIBE v0.25 — THE DEPLOYED PROGRAM, NOT THIS TREE.**
+> v0.26 (Unreleased) replaces the fixed 2-of-3 / 1-of-3 model with five signer
+> slots and a per-action threshold table stored in the `governance` PDA, so
+> most thresholds written below are now wrong for the source in this repo —
+> `burn_entry_token` and `update_signers` are 3, not the 1-of-3 / 2-of-3 shown.
+> Authoritative for this tree: `DEFAULT_THRESHOLDS` in
+> [`programs/turf_vault/src/state.rs`](programs/turf_vault/src/state.rs) and the
+> instruction matrix in
+> [`docs/VERIFICATION_MATRIX.md`](docs/VERIFICATION_MATRIX.md). Authoritative
+> for the chain: [`docs/CURRENT_DEPLOYMENT.md`](docs/CURRENT_DEPLOYMENT.md).
+>
+> **The instruction LIST is v0.25's too.** Unreleased v0.26 DELETES
+> `admin_create_user_account` and `admin_set_username` and adds four username
+> registry instructions; the rows below still show the deployed pair. The
+> "v0.26 — the username registry" subsection under
+> [Instructions](#instructions) is authoritative for the difference.
+
 ![Anchor 0.32.1](https://img.shields.io/badge/Anchor-0.32.1-blue)
 ![Solana](https://img.shields.io/badge/Solana-Devnet-purple)
 ![License: MIT](https://img.shields.io/badge/License-MIT-green)
@@ -32,6 +50,9 @@ VaultState (PDA: "vault")
 │   ├── username ([u8; 32]), seeds
 │   ├── entries, wins, cashes, total_won
 │   └── wallet
+│
+├── UsernameRecord (PDA: "username" + lowercased name)   [v0.26, unreleased]
+│   └── owner — a wallet holds the name; the ["vault"] PDA RESERVES it
 │
 ├── Season (PDA: "season" + season_id)
 │   └── name, seed_schedule ([u64; 5]), quest_seeds ([u64; 16]), start_at
@@ -62,6 +83,9 @@ VaultState (PDA: "vault")
 | ContestEntry | `["entry", contest_id, wallet, entry_num (LE bytes)]` |
 | Season | `["season", season_id (u32 LE bytes)]` |
 | EntryTokenAccount | `["entry_token", sha256(source_ref)]` |
+| GovernanceConfig *(v0.26, unreleased)* | `["governance"]` |
+| MintWindow *(v0.26, unreleased)* | `["mint_window", window_index (i64 LE bytes)]` |
+| UsernameRecord *(v0.26, unreleased)* | `["username", name lowercased + zero-padded to 32]` |
 
 ## Instructions
 
@@ -90,6 +114,47 @@ VaultState (PDA: "vault")
 | `cancel_contest` | — | 2-of-3 | Refund the live prize-pool balance to the creator |
 | `close_contest` | — | 1-of-3 | Close settled/cancelled contest accounts and reclaim rent |
 | `sweep_operator_revenue` | `amount` | 2-of-3 | Move operator-revenue funds to the pinned treasury ATA |
+
+### v0.26 (Unreleased) — the username registry
+
+Not in the table above, which describes the deployed v0.25 program.
+
+**One mechanism, not two.** A small PDA per name, keyed on the lowercased form,
+holding the owner: absent means the name is free, a wallet owner means that
+player holds it, and the `["vault"]` PDA as owner means the name is RESERVED.
+So the blocked list is simply the set of names the vault claimed first — no
+list to walk, nothing to resize, and each name pays its own rent. It is the
+same init-as-a-lock technique `mint_entry_token` and `grant_seeds` have used
+since v0.19, applied to names.
+
+| Instruction | Params | Auth | Description |
+|-------------|--------|------|-------------|
+| `overwrite_username` | `username, name_key` | **3** (floor 3) | Rename any user, **without that user's signature**. Emits `UsernameOverwritten`. Waives the reserved-prefix branch; never the charset or length bar |
+| `reserve_username` | `name_key` | **3** (floor 3) | Vault claims a free name — "add to the blocked list" |
+| `release_reserved_username` | `name_key` | **3** (floor 3) | Vault returns a name to the pool — "lift a block". Rent goes to the pinned treasury |
+| `backfill_username_record` | `name_key` | Permissionless payer | Migration only: lock the name a `UserAccount` already displays. No discretion — name and owner both come from the account's own fields |
+
+**Changed:** `create_user_account` and `set_username` each take a `name_key`
+(the username lowercased and zero-padded to 32 bytes — the record's PDA seed,
+so it must be an argument; the handler re-derives it) and claim the record in
+the same transaction. `set_username` additionally CLOSES the record for the
+name given up, refunding its rent to the wallet.
+
+**Deleted:** `admin_create_user_account` and `admin_set_username`. Both had
+zero callers in Turf Monster, and `admin_set_username`'s one job — waiving the
+reserved-prefix rule — now lives on `overwrite_username` at three signatures
+instead of one. It required the renamed user to co-sign, which made it useless
+against the only two things it was ever wanted for.
+
+**Reserved prefixes stay.** A registry is exact-match, so it stops `admin` and
+says nothing about `admin123`. The prefix list catches the lookalikes;
+`xan` is added to it. Two mechanisms, clean division: prefix list = patterns,
+registry = uniqueness and reservations. Homoglyph normalisation and rate
+limiting remain Rails' concerns, deliberately.
+
+**Off-chain derivation:** `scripts/lib/username-key.js`
+(`canonicalKey`, `usernameRecordSeeds`), pinned against the program source by
+`scripts/tests/username-key.test.js`.
 
 ### Settlement Struct
 
@@ -128,6 +193,17 @@ Settlement accounts are passed as `remaining_accounts` — triples of `[user_acc
 | `cashes` | u32 | Lifetime payout finishes |
 | `total_won` | u64 | Lifetime USDC payouts received |
 | `bump` | u8 | PDA bump seed |
+| `username_registered` | u8 | *(v0.26, unreleased)* 1 once the username is locked by a `UsernameRecord`. Carved from the first byte of the reserved padding, so the account size is unchanged and every live account still deserializes |
+
+### UsernameRecord *(v0.26, unreleased)*
+| Field | Type | Description |
+|-------|------|-------------|
+| `owner` | Pubkey | A wallet holds the name; the `["vault"]` PDA means RESERVED. Never the zero key |
+| `name` | [u8; 32] | The canonical (lowercased) name — the same bytes that seed the PDA |
+| `claimed_at` | i64 | Chain time the record was created |
+| `bump` | u8 | PDA bump seed |
+
+97 bytes, about 0.0015 SOL of rent, refunded when the name is given up.
 
 ### Contest
 | Field | Type | Description |
@@ -226,8 +302,9 @@ and on every push to `main`, `release` and `accepted`:
 |-----|------|---------|
 | `program` | `cargo check --workspace --all-targets --locked` | the program (and every `#[derive(Accounts)]` expansion) no longer compiles, or `Cargo.lock` is out of sync |
 | `program` | `cargo clippy -- -D clippy::correctness` | code clippy classes as outright wrong |
+| `program` | `cargo test --workspace --locked` | a `VaultState` field offset moved, a governance threshold or floor changed, or the reserved error block stopped ending at 6059. Added 2026-09-15 — `cargo check` above COMPILES `#[cfg(test)]` code without running it, so these assertions could have reported green having never executed |
 | `guards` | `npm run check:doc-op-refs` | a 1Password vault reference in this repo's prose has gone stale |
-| `guards` | `npm run test:scripts` | a shape regression in the deploy scripts, or a lane wired to the Anchor suite — 61 `node:test` cases, counted 2026-09-14. 26 cover `scripts/lib/mainnet-config.js` and `scripts/initialize-mainnet.js`; 5 of those 26 drive the real checked-in `scripts/squad.json` and the other 21 are fixture mutations or a source read — the split is measured in [What it covers](docs/VERIFICATION_MATRIX.md#what-it-covers). One case self-skips here, where no `node_modules` is installed. 24 more grade the Squads upgrade path (the signer planner, the script's text, and the script executed end to end against stubs), 6 are the lane guard below, and 5 hold `bin/release-check` identical to this table |
+| `guards` | `npm run test:scripts` | a shape regression in the deploy scripts, or a lane wired to the Anchor suite — 68 `node:test` cases, counted 2026-09-15 (was 61; +7 for the vault-layout parity guard). 26 cover `scripts/lib/mainnet-config.js` and `scripts/initialize-mainnet.js`; 5 of those 26 drive the real checked-in `scripts/squad.json` and the other 21 are fixture mutations or a source read — the split is measured in [What it covers](docs/VERIFICATION_MATRIX.md#what-it-covers). One case self-skips here, where no `node_modules` is installed. 24 more grade the Squads upgrade path (the signer planner, the script's text, and the script executed end to end against stubs), 6 are the lane guard below, and 5 hold `bin/release-check` identical to this table |
 
 CI is **build-and-check only** — it never contacts a Solana cluster, holds a
 keypair, or spends SOL.

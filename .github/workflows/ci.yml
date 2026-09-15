@@ -119,6 +119,26 @@ jobs:
       - name: cargo clippy (correctness)
         run: cargo clippy --workspace --all-targets --locked -- -D clippy::correctness
 
+      # THE UNIT-TEST LANE, new in v0.26 — and it exists because `cargo check`
+      # above COMPILES `#[cfg(test)]` code without ever running it. Until this
+      # step, a repo with unit tests and no `cargo test` lane would report green
+      # over an assertion that never executed, which is the same "a lane that
+      # cannot fail is worth nothing" failure the guards lane was added for.
+      #
+      # WHAT IT PROTECTS. `programs/turf_vault/src/governance_tests.rs` asserts
+      # the BYTE OFFSETS of every `VaultState` field. `VaultState` is
+      # `zero_copy(unsafe)` + `repr(C)`, so an edit that inserts or widens a
+      # field rather than appending one shifts every field after it and makes
+      # the live devnet and mainnet vaults decode as something else — while
+      # compiling, deploying and running without a word of complaint. Compiling
+      # that test proves nothing; running it is the whole guard.
+      #
+      # `--all-targets` is deliberately NOT passed: it would exclude doctests,
+      # and two doc comments in this program have already had to be fenced
+      # because rustdoc was reading indented prose as Rust.
+      - name: cargo test
+        run: cargo test --workspace --locked
+
   # THE GUARD LANE — the repo's own executable-prose check.
   guards:
     name: guards

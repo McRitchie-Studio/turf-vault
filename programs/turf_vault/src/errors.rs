@@ -14,6 +14,13 @@ use anchor_lang::prelude::*;
 /// v0.20 un-retired 6017 SignerContinuityRequired — `update_signers` is back.
 ///
 /// v0.16 new codes start at 6023.
+///
+/// v0.26 claims 6046-6059 for governance; the username registry, landing in
+/// the same upgrade window, has now CLAIMED 6060-6066. See the block comment
+/// in the middle of the enum for why that reservation was three unreachable
+/// variants rather than a comment — a comment cannot stop Anchor, which
+/// assigns codes by POSITION and would otherwise have shifted every governance
+/// code under Rails' integer decoding.
 #[error_code]
 pub enum VaultError {
     // ── 6000-6022: stable from v0.15.1 ────────────────────────────────────
@@ -43,7 +50,7 @@ pub enum VaultError {
     AccountAlreadyMigrated,                      // 6011 — retired
     #[msg("Account data is invalid or has wrong discriminator")]
     InvalidAccountData,                          // 6012 — retired
-    #[msg("Invalid threshold: must be 1-3")]
+    #[msg("Invalid threshold: must be between 1 and the number of active signers (max 5)")]
     InvalidThreshold,                            // 6013
     #[msg("Duplicate signer in signers array")]
     DuplicateSigner,                             // 6014
@@ -51,7 +58,7 @@ pub enum VaultError {
     EntryTokenAlreadyConsumed,                   // 6015
     #[msg("Entry token owner does not match the wallet entering the contest")]
     EntryTokenWrongOwner,                        // 6016
-    #[msg("New signer set must retain BOTH authorizing cosigners (2-of-3) and contain no default/zeroed slots")]
+    #[msg("New signer set must retain enough of the authorizing cosigners to meet the update_signers threshold")]
     SignerContinuityRequired,                    // 6017 — live again in v0.20 (update_signers)
     #[msg("Vault is paused — user-facing funds operations are temporarily disabled")]
     VaultPaused,                                 // 6018
@@ -119,4 +126,71 @@ pub enum VaultError {
     // ── 6045+: new for burn_entry_token (operator claw-back) ──────────────
     #[msg("Entry token has already been burned")]
     EntryTokenAlreadyBurned,                     // 6045
+
+    // ── 6046-6059: v0.26 governance block (RESERVED RANGE — read this) ────
+    //
+    // ANCHOR ASSIGNS CODES BY POSITION IN THIS ENUM, not by the comment beside
+    // the variant. Two branches that each "append freely" therefore both claim
+    // 6046, and whichever merges second has every one of its codes silently
+    // shifted — while Rails' integer→message decoding keeps reporting the OLD
+    // meaning for the new number. The v0.26 upgrade window carries two such
+    // branches, so the range was split in advance: 6046-6059 belongs to the
+    // governance work, 6060+ to `username-registry-on-chain`.
+    //
+    // The three RESERVED variants at the end of this block are what make that
+    // split hold. They are unreachable by construction and exist ONLY so that
+    // the next variant appended below lands on 6060 and not on 6057. Consume
+    // them from the top (rename the lowest-numbered one) rather than appending
+    // past them, and the boundary survives.
+    #[msg("Not enough distinct vault signers authorized this action")]
+    InsufficientSigners,                         // 6046
+    #[msg("An account offered as a vault cosigner did not sign the transaction")]
+    CosignerDidNotSign,                          // 6047
+    #[msg("Threshold must be between 1 and the number of active signers")]
+    GovernanceThresholdInvalid,                  // 6048
+    #[msg("Threshold is below the immovable floor for this action")]
+    GovernanceFloorViolation,                    // 6049
+    #[msg("Governance action id is out of range")]
+    InvalidGovernanceAction,                     // 6050
+    #[msg("Threshold exceeds the number of active signers — would brick the action")]
+    ThresholdExceedsSignerSet,                   // 6051
+    #[msg("Signer set is smaller than a live threshold requires, or has a gap before an occupied slot")]
+    SignerSetTooSmall,                           // 6052
+    #[msg("Mint window account does not match the window the chain clock is in")]
+    MintWindowMismatch,                          // 6053
+    #[msg("Mint window policy invalid: window seconds must be positive and the cap non-zero")]
+    InvalidMintWindowPolicy,                     // 6054
+    #[msg("Invite seed grants require the invitee's own UserAccount, and that user must have entered a contest")]
+    SeedGrantInviteeNotRegistered,               // 6055
+    #[msg("Reclaimed rent must be paid to the vault's pinned treasury authority")]
+    InvalidRentDestination,                      // 6056
+
+    #[msg("Reserved — do not emit")]
+    ReservedGovernance6057,                      // 6057 — reserved, see note above
+    #[msg("Reserved — do not emit")]
+    ReservedGovernance6058,                      // 6058 — reserved, see note above
+    #[msg("Reserved — do not emit")]
+    ReservedGovernance6059,                      // 6059 — reserved, see note above
+
+    // ── 6060+: the username registry ──────────────────────────────────────
+    //
+    // Claiming the range the governance block reserved, from the top of the
+    // three placeholders as that block's note instructs: 6057/6058/6059 are
+    // still `ReservedGovernance*`, and these variants sit after them, so the
+    // first one lands on 6060 exactly as `username_registry_error_codes_*`
+    // asserts. Nothing above this line moved.
+    #[msg("Username is already held by another account, or reserved by the vault")]
+    UsernameAlreadyClaimed,                      // 6060
+    #[msg("name_key is not the canonical lowercased form of the username")]
+    UsernameKeyMismatch,                         // 6061
+    #[msg("This account's current username is registered — its UsernameRecord must be passed so the rename can close it")]
+    UsernameRecordMissing,                       // 6062
+    #[msg("The supplied UsernameRecord is not held by this wallet")]
+    UsernameRecordOwnerMismatch,                 // 6063
+    #[msg("The supplied UsernameRecord does not hold this account's current username")]
+    UsernameRecordNameMismatch,                  // 6064
+    #[msg("A previous UsernameRecord was supplied where none is due")]
+    UsernameRecordNotExpected,                   // 6065
+    #[msg("The vault does not hold this username — it is not a reservation")]
+    UsernameNotReserved,                         // 6066
 }

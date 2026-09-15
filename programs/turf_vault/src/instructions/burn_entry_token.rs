@@ -1,7 +1,10 @@
 use anchor_lang::prelude::*;
 use solana_program::hash::hash;
-use crate::state::{VaultState, EntryTokenAccount, entry_token_source};
+use crate::state::{
+    VaultState, EntryTokenAccount, entry_token_source, GovernanceConfig, gov_action,
+};
 use crate::errors::VaultError;
+use crate::instructions::governance::authorize;
 
 /// `burn_entry_token` — admin voids an unspent contest-entry voucher.
 ///
@@ -16,8 +19,10 @@ use crate::errors::VaultError;
 /// Rails derives what a user is OWED from the on-chain token count, not from a
 /// database mirror:
 ///
-///     owed = (seeds / SEEDS_PER_LEVEL) - tokens.length
-///     (admin/free_entries_controller.rb, and Tokens::LevelUpGrant#missing_levels)
+/// ```text
+/// owed = (seeds / SEEDS_PER_LEVEL) - tokens.length
+/// (admin/free_entries_controller.rb, and Tokens::LevelUpGrant#missing_levels)
+/// ```
 ///
 /// Closing the PDA would drop `tokens.length`, so a burned token would
 /// immediately re-read as owed — the admin page's own "Mint all" button, and the
@@ -77,9 +82,13 @@ pub struct BurnEntryToken<'info> {
     #[account(
         seeds = [b"vault"],
         bump = vault_state.load()?.bump,
-        constraint = vault_state.load()?.is_signer(&admin.key()) @ VaultError::Unauthorized,
     )]
     pub vault_state: AccountLoader<'info, VaultState>,
+
+    /// Per-action threshold table. Required by every vault-authorized
+    /// instruction since v0.26 — see `instructions::governance::authorize`.
+    #[account(seeds = [b"governance"], bump = governance.bump)]
+    pub governance: Account<'info, GovernanceConfig>,
 
     /// The voucher being voided.
     ///
@@ -137,6 +146,21 @@ pub fn handle_burn_entry_token(
     ctx: Context<BurnEntryToken>,
     source_ref_hash: [u8; 32],
 ) -> Result<()> {
+    // AUTHORIZATION — the single path (v0.26). `admin` is the instruction's
+    // one NAMED vault signer; any further signatures the stored threshold
+    // demands are taken from the leading `remaining_accounts`. At a threshold
+    // of 1 that count is zero and the account list is unchanged from v0.25.
+    {
+        let vault = ctx.accounts.vault_state.load()?;
+        authorize(
+            &vault,
+            &ctx.accounts.governance,
+            gov_action::BURN_ENTRY_TOKEN,
+            &[ctx.accounts.admin.key()],
+            ctx.remaining_accounts,
+        )?;
+    }
+
     // Re-derive the seed arg from the account's OWN stored ref, mirroring
     // mint_entry_token's audit #9 assert.
     //

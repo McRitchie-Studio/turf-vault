@@ -1,6 +1,8 @@
 use anchor_lang::prelude::*;
-use crate::state::{VaultState, Season};
-use crate::errors::VaultError;
+use crate::state::{
+    VaultState, Season, GovernanceConfig, gov_action,
+};
+use crate::instructions::governance::authorize;
 
 /// `create_season` — define a contest season with its own seed-award schedule.
 ///
@@ -26,9 +28,13 @@ pub struct CreateSeason<'info> {
     #[account(
         seeds = [b"vault"],
         bump = vault_state.load()?.bump,
-        constraint = vault_state.load()?.is_signer(&admin.key()) @ VaultError::Unauthorized,
     )]
     pub vault_state: AccountLoader<'info, VaultState>,
+
+    /// Per-action threshold table. Required by every vault-authorized
+    /// instruction since v0.26 — see `instructions::governance::authorize`.
+    #[account(seeds = [b"governance"], bump = governance.bump)]
+    pub governance: Account<'info, GovernanceConfig>,
 
     #[account(
         init,
@@ -50,6 +56,21 @@ pub fn handle_create_season(
     quest_seeds: [u64; 16],
     start_at: i64,
 ) -> Result<()> {
+    // AUTHORIZATION — the single path (v0.26). `admin` is the instruction's
+    // one NAMED vault signer; any further signatures the stored threshold
+    // demands are taken from the leading `remaining_accounts`. At a threshold
+    // of 1 that count is zero and the account list is unchanged from v0.25.
+    {
+        let vault = ctx.accounts.vault_state.load()?;
+        authorize(
+            &vault,
+            &ctx.accounts.governance,
+            gov_action::CREATE_SEASON,
+            &[ctx.accounts.admin.key()],
+            ctx.remaining_accounts,
+        )?;
+    }
+
     let season = &mut ctx.accounts.season;
     season.season_id = season_id;
     season.name = name;

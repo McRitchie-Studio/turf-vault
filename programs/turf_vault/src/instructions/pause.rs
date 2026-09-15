@@ -1,6 +1,6 @@
 use anchor_lang::prelude::*;
-use crate::state::VaultState;
-use crate::errors::VaultError;
+use crate::state::{VaultState, GovernanceConfig, gov_action};
+use crate::instructions::governance::{authorize, named_signers};
 
 /// `pause` — emergency stop for user-facing funds operations.
 ///
@@ -19,8 +19,19 @@ use crate::errors::VaultError;
 ///   - sweep_operator_revenue
 ///   - pause, unpause
 ///
-/// Auth: 2-of-3 (same level as settle_contest). One signer wakes the bot;
-/// the other (Alex / Mason) cosigns from Phantom.
+/// Auth: `gov_action::PAUSE` — default 2, FLOOR 1.
+///
+/// Two rather than one is Mr. McRitchie's own call, and it is the better
+/// number: the agent can still pull the brake, while a single leaked key
+/// cannot grief the business by halting entries at will. Lifting the brake
+/// (`unpause`) costs three and is floored there, so a captured system can
+/// stop the platform and can never restart it.
+///
+/// THE FLOOR IS 1, AND THE ACCOUNT STRUCT HONOURS THAT. `cosigner` is
+/// `Option<Signer>` precisely so this instruction can be retuned to a single
+/// signature by transaction if an incident ever shows two costs too much
+/// latency. A mandatory second `Signer` would have made that retune succeed on
+/// paper and fail on the chain — see `named_signers`.
 ///
 /// `reason` is a human-readable note logged on-chain. It's a fixed
 /// 64-byte array for predictable account sizing; trim trailing zeros
@@ -32,21 +43,50 @@ pub struct PauseVault<'info> {
     #[account(mut)]
     pub admin: Signer<'info>,
 
-    pub cosigner: Signer<'info>,
+    /// Second vault signer. OPTIONAL since the threshold became data: a
+    /// mandatory `Signer` here would be a floor of 2 that no stored table
+    /// could lower, and the table and the account struct would disagree in
+    /// silence. See `named_signers`.
+    pub cosigner: Option<Signer<'info>>,
 
     #[account(
         mut,
         seeds = [b"vault"],
         bump = vault_state.load()?.bump,
-        constraint = vault_state.load()?.validate_multisig(&admin.key(), &cosigner.key())
-            @ VaultError::Unauthorized,
     )]
     pub vault_state: AccountLoader<'info, VaultState>,
+
+    /// Per-action threshold table. Required by every vault-authorized
+    /// instruction since v0.26 — see `instructions::governance::authorize`.
+    #[account(seeds = [b"governance"], bump = governance.bump)]
+    pub governance: Account<'info, GovernanceConfig>,
 }
 
 pub fn handle_pause(ctx: Context<PauseVault>, reason: [u8; 64]) -> Result<()> {
+    // AUTHORIZATION — the single path (v0.26). `admin`, plus `cosigner` when
+    // one was supplied, are the NAMED signers; any further signatures the
+    // stored threshold demands are taken from the leading `remaining_accounts`.
+    {
+        let vault = ctx.accounts.vault_state.load()?;
+        authorize(
+            &vault,
+            &ctx.accounts.governance,
+            gov_action::PAUSE,
+            &named_signers(
+                ctx.accounts.admin.key(),
+                ctx.accounts.cosigner.as_ref().map(|s| s.key()),
+            ),
+            ctx.remaining_accounts,
+        )?;
+    }
+
     let admin_key = ctx.accounts.admin.key();
-    let cosigner_key = ctx.accounts.cosigner.key();
+    let cosigner_key = ctx
+        .accounts
+        .cosigner
+        .as_ref()
+        .map(|s| s.key())
+        .unwrap_or(admin_key);
 
     {
         let mut vault = ctx.accounts.vault_state.load_mut()?;

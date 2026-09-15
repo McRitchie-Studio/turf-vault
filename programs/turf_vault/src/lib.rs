@@ -12,14 +12,46 @@
 //!   - **ContestEntry** is per (contest × wallet × entry_num).
 //!   - **EntryTokenAccount** is a pre-purchased free-entry voucher.
 //!
-//! Auth model:
-//!   - **1-of-3 vault signer**: routine ops (create_contest,
-//!     set_contest_lock_time, close_contest, mint_entry_token, facilitate
-//!     entries, co-sign the v0.25 admin username flows'
-//!     reserved-prefix waiver).
-//!   - **2-of-3 vault signers**: treasury + governance ops (register_currency,
-//!     deactivate_currency, settle_contest, cancel_contest,
-//!     sweep_operator_revenue, pause, unpause, update_signers).
+//!   - **GovernanceConfig** holds the per-action signature thresholds.
+//!   - **MintWindow** counts entry-token mints inside one cap window.
+//!   - **UsernameRecord** is the lock on one name. Its EXISTENCE is
+//!     uniqueness; an `owner` of the vault PDA is a RESERVATION, so the
+//!     blocked list and the uniqueness index are one mechanism.
+//!
+//! Auth model (v0.26 — five signers, thresholds stored as DATA):
+//!
+//! Up to FIVE signer slots live on `VaultState` (`signers` ++ `signers_ext`),
+//! and the number of signatures each action needs is looked up per-action in
+//! `GovernanceConfig` rather than baked into the instruction shape. Every
+//! vault-authorized instruction routes through ONE function,
+//! `instructions::governance::authorize`; nothing else reads the signer set
+//! for authorization.
+//!
+//! | action                                    | default |
+//! |-------------------------------------------|---------|
+//! | settle / cancel / sweep                   |    3    |
+//! | register_currency / deactivate_currency   |    3    |
+//! | create_season                             |    3    |
+//! | update_signers                            |    3 (floor 3) |
+//! | unpause                                   |    3 (floor 3) |
+//! | set_action_threshold / mint window policy |    3 (floor 3) |
+//! | burn_entry_token                          |    3    |
+//! | mint_entry_token — above the window cap   |    3    |
+//! | pause                                     |    2    |
+//! | close_contest                             |    2    |
+//! | set_contest_lock_time / conclusion_time   |    2 (3 to re-open / amend) |
+//! | mint_entry_token — within the cap         |    1    |
+//! | grant_seeds                               |    1    |
+//! | overwrite / reserve / release username    |    3 (floor 3) |
+//! | create_contest / enter_contest            |    1 + the user's own signature |
+//!
+//! THE SHAPE OF THE FIX. The agent system is reachable by two of the five
+//! slots and no more, so it can pull the brake (pause, 2) but cannot lift it
+//! (unpause, 3), cannot move money (3), and cannot rotate the signer set (3,
+//! on a floor that three signatures cannot lower). The operator alone reaches
+//! three personal wallets, so he can govern — and evict a captured system —
+//! without anyone's cooperation.
+//!
 //!   - **User signature**: enter_contest{,_with_token}, set_username,
 //!     create_contest (as creator funding the prize pool).
 //!   - **INIT_AUTHORITY constant** (Alex Phantom key): one-time `initialize` call.
@@ -32,7 +64,14 @@ pub mod errors;
 pub mod state;
 pub mod instructions;
 
+#[cfg(test)]
+mod governance_tests;
+
+#[cfg(test)]
+mod username_registry_tests;
+
 use instructions::*;
+use state::MAX_SIGNERS;
 
 // Cluster-gated declare_id!. Devnet/localnet builds compile-time bind to the
 // current devnet program. Mainnet builds (--features mainnet) bind to the
@@ -67,31 +106,68 @@ pub mod turf_vault {
         handle_initialize(ctx, signers, threshold, treasury_authority)
     }
 
-    /// Rotate the multisig signer set IN PLACE (no redeploy). 2-of-3 of the
-    /// CURRENT signers. Re-added in v0.20 so a compromised signer key (e.g. a
-    /// leaked Alex Bot server key) is a cheap on-chain rotation rather than a
-    /// full program redeploy. Threshold is PINNED at 2-of-3 — this rotates
-    /// signer pubkeys only (`validate_multisig` ignores the threshold field).
-    /// Enforces signer continuity (BOTH authorizing cosigners survive the
-    /// rotation; no default/zeroed slots — `SignerContinuityRequired` 6017)
-    /// and no duplicate signers (`DuplicateSigner` 6014).
+    /// Rotate the multisig signer set IN PLACE (no redeploy). Up to FIVE
+    /// slots since v0.26, left-packed, `Pubkey::default()` meaning empty.
+    ///
+    /// Auth: `gov_action::UPDATE_SIGNERS` (default 3, IMMOVABLE FLOOR 3 — the
+    /// floor is what stops three signatures lowering the bar to two and
+    /// handing the vault back to the two agent-reachable keys).
+    ///
+    /// Enforces: no gaps, no duplicates (`DuplicateSigner` 6014), a set large
+    /// enough for every live threshold (`SignerSetTooSmall` 6052), and
+    /// continuity — at least `threshold` of the keys that AUTHORIZED the
+    /// rotation must survive it (`SignerContinuityRequired` 6017), the N-of-M
+    /// generalization of v0.20's both-cosigners rule.
     pub fn update_signers(
         ctx: Context<UpdateSigners>,
-        new_signers: [Pubkey; 3],
+        new_signers: [Pubkey; MAX_SIGNERS],
     ) -> Result<()> {
         handle_update_signers(ctx, new_signers)
+    }
+
+    // ── Governance configuration ──────────────────────────────────────────
+
+    /// Create the per-action threshold table with the program's shipped
+    /// defaults. Takes NO arguments, which is what makes a 2-signature
+    /// bootstrap safe — it cannot install weak numbers, only the safe ones.
+    ///
+    /// MUST BE CALLED IMMEDIATELY AFTER THE v0.26 UPGRADE: every
+    /// vault-authorized instruction requires this account to exist.
+    pub fn init_governance(ctx: Context<InitGovernance>) -> Result<()> {
+        handle_init_governance(ctx)
+    }
+
+    /// Retune one action's required signature count. 3-of-N, floored per
+    /// action. This is what makes every shipped default reversible by
+    /// transaction instead of by redeploy.
+    pub fn set_action_threshold(
+        ctx: Context<SetActionThreshold>,
+        action: u8,
+        value: u8,
+    ) -> Result<()> {
+        handle_set_action_threshold(ctx, action, value)
+    }
+
+    /// Retune the entry-token mint cap (window length + per-window ceiling).
+    /// 3-of-N.
+    pub fn set_mint_window_policy(
+        ctx: Context<SetMintWindowPolicy>,
+        window_seconds: i64,
+        cap: u32,
+    ) -> Result<()> {
+        handle_set_mint_window_policy(ctx, window_seconds, cap)
     }
 
     // ── Currency registry ─────────────────────────────────────────────────
 
     /// Add a currency to `accepted_currencies` at the first empty slot.
-    /// Creates the per-currency operator-revenue ATA. 2-of-3.
+    /// Creates the per-currency operator-revenue ATA. `REGISTER_CURRENCY` (3).
     pub fn register_currency(ctx: Context<RegisterCurrency>, kind: u8) -> Result<()> {
         handle_register_currency(ctx, kind)
     }
 
     /// Flip `accepted_currencies[idx].active = 0`. The slot is never
-    /// reclaimed — preserves currency_idx stability. 2-of-3.
+    /// reclaimed — preserves currency_idx stability. `DEACTIVATE_CURRENCY` (3).
     pub fn deactivate_currency(
         ctx: Context<DeactivateCurrency>,
         currency_idx: u8,
@@ -101,60 +177,102 @@ pub mod turf_vault {
 
     // ── Pause control ─────────────────────────────────────────────────────
 
-    /// Emergency stop: blocks enter_contest{,_with_token}. 2-of-3. `reason`
+    /// Emergency stop: blocks enter_contest{,_with_token}. `PAUSE` (2). `reason`
     /// is logged on-chain (UTF-8 zero-padded to 64 bytes).
     pub fn pause(ctx: Context<PauseVault>, reason: [u8; 64]) -> Result<()> {
         handle_pause(ctx, reason)
     }
 
-    /// Lift the emergency stop. 2-of-3.
+    /// Lift the emergency stop. `UNPAUSE` (3, floored) — deliberately HARDER
+    /// than pausing, so a captured system can pull the brake but never release it.
     pub fn unpause(ctx: Context<UnpauseVault>) -> Result<()> {
         handle_unpause(ctx)
     }
 
     // ── User accounts ─────────────────────────────────────────────────────
 
-    /// Create a new per-wallet UserAccount PDA. Permissionless payer.
+    /// Create a new per-wallet UserAccount PDA AND claim its username in the
+    /// registry. Permissionless payer. Fails with `UsernameAlreadyClaimed`
+    /// (6060) if the name is held by another account or reserved by the vault.
     pub fn create_user_account(
         ctx: Context<CreateUserAccount>,
         wallet: Pubkey,
         username: [u8; 32],
+        name_key: [u8; 32],
     ) -> Result<()> {
-        handle_create_user_account(ctx, wallet, username)
+        handle_create_user_account(ctx, wallet, username, name_key)
     }
 
     /// Set / overwrite the username on a UserAccount. Owner signs.
-    pub fn set_username(ctx: Context<SetUsername>, username: [u8; 32]) -> Result<()> {
-        handle_set_username(ctx, username)
+    ///
+    /// Claims `name_key` in the registry, and CLOSES the record for the name
+    /// given up (refunding its rent to the wallet) when the canonical key
+    /// really changes. `name_key` is the username lowercased and zero-padded
+    /// to 32 bytes — it is the `UsernameRecord` PDA seed, so it has to be an
+    /// argument; the handler re-derives it and refuses a mismatch
+    /// (`UsernameKeyMismatch`, 6061), the same shape `mint_entry_token` uses
+    /// for `source_ref_hash`.
+    pub fn set_username(
+        ctx: Context<SetUsername>,
+        username: [u8; 32],
+        name_key: [u8; 32],
+    ) -> Result<()> {
+        handle_set_username(ctx, username, name_key)
     }
 
-    /// `create_user_account` with an admin-authorized reserved-prefix waiver
-    /// (v0.25). Permissionless payer + a required 1-of-3 vault-signer
-    /// co-signature (`Unauthorized` 6000 otherwise). Charset + min-length
-    /// are still enforced — only the reserved-prefix branch is waived.
-    pub fn admin_create_user_account(
-        ctx: Context<AdminCreateUserAccount>,
-        wallet: Pubkey,
+    // ── Username registry ─────────────────────────────────────────────────
+
+    /// Rename any user WITHOUT that user's signature.
+    /// `OVERWRITE_USERNAME` (3, FLOOR 3) and an `UsernameOverwritten` event on
+    /// every use.
+    ///
+    /// Replaces `admin_set_username`, which required the account owner to
+    /// co-sign and was therefore useless against the only two things it was
+    /// ever wanted for — a squatter and a slur, neither of whom will consent.
+    /// Dropping consent is safe at three-of-five because no agent can reach
+    /// three, and the FLOOR is what keeps that true against a retune.
+    pub fn overwrite_username(
+        ctx: Context<OverwriteUsername>,
         username: [u8; 32],
+        name_key: [u8; 32],
     ) -> Result<()> {
-        handle_admin_create_user_account(ctx, wallet, username)
+        handle_overwrite_username(ctx, username, name_key)
     }
 
-    /// `set_username` with an admin-authorized reserved-prefix waiver
-    /// (v0.25). Owner signs (consenting) + a required 1-of-3 vault-signer
-    /// co-signature (`Unauthorized` 6000 otherwise). Charset + min-length
-    /// are still enforced — only the reserved-prefix branch is waived.
-    pub fn admin_set_username(
-        ctx: Context<AdminSetUsername>,
-        username: [u8; 32],
+    /// Take a free name off the market — the blocked list, as a claim the
+    /// vault makes rather than a list anyone walks. `RESERVE_USERNAME`
+    /// (3, FLOOR 3). Idempotent; refuses a name a player already holds.
+    pub fn reserve_username(ctx: Context<ReserveUsername>, name_key: [u8; 32]) -> Result<()> {
+        handle_reserve_username(ctx, name_key)
+    }
+
+    /// Put a reserved name back in the pool. `RELEASE_USERNAME` (3, FLOOR 3) —
+    /// a reservation is a brake, and nothing an agent reaches alone lifts a
+    /// brake. Rent goes to the pinned treasury, not to the caller.
+    pub fn release_reserved_username(
+        ctx: Context<ReleaseReservedUsername>,
+        name_key: [u8; 32],
     ) -> Result<()> {
-        handle_admin_set_username(ctx, username)
+        handle_release_reserved_username(ctx, name_key)
+    }
+
+    /// MIGRATION ONLY: lock the name a `UserAccount` already displays.
+    /// Permissionless — it has no discretion, taking both the name and the
+    /// owner from the account's own fields, so it can only assert what the
+    /// chain already says. 47 production users, zero case-insensitive
+    /// duplicates (measured 2026-09-15), so this reconciles nothing.
+    pub fn backfill_username_record(
+        ctx: Context<BackfillUsernameRecord>,
+        name_key: [u8; 32],
+    ) -> Result<()> {
+        handle_backfill_username_record(ctx, name_key)
     }
 
     // ── Seasons ───────────────────────────────────────────────────────────
 
     /// Create a Season with an immutable per-entry seed-award schedule.
-    /// 1-of-3 vault signer.
+    /// `CREATE_SEASON` (3) — it sets the per-entry seed schedule with no
+    /// upper bound checked, so a single key must not write it.
     pub fn create_season(
         ctx: Context<CreateSeason>,
         season_id: u32,
@@ -193,7 +311,9 @@ pub mod turf_vault {
         )
     }
 
-    /// Set (or clear) a contest's derived lock timestamp. 1-of-3.
+    /// Set (or clear) a contest's derived lock timestamp.
+    /// `SET_CONTEST_LOCK_TIME` (2), escalating to
+    /// `SET_CONTEST_LOCK_TIME_REOPEN` (3) once the lock has already passed.
     /// `new_lock_timestamp == 0` clears the lock (enterable indefinitely); any
     /// non-zero Unix-seconds value locks entries once chain time passes it.
     /// "Lock now" = pass the current chain time. Rejected once the contest is
@@ -205,7 +325,9 @@ pub mod turf_vault {
         handle_set_contest_lock_time(ctx, new_lock_timestamp)
     }
 
-    /// Set (or clear) a contest's conclusion timestamp (v0.18). 1-of-3. Once
+    /// Set (or clear) a contest's conclusion timestamp (v0.18).
+    /// `SET_CONTEST_CONCLUSION_TIME` (2), escalating to `..._AMEND` (3) to
+    /// change one already set. Once
     /// chain time passes it the contest has concluded — set_contest_lock_time
     /// then rejects. `new_conclusion_timestamp == 0` clears it. Rejected once
     /// the contest has already concluded or is settled/cancelled.
@@ -217,7 +339,8 @@ pub mod turf_vault {
     }
 
     /// Grade a contest. Per-winner SPL transfer from the contest's USDC
-    /// prize-pool PDA → winner's USDC ATA. 2-of-3.
+    /// prize-pool PDA → winner's USDC ATA. `SETTLE_CONTEST` (3). Extra
+    /// cosigners LEAD `remaining_accounts`, ahead of the winner triples.
     pub fn settle_contest<'info>(
         ctx: Context<'_, '_, '_, 'info, SettleContest<'info>>,
         settlements: Vec<Settlement>,
@@ -225,7 +348,8 @@ pub mod turf_vault {
         handle_settle_contest(ctx, settlements)
     }
 
-    /// Refund the prize pool to the creator. Open / Locked → Cancelled. 2-of-3.
+    /// Refund the prize pool to the creator. Open / Locked → Cancelled.
+    /// `CANCEL_CONTEST` (3).
     pub fn cancel_contest(ctx: Context<CancelContest>) -> Result<()> {
         handle_cancel_contest(ctx)
     }
@@ -233,7 +357,8 @@ pub mod turf_vault {
     /// Close a settled or cancelled contest's PDA + prize_pool ATA,
     /// reclaiming rent to the admin. Sweeps residual prize_pool dust to
     /// the operator-revenue USDC ATA first (decided 2026-05-27, §11 Q8).
-    /// 1-of-3.
+    /// `CLOSE_CONTEST` (2). v0.26: reclaimed rent is paid to the pinned
+    /// TREASURY, not to whichever signer happened to call it.
     pub fn close_contest(ctx: Context<CloseContest>) -> Result<()> {
         handle_close_contest(ctx)
     }
@@ -263,7 +388,9 @@ pub mod turf_vault {
 
     // ── Free entries ──────────────────────────────────────────────────────
 
-    /// Mint a new EntryTokenAccount for a user. 1-of-3 vault signer.
+    /// Mint a new EntryTokenAccount for a user. `MINT_ENTRY_TOKEN` (1)
+    /// within the per-window cap, `MINT_ENTRY_TOKEN_OVER_CAP` (3) above it —
+    /// v0.26 closed the uncapped 1-of-N value-creation hole.
     /// PDA is derived from sha256(source_ref) (v0.19, audit #9) — re-minting the
     /// same source_ref collides on init for true on-chain idempotency.
     pub fn mint_entry_token(
@@ -271,12 +398,16 @@ pub mod turf_vault {
         source: u8,
         source_ref: [u8; 64],
         source_ref_hash: [u8; 32],
+        window_index: i64,
     ) -> Result<()> {
-        handle_mint_entry_token(ctx, source, source_ref, source_ref_hash)
+        handle_mint_entry_token(ctx, source, source_ref, source_ref_hash, window_index)
     }
 
     /// Void an unspent EntryTokenAccount — the operator claw-back counterpart to
-    /// mint_entry_token. 1-of-3 vault signer; the owner does NOT sign.
+    /// mint_entry_token. `BURN_ENTRY_TOKEN` (3); the owner does NOT sign.
+    /// Three because it destroys user property at no cost to the destroyer and
+    /// pause does not stop it. It was written but NEVER DEPLOYED at 1-of-N, so
+    /// shipping at 3 regresses nothing — and it is retunable downward.
     ///
     /// TOMBSTONE, not close: Rails reads what a user is owed off the on-chain
     /// token COUNT, so closing the PDA would make the burn re-read as owed and
@@ -290,7 +421,7 @@ pub mod turf_vault {
     /// pair fails the seeds check. A SELF-CONSISTENT one does not — pass another
     /// token together with that token's own hash and both the seeds check and the
     /// handler's re-derivation hold, and that token burns. Nothing restricts WHICH
-    /// voucher a signer may burn, so a 1-of-3 signer can burn any unspent voucher
+    /// voucher a signer may burn, so an authorized quorum can burn any unspent voucher
     /// on the platform (see `docs/KEY_ROTATION.md` R1b).
     pub fn burn_entry_token(
         ctx: Context<BurnEntryToken>,
@@ -303,10 +434,13 @@ pub mod turf_vault {
 
     /// Credit a fixed `amount` of loyalty seeds into a user's UserAccount,
     /// OUTSIDE the entry flow (Rails "quest" bonuses: first username change,
-    /// newsletter join, friend-invite-entered). 1-of-3 vault signer; the user
+    /// newsletter join, friend-invite-entered). `GRANT_SEEDS` (1); the user
     /// does not sign. Idempotent per (user, kind[, invitee]) via the SeedGrant
     /// init-guard PDA. `kind` ∈ seed_grant_kind::*; `invitee` is the friend's
-    /// wallet for INVITE_FRIEND and Pubkey::default() otherwise.
+    /// wallet for INVITE_FRIEND and Pubkey::default() otherwise. v0.26: an
+    /// INVITE_FRIEND grant must also name the invitee's own UserAccount, which
+    /// must have entered a contest — the guard binds to a real account instead
+    /// of a caller-chosen number.
     pub fn grant_seeds(
         ctx: Context<GrantSeeds>,
         amount: u64,
@@ -319,7 +453,7 @@ pub mod turf_vault {
     // ── Treasury ──────────────────────────────────────────────────────────
 
     /// Drain a per-currency operator-revenue ATA to the pinned treasury
-    /// wallet's ATA. `amount = 0` sweeps all. 2-of-3.
+    /// wallet's ATA. `amount = 0` sweeps all. `SWEEP_OPERATOR_REVENUE` (3).
     pub fn sweep_operator_revenue(
         ctx: Context<SweepOperatorRevenue>,
         amount: u64,

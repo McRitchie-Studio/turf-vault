@@ -36,7 +36,25 @@ The retired Alex Bot signer `F6f8...KzhZ` has zero devnet authority after the 20
 | Program SHA256 | `e71a3fce25f8b5f28a203b33705a0274ebf1b2200c9f092ac86339931f2dbee7` (545,928 bytes) |
 | Consumer app | `turf-monster-mainnet` |
 
-Both clusters run **v0.25.0** today; mainnet reached it on 2026-06-11, nine minutes after devnet. The next upgrade window carries `burn_entry_token` (Unreleased in `CHANGELOG.md`), which changes the IDL and so needs a freshly built `EXPECTED_IDL_HASH` pinned on `turf-monster-mainnet`. The Version row above is read off the deployed executable, not inferred from a commit message; the method is under **Verification** below.
+Both clusters run **v0.25.0** today; mainnet reached it on 2026-06-11, nine minutes after devnet. The next upgrade window carries `burn_entry_token` AND the v0.26 governance change (both Unreleased in `CHANGELOG.md`), which change the IDL and so need a freshly built `EXPECTED_IDL_HASH` pinned on `turf-monster-mainnet`. The Version row above is read off the deployed executable, not inferred from a commit message; the method is under **Verification** below.
+
+**The `Threshold` rows above describe v0.25, which is what is DEPLOYED.** They say
+2-of-3 because that is what the deployed program can express: `validate_multisig`
+takes exactly two signers and never reads the `threshold` field at all. v0.26
+replaces that with per-action thresholds stored in a `GovernanceConfig` PDA
+(3 for anything that moves money or changes who governs, 2 for pause, 3 for
+unpause), and widens the signer set to five slots. **None of that is live yet** —
+do not read the new table in `CHANGELOG.md` as a description of the chain.
+
+When v0.26 does land, two rows here need re-deriving and one step must not be
+skipped: `init_governance` has to run immediately after the upgrade, because
+every vault-authorized instruction requires the account it creates. See
+`RUNBOOK.md` → *v0.26 Upgrade Ordering*. The signer rows do NOT change at
+deploy — the two appended slots read as empty until a human runs the ceremony in
+`SIGNER_ROTATION.md`. `node scripts/check-signer-slots.js` reads all five slots
+off either cluster and is the cheapest way to re-derive the signer rows above;
+run on 2026-09-15 it reported 1515-byte accounts and the same three signers on
+both clusters, with slots 4 and 5 empty.
 
 **The upgrade authority is per cluster.** Mainnet's Squads vault PDA (`Bk9sS7ii...`) is a different vault from devnet's (`BW13kgfi...`). Never carry one cluster's vault address to the other; the devnet address is the one that historically leaked into mainnet-facing prose. The `VaultState` signer set and threshold are identical on both clusters today, but nothing in the program ties them together — each cluster's `VaultState` was written by its own `initialize`, and `update_signers` can move one without the other. Read the cluster you mean.
 
@@ -106,6 +124,25 @@ On 2026-09-07 mainnet answered **PRESENT** for `admin_create_user_account` and
 identically. The absence is the control: it shows the probe discriminates
 rather than matching whatever it is handed. So mainnet dispatches v0.25.0's
 instruction surface, not v0.24.0's and not the unreleased tree's.
+
+> **THE PROBE ABOVE GOES BLIND THE MOMENT v0.26 LANDS — use the second one
+> below from that day on.** v0.26 DELETES `admin_create_user_account` and
+> `admin_set_username`, so after the upgrade every name in that command answers
+> **absent**, including the control. "absent, absent, absent" matches no row in
+> this section, and the natural reading of a probe that finds nothing is that
+> the dump or the command is wrong — not that the binary moved on. Swap the
+> names rather than the conclusion:
+>
+> ```bash
+> ruby -rdigest -e 'b = File.binread("/tmp/mainnet.so"); %w[init_governance set_action_threshold overwrite_username reserve_username backfill_username_record admin_set_username].each { |n| puts "#{n}: #{b.include?(Digest::SHA256.digest("global:#{n}")[0, 8]) ? "PRESENT" : "absent"}" }'
+> ```
+>
+> On a v0.26 binary the first five answer **PRESENT** and `admin_set_username`
+> answers **absent** — and that last one is the control, in the same way
+> `burn_entry_token` was the control for the v0.25 reading: a probe where
+> everything answers PRESENT is a probe that has stopped discriminating. Until
+> the upgrade lands, the v0.25 command above is still the right one and its
+> 2026-09-07 measurement still stands.
 
 The pinned IDL agrees from the other side, and it is the weaker of the two
 readings: `EXPECTED_IDL_HASH` on `turf-monster-mainnet` is the sha256 of

@@ -1,7 +1,8 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Mint, Token, TokenAccount, Transfer};
-use crate::state::VaultState;
+use crate::state::{VaultState, GovernanceConfig, gov_action};
 use crate::errors::VaultError;
+use crate::instructions::governance::{authorize, named_signers};
 
 /// `sweep_operator_revenue` — drain a per-currency operator-revenue ATA to
 /// the pinned treasury wallet's ATA. Per-currency (one mint per call) to
@@ -25,14 +26,22 @@ pub struct SweepOperatorRevenue<'info> {
     #[account(mut)]
     pub admin: Signer<'info>,
 
-    pub cosigner: Signer<'info>,
+    /// Second vault signer. OPTIONAL since the threshold became data: a
+    /// mandatory `Signer` here would be a floor of 2 that no stored table
+    /// could lower, and the table and the account struct would disagree in
+    /// silence. See `named_signers`.
+    pub cosigner: Option<Signer<'info>>,
 
     #[account(
         seeds = [b"vault"],
         bump = vault_state.load()?.bump,
-        constraint = vault_state.load()?.validate_multisig(&admin.key(), &cosigner.key()) @ VaultError::Unauthorized,
     )]
     pub vault_state: AccountLoader<'info, VaultState>,
+
+    /// Per-action threshold table. Required by every vault-authorized
+    /// instruction since v0.26 — see `instructions::governance::authorize`.
+    #[account(seeds = [b"governance"], bump = governance.bump)]
+    pub governance: Account<'info, GovernanceConfig>,
 
     pub currency_mint: Box<Account<'info, Mint>>,
 
@@ -63,6 +72,23 @@ pub fn handle_sweep_operator_revenue(
     ctx: Context<SweepOperatorRevenue>,
     amount: u64,
 ) -> Result<()> {
+    // AUTHORIZATION — the single path (v0.26). `admin`, plus `cosigner` when
+    // one was supplied, are the NAMED signers; any further signatures the
+    // stored threshold demands are taken from the leading `remaining_accounts`.
+    {
+        let vault = ctx.accounts.vault_state.load()?;
+        authorize(
+            &vault,
+            &ctx.accounts.governance,
+            gov_action::SWEEP_OPERATOR_REVENUE,
+            &named_signers(
+                ctx.accounts.admin.key(),
+                ctx.accounts.cosigner.as_ref().map(|s| s.key()),
+            ),
+            ctx.remaining_accounts,
+        )?;
+    }
+
     let available = ctx.accounts.op_rev_ata.amount;
     require!(available > 0, VaultError::EmptyRevenueAccount);
 
