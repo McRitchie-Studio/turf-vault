@@ -2,7 +2,7 @@ use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Mint, Token, TokenAccount, Transfer};
 use crate::state::{VaultState, GovernanceConfig, gov_action};
 use crate::errors::VaultError;
-use crate::instructions::governance::authorize;
+use crate::instructions::governance::{authorize, named_signers};
 
 /// `sweep_operator_revenue` — drain a per-currency operator-revenue ATA to
 /// the pinned treasury wallet's ATA. Per-currency (one mint per call) to
@@ -26,7 +26,11 @@ pub struct SweepOperatorRevenue<'info> {
     #[account(mut)]
     pub admin: Signer<'info>,
 
-    pub cosigner: Signer<'info>,
+    /// Second vault signer. OPTIONAL since the threshold became data: a
+    /// mandatory `Signer` here would be a floor of 2 that no stored table
+    /// could lower, and the table and the account struct would disagree in
+    /// silence. See `named_signers`.
+    pub cosigner: Option<Signer<'info>>,
 
     #[account(
         seeds = [b"vault"],
@@ -68,16 +72,19 @@ pub fn handle_sweep_operator_revenue(
     ctx: Context<SweepOperatorRevenue>,
     amount: u64,
 ) -> Result<()> {
-    // AUTHORIZATION — the single path (v0.26). `admin` + `cosigner` are the
-    // instruction's NAMED signers; any further signatures the stored threshold
-    // demands are taken from the leading `remaining_accounts`.
+    // AUTHORIZATION — the single path (v0.26). `admin`, plus `cosigner` when
+    // one was supplied, are the NAMED signers; any further signatures the
+    // stored threshold demands are taken from the leading `remaining_accounts`.
     {
         let vault = ctx.accounts.vault_state.load()?;
         authorize(
             &vault,
             &ctx.accounts.governance,
             gov_action::SWEEP_OPERATOR_REVENUE,
-            &[ctx.accounts.admin.key(), ctx.accounts.cosigner.key()],
+            &named_signers(
+                ctx.accounts.admin.key(),
+                ctx.accounts.cosigner.as_ref().map(|s| s.key()),
+            ),
             ctx.remaining_accounts,
         )?;
     }

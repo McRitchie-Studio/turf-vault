@@ -1,7 +1,7 @@
 use anchor_lang::prelude::*;
 use crate::state::{VaultState, MAX_CURRENCIES, GovernanceConfig, gov_action};
 use crate::errors::VaultError;
-use crate::instructions::governance::authorize;
+use crate::instructions::governance::{authorize, named_signers};
 
 /// `deactivate_currency` — flip a slot's `active` flag to 0.
 ///
@@ -25,7 +25,11 @@ pub struct DeactivateCurrency<'info> {
     #[account(mut)]
     pub admin: Signer<'info>,
 
-    pub cosigner: Signer<'info>,
+    /// Second vault signer. OPTIONAL since the threshold became data: a
+    /// mandatory `Signer` here would be a floor of 2 that no stored table
+    /// could lower, and the table and the account struct would disagree in
+    /// silence. See `named_signers`.
+    pub cosigner: Option<Signer<'info>>,
 
     #[account(
         mut,
@@ -44,16 +48,19 @@ pub fn handle_deactivate_currency(
     ctx: Context<DeactivateCurrency>,
     currency_idx: u8,
 ) -> Result<()> {
-    // AUTHORIZATION — the single path (v0.26). `admin` + `cosigner` are the
-    // instruction's NAMED signers; any further signatures the stored threshold
-    // demands are taken from the leading `remaining_accounts`.
+    // AUTHORIZATION — the single path (v0.26). `admin`, plus `cosigner` when
+    // one was supplied, are the NAMED signers; any further signatures the
+    // stored threshold demands are taken from the leading `remaining_accounts`.
     {
         let vault = ctx.accounts.vault_state.load()?;
         authorize(
             &vault,
             &ctx.accounts.governance,
             gov_action::DEACTIVATE_CURRENCY,
-            &[ctx.accounts.admin.key(), ctx.accounts.cosigner.key()],
+            &named_signers(
+                ctx.accounts.admin.key(),
+                ctx.accounts.cosigner.as_ref().map(|s| s.key()),
+            ),
             ctx.remaining_accounts,
         )?;
     }

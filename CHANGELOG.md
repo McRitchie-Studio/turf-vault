@@ -135,7 +135,7 @@ All notable changes to TurfVault are documented here. Format based on [Keep a Ch
   rotation must survive it. That last rule makes the ceremony two steps by
   construction: the first rotation can only ADD (all three current authorizers
   must survive), and the second — signed by three personal wallets no agent can
-  reach — is the eviction. See `docs/KEY_ROTATION.md`.
+  reach — is the eviction. See `docs/SIGNER_ROTATION.md`.
 
 ### Added
 
@@ -188,8 +188,10 @@ All notable changes to TurfVault are documented here. Format based on [Keep a Ch
 
 - **`burn_entry_token` — operator claw-back of an unspent free entry.** The
   counterpart to `mint_entry_token`, for a voucher granted in error, granted to
-  a fraudulent account, or granted against a payment later refunded. 1-of-3
-  vault signer; the holder does NOT sign, which is deliberately the opposite of
+  a fraudulent account, or granted against a payment later refunded.
+  `gov_action::BURN_ENTRY_TOKEN` (3 — see the v0.26 table above; this
+  instruction has never been deployed, so it ships at three and regresses
+  nothing); the holder does NOT sign, which is deliberately the opposite of
   OPSEC-004's ruling on `enter_contest_with_token`. The asymmetry is sound:
   there, an admin-only consume could SPEND a user's token on a contest of the
   admin's choosing, converting their property into an entry they never picked;
@@ -233,9 +235,12 @@ All notable changes to TurfVault are documented here. Format based on [Keep a Ch
   `mint_entry_token` already asserts `sha256(source_ref) == source_ref_hash`
   before writing `source_ref` and seeds the PDA with that hash, so every account
   the program can create satisfies the re-derivation by construction. Nothing
-  restricts WHICH voucher a signer may burn, so **a 1-of-3 signer can burn any
-  unspent voucher on the platform** — see `docs/KEY_ROTATION.md` R1b and the
-  `burn_entry_token` row of `docs/VERIFICATION_MATRIX.md`.
+  restricts WHICH voucher a signer may burn, so **an authorized quorum can burn
+  any unspent voucher on the platform**. That was the reason not to ship this at
+  one signature: at 1-of-N a single agent-reachable key could have destroyed
+  every outstanding voucher. It ships at `BURN_ENTRY_TOKEN` = 3 (v0.26, above),
+  which does not narrow WHICH voucher a burn may target — it raises who has to
+  agree. See the `burn_entry_token` row of `docs/VERIFICATION_MATRIX.md`.
 
   New error `EntryTokenAlreadyBurned` (6045).
 

@@ -81,8 +81,16 @@ Both steps are exercised end to end, against a real validator, in
 ## Before you start
 
 The program must already be at v0.26 **and** `init_governance` must have been
-called — every vault-authorized instruction requires the governance account.
-See `RUNBOOK.md` → *v0.26 upgrade ordering*.
+called — every vault-authorized instruction requires the governance account, so
+until it exists the rotation cannot run either:
+
+```bash
+node scripts/init-governance.js --cluster devnet \
+  --signer keys/a.json --signer keys/b.json --send
+```
+
+See `RUNBOOK.md` → *v0.26 Upgrade Ordering* for why that call must follow the
+program upgrade immediately.
 
 Pre-flight, read-only, needs no key:
 
@@ -130,11 +138,22 @@ success unless every slot is exactly what was written.
 ## Post-flight
 
 ```bash
-node scripts/check-signer-slots.js --cluster devnet --expect rotated
+node scripts/check-signer-slots.js --cluster devnet \
+  --expect-slots <pk1>,<pk2>,<pk3>,<pk4>,<pk5>
 ```
 
-Exit code, not eyeballing. Then confirm the evicted keys are genuinely inert by
-attempting a `pause` with them — it must fail `Unauthorized` (6000).
+Exit code, not eyeballing — and it compares the SET, slot for slot, naming any
+slot that differs.
+
+**Name the set rather than asking "is it rotated?"** There is no
+`--expect rotated`, because occupancy cannot answer that question: three
+occupied slots with two empty is both the PRE-rotation shape and the legitimate
+END STATE of step 2, which narrows back to the three personal wallets. A check
+built on counting would have failed on the doomsday rotation, immediately after
+it succeeded.
+
+Then confirm the evicted keys are genuinely inert by attempting a `pause` with
+them — it must fail `Unauthorized` (6000).
 
 ---
 

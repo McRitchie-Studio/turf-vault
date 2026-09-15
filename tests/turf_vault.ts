@@ -1389,6 +1389,89 @@ describe("turf_vault verification matrix", () => {
       ).to.equal(2);
     });
 
+    it("pause is genuinely retunable to ONE signature, on chain", async () => {
+      // THE REVIEW FINDING, ASSERTED. `pause` used to declare `admin` AND
+      // `cosigner` as mandatory `Signer` accounts, so the account struct
+      // enforced a floor of 2 that no stored table could lower.
+      // `set_action_threshold(PAUSE, 1)` was ACCEPTED, `threshold_for`
+      // returned 1, the on-chain log and every doc said 1 — and a lone signer
+      // was still rejected. On the brake, discovered during an incident.
+      //
+      // Retuning it and then actually pausing with ONE signature is the only
+      // assertion that distinguishes a fixed instruction from a documented one.
+      await program.methods
+        .setActionThreshold(5 /* pause */, 1)
+        .accountsStrict({
+          admin: admin.publicKey,
+          vaultState: vaultStatePda,
+          governance: governancePda,
+        })
+        .remainingAccounts(cosigners(signer2, signer3))
+        .signers([signer2, signer3])
+        .rpc();
+
+      await program.methods
+        .pause(reason("one-signature brake") as any)
+        .accountsStrict({
+          admin: admin.publicKey,
+          cosigner: null,
+          vaultState: vaultStatePda,
+          governance: governancePda,
+        })
+        .rpc();
+      expect(
+        (await program.account.vaultState.fetch(vaultStatePda)).paused
+      ).to.equal(1);
+
+      // THE ASYMMETRY SURVIVES THE RETUNE. unpause is floored at 3, so even
+      // with pause down at one, a captured system still cannot lift its own
+      // brake. Two signatures are refused on the count.
+      await expectRejected(
+        program.methods
+          .unpause()
+          .accountsStrict({
+            admin: admin.publicKey,
+            cosigner: signer2.publicKey,
+            vaultState: vaultStatePda,
+            governance: governancePda,
+          })
+          .signers([signer2])
+          .rpc(),
+        /InsufficientSigners/i
+      );
+
+      await program.methods
+        .unpause()
+        .accountsStrict({
+          admin: admin.publicKey,
+          cosigner: signer2.publicKey,
+          vaultState: vaultStatePda,
+          governance: governancePda,
+        })
+        .remainingAccounts(cosigners(signer3))
+        .signers([signer2, signer3])
+        .rpc();
+      expect(
+        (await program.account.vaultState.fetch(vaultStatePda)).paused
+      ).to.equal(0);
+
+      // Back to the shipped 2 for the rest of the suite.
+      await program.methods
+        .setActionThreshold(5, 2)
+        .accountsStrict({
+          admin: admin.publicKey,
+          vaultState: vaultStatePda,
+          governance: governancePda,
+        })
+        .remainingAccounts(cosigners(signer2, signer3))
+        .signers([signer2, signer3])
+        .rpc();
+      expect(
+        (await program.account.governanceConfig.fetch(governancePda))
+          .thresholds[5]
+      ).to.equal(2);
+    });
+
     it("refuses a threshold no signer set could satisfy", async () => {
       // Storing a threshold above the number of keys that exist would brick
       // the action — and for update_signers it would brick the only way back.

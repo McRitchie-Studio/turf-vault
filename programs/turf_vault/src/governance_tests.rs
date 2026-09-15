@@ -219,8 +219,15 @@ fn a_zero_threshold_is_refused_rather_than_authorizing_everything() {
 
 #[test]
 fn shipped_defaults_match_the_agreed_table() {
-    // The numbers Mr. McRitchie decided on 2026-09-14/15, asserted so a later
-    // edit to `DEFAULT_THRESHOLDS` has to be deliberate.
+    // The numbers Mr. McRitchie decided, asserted so a later edit to
+    // `DEFAULT_THRESHOLDS` has to be deliberate rather than incidental.
+    //
+    // PAUSE = 2 IS HIS OWN WORDS, verbatim and after the design note that said
+    // one: "settle_contest can be 2/5, pause should also be 2/5,
+    // set_contest_lock_time and set_contest_conclusion_time can also be 2/5."
+    // A test label is not where a disagreement gets settled, so there is no
+    // disagreement encoded here — only the decision, and the floor below keeps
+    // it retunable if an incident ever argues otherwise.
     let g = governance();
     for (action, expected, name) in [
         (gov_action::SETTLE_CONTEST, 3, "settle_contest"),
@@ -352,4 +359,87 @@ fn governance_error_codes_occupy_exactly_6046_through_6059() {
     assert_eq!(VaultError::DuplicateSigner as u32 + 6000, 6014);
     assert_eq!(VaultError::SignerContinuityRequired as u32 + 6000, 6017);
     assert_eq!(VaultError::EntryTokenAlreadyBurned as u32 + 6000, 6045);
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// THE ACCOUNT STRUCT MUST NOT OUT-VOTE THE STORED TABLE
+// ══════════════════════════════════════════════════════════════════════════
+
+/// How many MANDATORY named `Signer` accounts each instruction declares.
+///
+/// A mandatory `Signer` is a threshold the ACCOUNT STRUCT enforces on its own,
+/// and `authorize` requires every named key to be a distinct member of the
+/// active set — so an instruction with two mandatory signers can never be
+/// satisfied by one signature, whatever the stored table says.
+///
+/// Keep this table in step with the `#[derive(Accounts)]` structs. It exists
+/// to make the invariant below checkable at all.
+const MANDATORY_NAMED: &[(u8, u8, &str)] = &[
+    (gov_action::SETTLE_CONTEST, 1, "settle_contest"),
+    (gov_action::CANCEL_CONTEST, 1, "cancel_contest"),
+    (gov_action::SWEEP_OPERATOR_REVENUE, 1, "sweep_operator_revenue"),
+    (gov_action::REGISTER_CURRENCY, 1, "register_currency"),
+    (gov_action::DEACTIVATE_CURRENCY, 1, "deactivate_currency"),
+    (gov_action::PAUSE, 1, "pause"),
+    // unpause and update_signers keep a MANDATORY cosigner. Their floors are
+    // 3, so two named signers can never exceed what the table is able to
+    // require, and the two mechanisms cannot contradict each other.
+    (gov_action::UNPAUSE, 2, "unpause"),
+    (gov_action::UPDATE_SIGNERS, 2, "update_signers"),
+    (gov_action::SET_GOVERNANCE, 1, "set_action_threshold / set_mint_window_policy"),
+    (gov_action::CLOSE_CONTEST, 1, "close_contest"),
+    (gov_action::CREATE_SEASON, 1, "create_season"),
+    (gov_action::MINT_ENTRY_TOKEN, 1, "mint_entry_token"),
+    (gov_action::BURN_ENTRY_TOKEN, 1, "burn_entry_token"),
+    (gov_action::GRANT_SEEDS, 1, "grant_seeds"),
+    (gov_action::ADMIN_USERNAME, 1, "admin username waiver"),
+    (gov_action::CREATE_CONTEST, 1, "create_contest"),
+    (gov_action::ENTER_CONTEST, 1, "enter_contest"),
+];
+
+#[test]
+fn mandatory_named_signers_never_exceed_the_floor() {
+    // THE INVARIANT THIS PR WAS BOUNCED FOR MISSING.
+    //
+    // `pause` declared `admin` AND `cosigner` as mandatory `Signer`s while
+    // carrying a floor of 1. So `set_action_threshold(PAUSE, 1)` was ACCEPTED,
+    // `threshold_for` returned 1, and the `msg!` log and every doc said 1 —
+    // and the instruction went on rejecting a lone signer. The account struct
+    // was silently out-voting the stored table, on the brake, where the place
+    // you find out is during an incident.
+    //
+    // The rule: an instruction may declare at most `floor` mandatory named
+    // signers. Anything above the floor must be OPTIONAL, so the table is the
+    // only thing deciding the count. Add a mandatory `Signer` without raising
+    // the floor and this fails.
+    for (action, mandatory, name) in MANDATORY_NAMED {
+        let floor = GovernanceConfig::floor_for(*action);
+        assert!(
+            *mandatory <= floor,
+            "{name} declares {mandatory} mandatory named signer(s) but its floor is {floor}. \
+             A threshold below {mandatory} would be accepted, logged, and documented — and \
+             then refused on chain. Make the extra signer `Option<Signer>` (see \
+             `instructions::governance::named_signers`) or raise the floor."
+        );
+    }
+}
+
+#[test]
+fn every_action_with_a_floor_of_one_can_actually_be_retuned_to_one() {
+    // The other half of the same promise: a floor of 1 must MEAN something.
+    // `set_action_threshold` would accept 1 for each of these, so each must be
+    // reachable with a single signature — which is only true because their
+    // second named signer is optional.
+    let mut governance = governance();
+    let vault = rotated_vault();
+    for (action, mandatory, name) in MANDATORY_NAMED {
+        if GovernanceConfig::floor_for(*action) != 1 {
+            continue;
+        }
+        governance.thresholds[*action as usize] = 1;
+        assert_eq!(governance.threshold_for(*action), 1, "{name}");
+        assert_eq!(*mandatory, 1, "{name} cannot be reached at one signature");
+        // ...and one distinct member really does satisfy it.
+        assert!(vault.validate_threshold(&[pk(1)], 1).is_ok(), "{name}");
+    }
 }

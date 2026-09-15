@@ -108,6 +108,43 @@ pub fn authorize(
     Ok(extra_needed)
 }
 
+/// The NAMED signer keys an instruction hands to `authorize`: `admin`, plus
+/// `cosigner` when the caller supplied one.
+///
+/// ── WHY `cosigner` IS OPTIONAL WHEREVER THE FLOOR IS 1 ────────────────────
+///
+/// A MANDATORY `Signer` account is a threshold the account struct enforces on
+/// its own, and `validate_threshold` requires every named key to be a distinct
+/// member of the active set — so an instruction declaring both `admin` and
+/// `cosigner` as mandatory cannot be satisfied by fewer than two signatures NO
+/// MATTER WHAT THE STORED TABLE SAYS.
+///
+/// That silently broke the promise this whole PDA exists to make. `pause` has
+/// a floor of 1, so `set_action_threshold(PAUSE, 1)` was ACCEPTED,
+/// `threshold_for` returned 1, and the `msg!` log and every doc said 1 — while
+/// the instruction went on rejecting a lone signer. The place that would have
+/// been discovered is during an incident, on the brake.
+///
+/// So every instruction whose FLOOR is 1 takes `cosigner` as
+/// `Option<Signer>`: the account struct now imposes a minimum of ONE, the
+/// stored table is the only thing that decides the rest, and the two
+/// mechanisms cannot disagree.
+///
+/// `unpause` and `update_signers` keep a mandatory `cosigner` deliberately:
+/// their floors are 3, so two named signers can never exceed what the table
+/// can require, and the account struct cannot contradict it. That invariant is
+/// asserted in `governance_tests::mandatory_named_signers_never_exceed_the_floor`.
+///
+/// Passing `cosigner` is still the ordinary path and needs no client change —
+/// omitting it simply means the same signature has to arrive through
+/// `remaining_accounts` instead.
+pub fn named_signers(admin: Pubkey, cosigner: Option<Pubkey>) -> Vec<Pubkey> {
+    match cosigner {
+        Some(key) => vec![admin, key],
+        None => vec![admin],
+    }
+}
+
 // ──────────────────────────────────────────────────────────────────────────
 // init_governance
 // ──────────────────────────────────────────────────────────────────────────

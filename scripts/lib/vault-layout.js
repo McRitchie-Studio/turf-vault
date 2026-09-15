@@ -96,10 +96,18 @@ function readSignerSlots(data, encode) {
  * two appended ones empty?
  *
  * Before the ceremony this answers "the appended slots are untouched, so the
- * upgrade has changed nothing". After it, the same call answers "the rotation
- * landed". It is the successor to the pre-upgrade `check-reserved.js`, which
- * asked whether the 64 reserved bytes were all zero; those bytes are now the
- * slots, so the question became this one.
+ * upgrade has changed nothing". It is the successor to the pre-upgrade
+ * `check-reserved.js`, which asked whether the 64 reserved bytes were all
+ * zero; those bytes are now the slots, so the question became this one.
+ *
+ * ── IT IS NOT THE INVERSE OF "ROTATED" ────────────────────────────────────
+ *
+ * This shape is also the legitimate END STATE of the eviction step, which
+ * narrows a five-slot set back to three. So a caller asking "did my rotation
+ * land?" cannot ask `!isUnrotated`: on the doomsday rotation — the one that
+ * evicts both agent-reachable slots and leaves exactly three personal wallets
+ * — the answer would be "no", on the day it matters most. Compare the SET
+ * against what was written (`slotsMatch`) rather than counting occupancy.
  */
 function isUnrotated(slots) {
   return (
@@ -116,6 +124,23 @@ function isLeftPacked(slots) {
   return slots.slice(firstEmpty).every((s) => s.empty);
 }
 
+/**
+ * Do the on-chain slots equal `expected`, slot for slot?
+ *
+ * The only honest post-flight for a rotation. Occupancy counts cannot answer
+ * it — see the note on `isUnrotated` — and a transaction that confirmed is not
+ * the same as a set that says what you meant.
+ *
+ * @param {{base58: string}[]} slots  as returned by readSignerSlots
+ * @param {string[]} expected  base58 keys, short arrays padded with the default
+ */
+function slotsMatch(slots, expected) {
+  const padded = expected
+    .concat(Array(MAX_SIGNERS).fill(DEFAULT_PUBKEY))
+    .slice(0, MAX_SIGNERS);
+  return slots.length === MAX_SIGNERS && slots.every((s, i) => s.base58 === padded[i]);
+}
+
 module.exports = {
   PUBKEY,
   OFFSETS,
@@ -129,4 +154,5 @@ module.exports = {
   readSignerSlots,
   isUnrotated,
   isLeftPacked,
+  slotsMatch,
 };

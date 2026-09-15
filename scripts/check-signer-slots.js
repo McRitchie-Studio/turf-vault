@@ -17,18 +17,31 @@
  * Those bytes are now the slots, so the question became: "are slots 4 and 5
  * still empty?" It is the same assertion pointed at the same 64 bytes.
  *
- *   BEFORE a rotation  — expect UNROTATED. Three occupied slots, two empty.
+ *   BEFORE a rotation  — `--expect unrotated`. Three occupied slots, two empty.
  *                        Proves the upgrade changed nothing and the operator
  *                        is starting from the state the plan assumed.
- *   AFTER a rotation   — expect ROTATED. Proves the write landed, and (with
- *                        --expect) turns that into an EXIT CODE rather than
- *                        something a tired operator has to eyeball at 2am.
+ *   AFTER a rotation   — `--expect-slots <csv>`. Proves the write landed, as an
+ *                        EXIT CODE rather than something a tired operator has
+ *                        to eyeball at 2am.
+ *
+ * ── WHY THERE IS NO `--expect rotated` ────────────────────────────────────
+ *
+ * There was, and it was UNREACHABLE on the one day it mattered. "Rotated" was
+ * computed as "not three-occupied-and-two-empty" — but that shape is also the
+ * legitimate END STATE of the eviction step, which narrows a five-slot set back
+ * to the three personal wallets. So the doomsday rotation would have reported
+ * UNROTATED and `--expect rotated` would have exited 1 immediately after
+ * succeeding.
+ *
+ * Occupancy cannot answer "did my rotation land?" — only the SET can. Name what
+ * you wrote and the check compares it slot for slot.
  *
  * Usage:
- *   node scripts/check-signer-slots.js                    # both clusters
+ *   node scripts/check-signer-slots.js                      # both clusters
  *   node scripts/check-signer-slots.js --cluster devnet
- *   node scripts/check-signer-slots.js --expect unrotated # exit 1 on mismatch
- *   node scripts/check-signer-slots.js --expect rotated
+ *   node scripts/check-signer-slots.js --expect unrotated    # exit 1 on mismatch
+ *   node scripts/check-signer-slots.js --cluster devnet \
+ *     --expect-slots <pk1>,<pk2>,<pk3>[,<pk4>][,<pk5>]
  */
 
 const path = require("path");
@@ -36,8 +49,10 @@ const {
   readSignerSlots,
   isUnrotated,
   isLeftPacked,
+  slotsMatch,
   ACCOUNT_LEN,
-  BASE_SLOTS,
+  DEFAULT_PUBKEY,
+  MAX_SIGNERS,
 } = require(path.join(__dirname, "lib", "vault-layout.js"));
 
 const CLUSTERS = {
@@ -75,14 +90,37 @@ async function main() {
   }
   const encode = bs58.encode || (bs58.default && bs58.default.encode);
 
-  const expect = flag("--expect");
-  if (expect && !["unrotated", "rotated"].includes(expect)) {
-    die("--expect takes `unrotated` or `rotated`");
-  }
   const only = flag("--cluster");
   if (only && !CLUSTERS[only]) die("--cluster takes `devnet` or `mainnet`");
-  const targets = only ? [only] : Object.keys(CLUSTERS);
 
+  const expect = flag("--expect");
+  if (expect === "rotated") {
+    die(
+      "`--expect rotated` was removed because it could not answer the question.\n" +
+        "    Occupancy cannot tell a rotated set from the eviction end state, which is\n" +
+        "    also three occupied slots — so it would have failed on the doomsday\n" +
+        "    rotation, immediately after that rotation succeeded.\n" +
+        "    Use --expect-slots <pk1>,<pk2>,... and name the set you wrote."
+    );
+  }
+  if (expect && expect !== "unrotated") die("--expect takes `unrotated`");
+
+  const expectSlotsArg = flag("--expect-slots");
+  let expectSlots = null;
+  if (expectSlotsArg) {
+    expectSlots = expectSlotsArg.split(",").map((x) => x.trim()).filter(Boolean);
+    if (expectSlots.length < 1 || expectSlots.length > MAX_SIGNERS) {
+      die(`--expect-slots takes 1 to ${MAX_SIGNERS} pubkeys`);
+    }
+    try {
+      expectSlots = expectSlots.map((x) => new web3.PublicKey(x).toBase58());
+    } catch (e) {
+      die("--expect-slots contains something that is not a base58 pubkey: " + e.message);
+    }
+    if (!only) die("--expect-slots needs --cluster: a signer set is per cluster");
+  }
+
+  const targets = only ? [only] : Object.keys(CLUSTERS);
   let failed = false;
 
   for (const name of targets) {
@@ -162,18 +200,24 @@ async function main() {
       console.log("    ✗ EXPECTED unrotated, found a rotated set.");
       failed = true;
     }
-    if (expect === "rotated" && unrotated) {
-      console.log(
-        "    ✗ EXPECTED rotated, but slots 4 and 5 are still empty — the\n" +
-          "      rotation did NOT land."
-      );
-      failed = true;
-    }
-    if (expect === "rotated" && occupied <= BASE_SLOTS && !unrotated) {
-      console.log(
-        "    note: fewer than four slots are occupied. That is a legitimate\n" +
-          "      end state for the eviction step, which narrows back to three."
-      );
+    if (expectSlots) {
+      const padded = expectSlots
+        .concat(Array(MAX_SIGNERS).fill(DEFAULT_PUBKEY))
+        .slice(0, MAX_SIGNERS);
+      if (slotsMatch(slots, expectSlots)) {
+        console.log("    ✓ the set matches --expect-slots exactly, slot for slot.");
+      } else {
+        console.log("    ✗ the set does NOT match --expect-slots:");
+        for (let i = 0; i < MAX_SIGNERS; i += 1) {
+          if (slots[i].base58 !== padded[i]) {
+            console.log(
+              `        slot ${i}: expected ${padded[i]}\n` +
+                `                  chain has ${slots[i].base58}`
+            );
+          }
+        }
+        failed = true;
+      }
     }
   }
 

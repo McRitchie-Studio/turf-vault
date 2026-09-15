@@ -3,7 +3,7 @@ use anchor_spl::token::{self, Mint, Token, TokenAccount, Transfer};
 use anchor_spl::associated_token::get_associated_token_address;
 use crate::state::{VaultState, UserAccount, Contest, ContestEntry, ContestStatus, EntryStatus, GovernanceConfig, gov_action};
 use crate::errors::VaultError;
-use crate::instructions::governance::authorize;
+use crate::instructions::governance::{authorize, named_signers};
 
 /// `settle_contest` — grade a contest, disburse USDC payouts.
 ///
@@ -53,7 +53,11 @@ pub struct SettleContest<'info> {
     #[account(mut)]
     pub admin: Signer<'info>,
 
-    pub cosigner: Signer<'info>,
+    /// Second vault signer. OPTIONAL since the threshold became data: a
+    /// mandatory `Signer` here would be a floor of 2 that no stored table
+    /// could lower, and the table and the account struct would disagree in
+    /// silence. See `named_signers`.
+    pub cosigner: Option<Signer<'info>>,
 
     #[account(
         seeds = [b"vault"],
@@ -113,14 +117,18 @@ pub fn handle_settle_contest<'info>(
     settlements: Vec<Settlement>,
 ) -> Result<()> {
     // AUTHORIZATION — must run before anything reads `remaining_accounts`,
-    // because it is what tells us where the payload starts.
+    // because it is what tells us where the payload starts. `admin`, plus
+    // `cosigner` when one was supplied, are the NAMED signers.
     let cosigners_consumed = {
         let vault = ctx.accounts.vault_state.load()?;
         authorize(
             &vault,
             &ctx.accounts.governance,
             gov_action::SETTLE_CONTEST,
-            &[ctx.accounts.admin.key(), ctx.accounts.cosigner.key()],
+            &named_signers(
+                ctx.accounts.admin.key(),
+                ctx.accounts.cosigner.as_ref().map(|s| s.key()),
+            ),
             ctx.remaining_accounts,
         )?
     };
