@@ -344,11 +344,13 @@ program or the deploy scripts rather than adding a workflow:
 - **`cargo clippy -D warnings`** — 4 pre-existing `style`/`complexity` findings,
   two of which need real logic changes. They still print as warnings in the
   `program` job, so the debt stays visible.
-- **`npm run lint`** (Prettier) — two scripts are unformatted, and reformatting
-  `scripts/squad-upgrade.js` produces a large diff across the mainnet upgrade
-  path. The 219→326-line figure recorded here on 2026-09-13 no longer describes
-  the file: the 2026-09-15 rewrite replaced it wholesale, so re-measure with
-  `npx prettier --check scripts/squad-upgrade.js` before quoting a number. Note that its glob also covers `tests/turf_vault.ts`, so
+- **`npm run lint`** (Prettier) — **22 files are unformatted** (measured
+  2026-09-15; 20 of them on `accepted` before that day's upgrade-path work), so
+  wiring this lane is a whole-tree reformat, not a tidy-up. The figure recorded
+  here until 2026-09-15 said "two scripts", which had been wrong for long enough
+  that nobody re-measured; the accompanying 219→326-line claim about
+  `scripts/squad-upgrade.js` described a file the rewrite replaced. Re-measure
+  with `npm run lint` rather than quoting either. Note that its glob also covers `tests/turf_vault.ts`, so
   wiring this lane makes the suite READ for the first time: expect
   `scripts/tests/anchor-suite-lane.test.js` to go red, and update the sections it
   names in the same change.
