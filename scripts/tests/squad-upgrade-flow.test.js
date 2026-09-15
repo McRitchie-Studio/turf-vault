@@ -663,6 +663,63 @@ test("a DRY RUN reads no key material and sends nothing", async () => {
   assert.equal(steps(trace, "sign").length, 0);
 });
 
+test("a DRY RUN with --index AUDITS that index, read-only, and reports the verdict", async () => {
+  // This is the path the devnet proof used on 2026-09-15: pointed at Squads
+  // index 13 it confirmed a genuine past upgrade matched, and pointed at the same
+  // index with a different buffer it named the field that differed — without
+  // sending anything. An audit that could only run armed would be no audit.
+  const good = await runUpgrade({
+    cluster: "devnet",
+    threshold: 3,
+    send: false,
+    extraArgs: ["--index=13"],
+    onChainTransaction: {
+      discriminator: [168, 250, 162, 100, 81, 14, 162, 207],
+      message: {
+        accountKeys: [
+          "BPFLoaderUpgradeab1e11111111111111111111111",
+          PROGRAM_DATA,
+          LIVE.devnet.program,
+          BUFFER,
+          ADMIN, // the fee payer this fixture picks, and so the default spill
+          RENT,
+          CLOCK,
+          LIVE.devnet.vault,
+        ].map((k) => ({ toBase58: () => k })),
+        instructions: [
+          {
+            programIdIndex: 0,
+            accountIndexes: Uint8Array.from([1, 2, 3, 4, 5, 6, 7]),
+            data: Uint8Array.from([3, 0, 0, 0]),
+          },
+        ],
+        addressTableLookups: [],
+      },
+    },
+    balances: { [SYSTEM_DEVNET]: 1_000_000_000, [ADMIN]: 9_000_000_000, [XAN]: 2_000_000_000 },
+  });
+
+  assert.equal(good.exitCode, null);
+  assert.match(lines(good.trace), /read-back audit of index 13/);
+  assert.match(lines(good.trace), /matches the plan above exactly/);
+  assert.equal(steps(good.trace, "sendTransaction").length, 0, "an audit sends nothing");
+  assert.equal(steps(good.trace, "proposalApprove").length, 0);
+
+  const bad = await runUpgrade({
+    cluster: "devnet",
+    threshold: 3,
+    send: false,
+    extraArgs: ["--index=13"],
+    onChainTransaction: {
+      discriminator: [94, 8, 4, 35, 113, 139, 139, 112], // a config transaction
+    },
+  });
+
+  assert.equal(bad.exitCode, null, "a dry-run audit REPORTS a mismatch; it does not exit non-zero");
+  assert.match(lines(bad.trace), /an armed run would refuse here/);
+  assert.match(lines(bad.trace), /CONFIG transaction/);
+});
+
 test("a run with no --cluster refuses without touching the network", async () => {
   const { trace, exitCode } = await runUpgrade({
     cluster: "devnet",

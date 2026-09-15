@@ -221,7 +221,7 @@ control named without them buys confidence it has not earned.
   The rest are the upgrade-path files, recounted 2026-09-15 after the Squads
   rewrite: 13 in `scripts/tests/squad-roles.test.js` (which of the two behaviours
   a run takes, graded against the planner, including the three cases that are
-  still refusals), 14 in `scripts/tests/squad-upgrade-flow.test.js` (the real
+  still refusals), 15 in `scripts/tests/squad-upgrade-flow.test.js` (the real
   `scripts/squad-upgrade.js` executed end to end against stubs — and the only
   place the autonomous and handoff paths are proven to be two), 15 in
   `scripts/tests/squad-upgrade-signers.test.js` (which member each call in that
@@ -232,7 +232,7 @@ control named without them buys confidence it has not earned.
   the two vocabularies inside `squad.json`), and 5 in
   `scripts/tests/release-check-covers-ci.test.js`, which holds `bin/release-check`
   — the local gate the studio's cert now runs for this repo — identical to the
-  lanes this workflow runs. `npm run test:scripts` reported **132 passing** on
+  lanes this workflow runs. `npm run test:scripts` reported **133 passing** on
   2026-09-15; re-derive rather than trust the number.
 - `npm run check:doc-op-refs` fails on a stale 1Password vault reference in this
   repo's prose.
