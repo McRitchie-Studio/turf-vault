@@ -365,15 +365,23 @@ fn governance_error_codes_occupy_exactly_6046_through_6059() {
 // THE ACCOUNT STRUCT MUST NOT OUT-VOTE THE STORED TABLE
 // ══════════════════════════════════════════════════════════════════════════
 
-/// How many MANDATORY named `Signer` accounts each instruction declares.
+/// How many mandatory `Signer` accounts each instruction passes INTO
+/// `authorize` as named vault signers.
 ///
-/// A mandatory `Signer` is a threshold the ACCOUNT STRUCT enforces on its own,
-/// and `authorize` requires every named key to be a distinct member of the
-/// active set — so an instruction with two mandatory signers can never be
-/// satisfied by one signature, whatever the stored table says.
+/// COUNT THE VAULT SIGNERS, NOT EVERY `Signer` FIELD. `create_contest`,
+/// `enter_contest{,_with_token}` and the two admin username instructions each
+/// declare TWO mandatory `Signer`s, but the second is the USER's own signature
+/// — it is checked by an account constraint and never reaches `authorize`, so
+/// it is not part of the threshold. Their entry here is 1, and raising it to 2
+/// to "match the struct" would break this guard rather than tighten it.
 ///
-/// Keep this table in step with the `#[derive(Accounts)]` structs. It exists
-/// to make the invariant below checkable at all.
+/// A mandatory vault `Signer` is a threshold the ACCOUNT STRUCT enforces on its
+/// own, because `authorize` requires every named key to be a distinct member of
+/// the active set — so an instruction naming two can never be satisfied by one
+/// signature, whatever the stored table says.
+///
+/// Keep this table in step with the `#[derive(Accounts)]` structs. It exists to
+/// make the invariant below checkable at all.
 const MANDATORY_NAMED: &[(u8, u8, &str)] = &[
     (gov_action::SETTLE_CONTEST, 1, "settle_contest"),
     (gov_action::CANCEL_CONTEST, 1, "cancel_contest"),
