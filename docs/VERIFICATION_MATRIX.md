@@ -27,27 +27,23 @@ runs it on every program/suite pull request, on every such push to `accepted`,
 is still recorded, because a stamp names a TREE and a lane names a run, but it is
 no longer the only execution evidence this repo has.
 
-Latest local proof, **2026-09-15**, on the username-registry tree:
-
-```bash
-yarn install
-anchor build
-anchor test          # spins its own validator, deploys, runs tests/turf_vault.ts
-```
+Latest local proof, **2026-09-15**, on the username-registry tree — taken through
+the LANE'S recipe (`yarn install`, `anchor build`, a validator started with the
+built `.so` loaded at the declared program ID, then `anchor test --skip-build
+--skip-deploy --skip-local-validator`), copy-pasteable under
+[Keeping it armed](#keeping-it-armed):
 
 Result: **`45 passing`, 0 failing** (was `38` earlier the same day, and `27` at
 the 2026-09-06 stamp). This is a RUN RESULT, not an `it()` count — though on this
 tree the two happen to agree, because every `it()` in the file ran.
 
-That run was taken through the lane's own recipe rather than a plain
-`anchor test`: the validator is started with the built `.so` loaded at the
-DECLARED program ID (`solana-test-validator --upgradeable-program`), and the
-suite runs with `--skip-build --skip-deploy --skip-local-validator`. The reason
-is in the workflow and worth knowing before you reproduce it — a machine without
-`target/deploy/turf_vault-keypair.json` (a secret, gitignored, and absent from
-any fresh checkout) gets a RANDOM program keypair from `anchor build`, and every
-test then fails `DeclaredProgramIdMismatch`. The keypair-free path is what CI
-runs, so it is what the stamp should be taken through.
+Why the recipe rather than a plain `anchor test`, which DEPLOYS: a machine
+without `target/deploy/turf_vault-keypair.json` (a secret, gitignored, and absent
+from any fresh checkout) gets a RANDOM program keypair from `anchor build`, and
+every test then fails `DeclaredProgramIdMismatch`. The keypair-free path is what
+CI runs, so it is what a stamp should be taken through. On a machine that holds
+the keypair, the two Baseline Commands above still work and prove the same
+thing.
 
 > **THE REGISTRY ROWS ARE PROVEN AS OF THIS STAMP — and the first run that
 > reached them found two tests that had never bitten.** The stamp this replaced
