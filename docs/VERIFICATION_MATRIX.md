@@ -96,7 +96,7 @@ always-run ones — they never start a validator, so they run on every push and 
 without a path filter:
 
 ```bash
-bin/release-check          # the four CI lanes plus, new in v0.26, `cargo test`
+bin/release-check          # the five `CI` lanes, cheapest first
 ```
 
 Both Node lanes and both Rust lanes were run green on the username-registry
@@ -184,7 +184,7 @@ the note under [Baseline Commands](#baseline-commands).
 **What still does not run it.** The studio certification path reaches this repo —
 `mcritchie-studio/config/release_repos.yml` names `bin/release-check` on the
 `turf-vault` row, so both `bin/fast-check` and `bin/full-suite-check` run THAT
-SCRIPT as the whole gate — and that script runs the `CI` workflow's four lanes and
+SCRIPT as the whole gate — and that script runs the `CI` workflow's five lanes and
 NOT this one. That carve-out is deliberate and pinned by
 `scripts/tests/release-check-covers-ci.test.js`: a local cert that demanded a
 validator would fail `COULD NOT RUN` on every machine with no Solana toolchain,
@@ -401,7 +401,7 @@ not earned, so the gaps below are kept even where they shrank.
   `bin/release-check`); before that it could only be a fingerprint-bound
   `[cert-deferred@<fp>]` alongside a green CI, or an author-written
   `[full-suite-bypass] <reason>`, which still works and is flagged loudly. The
-  upgrade is real and it does not touch this gap: the cert runs `CI`'s four lanes,
+  upgrade is real and it does not touch this gap: the cert runs `CI`'s five lanes,
   so NO LOCAL receipt is evidence that this program ran. What IS such evidence is
   the Anchor Suite run on the PR or on `accepted`, read from GitHub — and because
   it is a separate workflow, a reader checking only the `CI` workflow's conclusion

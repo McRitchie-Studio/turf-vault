@@ -340,7 +340,7 @@ promote `accepted` when it is not green, and it also refuses a `CI` workflow tha
 carries a `paths:` filter. A validator lane inside `CI` would therefore block the
 release sweep on a flaky runner, and could not be filtered. So `CI` stays fast,
 unfiltered and always-run; **Anchor Suite** is slow, filtered and deep. The local
-cert (`bin/release-check`, below) runs `CI`'s four lanes and NOT the suite — a
+cert (`bin/release-check`, below) runs `CI`'s five lanes and NOT the suite — a
 cert that demanded a validator would fail `COULD NOT RUN` on any machine without
 the Solana toolchain.
 
@@ -381,7 +381,7 @@ or the deploy scripts rather than adding a workflow:
 ### Running the gate locally
 
 ```bash
-bin/release-check          # the four lanes above, cheapest first, ~1s warm
+bin/release-check          # the five lanes above, cheapest first, ~2s warm
 bin/release-check --list   # print the lane table without running it
 ```
 
