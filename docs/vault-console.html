@@ -1,0 +1,2361 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Turf Vault Operator Console</title>
+
+<!--
+  TURF VAULT OPERATOR CONSOLE  ·  standalone, no server, no build, no npm.
+
+  HOW TO OPEN IT  (read this first; the wrong one silently has no wallet)
+
+    cd  the folder holding this file
+    python3 -m http.server 8000
+    open  http://localhost:8000/vault-console.html
+
+  DO NOT open it as file:///... . Phantom injects its provider only into pages
+  served over https, or from localhost / 127.0.0.1 — a file:// page gets no
+  window.solana at all, and Chrome additionally withholds file access from every
+  extension unless the user ticks "Allow access to file URLs" by hand. The page
+  detects this and says so on screen rather than leaving you to guess.
+  python3 ships with macOS and every Linux; it needs no network.
+
+  WHAT IT TALKS TO
+    Your wallet extension, and one Solana RPC endpoint you choose. Nothing else.
+    No Rails app, no database, no agent, no CDN, no analytics, no fonts.
+    Zero third party code: every byte of base58, SHA 256, ed25519, borsh and
+    transaction encoding below is in this file and was proven against
+    @solana/web3.js before it was pasted in (scripts/tests/vault-console.test.js
+    re run that proof on every push).
+
+  WHAT IT WILL NOT DO
+    It holds no keys and never asks for one. It signs nothing by itself.
+    It refuses to submit any transaction whose on chain subject changed after
+    it was shown to you: everything is re read and re hashed at the moment you
+    press send, and a mismatch aborts instead of signing.
+-->
+
+<style>
+  /* Dark is the operating default, matching docs/turf-vault-deploy-cost.html.
+     The light block below is for a borrowed laptop in a bright room. */
+  :root {
+    --bg: #0b1020;
+    --bg-2: #121933;
+    --bg-3: #1a2347;
+    --ink: #e6ecff;
+    --ink-dim: #97a3c8;
+    --ink-dimmer: #5d6790;
+    --rule: #243155;
+    --rule-hi: #344473;
+    --accent: #6ad7ff;
+    --accent-2: #c5a3ff;
+    --good: #7af0a9;
+    --warn: #ffce6b;
+    --bad: #ff7e7e;
+    --code-bg: #070b16;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f5f7fc;
+      --bg-2: #ffffff;
+      --bg-3: #eaeefa;
+      --ink: #121933;
+      --ink-dim: #4a5578;
+      --ink-dimmer: #7b86a8;
+      --rule: #ccd5ea;
+      --rule-hi: #aab8d8;
+      --accent: #0b6d92;
+      --accent-2: #6b3fb5;
+      --good: #07713f;
+      --warn: #8a5b00;
+      --bad: #a51c1c;
+      --code-bg: #eef1f8;
+    }
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding-block: 24px;
+    padding-inline: 16px;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 15px;
+    line-height: 1.5;
+  }
+  .wrap { max-width: 980px; margin: 0 auto; }
+
+  header h1 { margin: 0 0 4px; font-size: 22px; letter-spacing: -0.01em; }
+  header .sub { color: var(--ink-dim); font-size: 13px; margin: 0 0 20px; }
+
+  .label {
+    display: block;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-size: 11px;
+    color: var(--ink-dimmer);
+    margin-bottom: 6px;
+  }
+
+  section.card {
+    background: var(--bg-2);
+    border: 1px solid var(--rule);
+    border-radius: 10px;
+    padding: 16px;
+    margin-bottom: 14px;
+  }
+  section.card > h2 {
+    margin: 0 0 12px;
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--accent);
+  }
+  section.card[hidden] { display: none !important; }
+
+  .step-n {
+    display: inline-block;
+    min-width: 20px;
+    margin-right: 6px;
+    color: var(--ink-dimmer);
+  }
+
+  .notice {
+    border: 1px solid var(--warn);
+    border-left-width: 4px;
+    border-radius: 8px;
+    background: var(--bg-3);
+    padding: 12px 14px;
+    margin-bottom: 14px;
+    font-size: 13px;
+  }
+  .notice.bad { border-color: var(--bad); }
+  .notice.good { border-color: var(--good); }
+  .notice h3 { margin: 0 0 6px; font-size: 13px; }
+  .notice p { margin: 0 0 6px; }
+  .notice p:last-child { margin-bottom: 0; }
+
+  input, select, button, textarea {
+    font-family: inherit;
+    font-size: 14px;
+  }
+  input[type="text"], select, textarea {
+    width: 100%;
+    background: var(--code-bg);
+    color: var(--ink);
+    border: 1px solid var(--rule-hi);
+    border-radius: 6px;
+    padding: 9px 10px;
+  }
+  input[type="text"], textarea { font-family: var(--mono); }
+  textarea { resize: vertical; min-height: 78px; line-height: 1.45; }
+  input:focus, select:focus, textarea:focus {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
+
+  button {
+    background: var(--bg-3);
+    color: var(--ink);
+    border: 1px solid var(--rule-hi);
+    border-radius: 6px;
+    padding: 9px 14px;
+    cursor: pointer;
+  }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  button.primary { background: var(--accent); color: var(--bg); border-color: var(--accent); font-weight: 600; }
+  button.danger { border-color: var(--bad); color: var(--bad); }
+
+  .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; }
+  .row > * { flex: 1 1 220px; min-width: 0; }
+  .row > .shrink { flex: 0 0 auto; }
+  .btnrow { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
+
+  code, .mono { font-family: var(--mono); }
+  .addr {
+    font-family: var(--mono);
+    font-size: 12.5px;
+    /* Full 44 characters, always. Verifying what you sign is the entire point,
+       so nothing here is ever truncated or middle elided. */
+    word-break: break-all;
+    overflow-wrap: anywhere;
+    -webkit-user-select: all;
+    user-select: all;
+  }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  th { color: var(--ink-dimmer); font-weight: 500; text-transform: uppercase; font-size: 11px; letter-spacing: 0.06em; }
+  td.num { font-variant-numeric: tabular-nums; font-family: var(--mono); }
+  .scroll-x { overflow-x: auto; }
+
+  .pill {
+    display: inline-block;
+    padding: 1px 8px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.03em;
+    border: 1px solid currentColor;
+    white-space: nowrap;
+  }
+  .pill.ok { color: var(--good); }
+  .pill.warn { color: var(--warn); }
+  .pill.bad { color: var(--bad); }
+  .pill.dim { color: var(--ink-dimmer); }
+
+  .action-line {
+    display: flex;
+    gap: 10px;
+    padding: 9px 0;
+    border-bottom: 1px solid var(--rule);
+    align-items: baseline;
+  }
+  .action-line:last-child { border-bottom: 0; }
+  .action-verb { flex: 0 0 auto; font-weight: 700; }
+  .action-verb.add { color: var(--good); }
+  .action-verb.remove { color: var(--bad); }
+  .action-verb.set { color: var(--accent-2); }
+  .action-verb.unknown { color: var(--warn); }
+
+  pre {
+    background: var(--code-bg);
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    padding: 10px;
+    overflow-x: auto;
+    font-size: 12px;
+    margin: 8px 0 0;
+    line-height: 1.45;
+  }
+  .muted { color: var(--ink-dim); }
+  .dimmer { color: var(--ink-dimmer); }
+  .small { font-size: 12.5px; }
+  .ok { color: var(--good); }
+  .warnc { color: var(--warn); }
+  .badc { color: var(--bad); }
+  ul.tight { margin: 6px 0 0; padding-left: 20px; }
+  ul.tight li { margin-bottom: 3px; }
+  footer { color: var(--ink-dimmer); font-size: 12px; margin-top: 22px; text-align: center; }
+  .digest { font-family: var(--mono); font-size: 12px; color: var(--accent-2); word-break: break-all; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>Turf Vault Operator Console</h1>
+  <p class="sub">
+    Standalone. No server, no build step, no third party code. Holds no keys.
+    Shows every address in full and refuses to send what it has not shown you.
+  </p>
+</header>
+
+<div id="env-notice"></div>
+
+<!-- ══════════════════════════ STEP 1 · CLUSTER ══════════════════════════ -->
+<section class="card">
+  <h2><span class="step-n">1</span>Cluster</h2>
+  <p class="small muted" style="margin-top:0">
+    There is deliberately no default. A convenient default is how a ceremony step
+    hits the wrong chain. Nothing below works until you choose one.
+  </p>
+  <div class="row">
+    <div>
+      <span class="label">Network</span>
+      <select id="cluster">
+        <option value="">— choose a cluster —</option>
+        <option value="devnet">devnet</option>
+        <option value="mainnet-beta">mainnet-beta</option>
+        <option value="custom">custom RPC…</option>
+      </select>
+    </div>
+    <div>
+      <span class="label">RPC endpoint</span>
+      <input type="text" id="rpc" placeholder="choose a cluster first" disabled>
+    </div>
+  </div>
+  <div class="btnrow">
+    <button id="btn-rpc-check" class="shrink" disabled>Check endpoint</button>
+    <span id="rpc-status" class="small muted" style="align-self:center"></span>
+  </div>
+</section>
+
+<!-- ══════════════════════════ STEP 2 · WALLET ═══════════════════════════ -->
+<section class="card">
+  <h2><span class="step-n">2</span>Wallet</h2>
+  <div id="wallet-body">
+    <p class="small muted" style="margin-top:0">Connect the wallet you intend to sign with.</p>
+  </div>
+  <div class="btnrow">
+    <button id="btn-connect" class="shrink">Connect wallet</button>
+    <button id="btn-disconnect" class="shrink" hidden>Disconnect</button>
+  </div>
+</section>
+
+<!-- ═════════════════════ STEP 3 · SQUADS MULTISIG ═══════════════════════ -->
+<section class="card">
+  <h2><span class="step-n">3</span>Squads multisig</h2>
+  <p class="small muted" style="margin-top:0">
+    Approve and execute a Squads configuration proposal — the membership and
+    threshold of the multisig itself.
+  </p>
+  <div class="row">
+    <div>
+      <span class="label">Multisig address</span>
+      <input type="text" id="ms-addr" placeholder="multisig account address" spellcheck="false" autocapitalize="off" autocomplete="off">
+    </div>
+    <div class="shrink">
+      <button id="btn-load-ms" disabled>Load multisig</button>
+    </div>
+  </div>
+  <div id="ms-body"></div>
+</section>
+
+<!-- ═══════════════════════ STEP 4 · PROPOSALS ═══════════════════════════ -->
+<section class="card" id="card-proposals" hidden>
+  <h2><span class="step-n">4</span>Proposals</h2>
+  <div id="proposals-body"></div>
+</section>
+
+<!-- ═══════════════════════ STEP 5 · REVIEW ══════════════════════════════ -->
+<section class="card" id="card-review" hidden>
+  <h2><span class="step-n">5</span>Review and sign</h2>
+  <div id="review-body"></div>
+</section>
+
+<!-- ══════════════════════ TURF VAULT SIGNER SET ═════════════════════════ -->
+<section class="card">
+  <h2>Turf Vault signer set</h2>
+  <p class="small muted" style="margin-top:0">
+    A different multisig from the one above. The Squads multisig governs the
+    program's upgrade authority; this is the signer set stored inside the
+    program's own <code>VaultState</code>, which <code>update_signers</code>
+    rotates. Read only until you build a rotation.
+  </p>
+  <div class="row">
+    <div>
+      <span class="label">Turf Vault program id</span>
+      <input type="text" id="vault-prog" placeholder="program id" spellcheck="false" autocapitalize="off" autocomplete="off">
+    </div>
+    <div class="shrink">
+      <button id="btn-load-vault" disabled>Read vault</button>
+    </div>
+  </div>
+  <div id="vault-body"></div>
+</section>
+
+<!-- ═══════════════════════ ROTATION (update_signers) ════════════════════ -->
+<section class="card" id="card-rotate" hidden>
+  <h2>Rotate the signer set</h2>
+  <div id="rotate-body"></div>
+</section>
+
+<footer>
+  Turf Vault Operator Console · every address shown in full · nothing sent unshown
+</footer>
+
+</div><!-- /wrap -->
+
+<!--
+  ════════════════════════════════════════════════════════════════════════
+  CORE — pure functions, no DOM, no globals beyond the one export below.
+  scripts/tests/vault-console.test.js extracts THIS BLOCK BY ID out of this
+  very file and runs it against known good vectors, so the bytes proven by CI
+  are the bytes that ship, not a copy that can drift.
+  ════════════════════════════════════════════════════════════════════════
+-->
+<script id="console-core">
+"use strict";
+
+/* ── base58 ─────────────────────────────────────────────────────────────── */
+var B58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+var B58_MAP = (function () {
+  var m = {};
+  for (var i = 0; i < B58_ALPHABET.length; i++) m[B58_ALPHABET[i]] = i;
+  return m;
+})();
+
+function b58encode(bytes) {
+  bytes = Uint8Array.from(bytes);
+  var zeros = 0;
+  while (zeros < bytes.length && bytes[zeros] === 0) zeros++;
+  var size = (((bytes.length - zeros) * 138) / 100 | 0) + 1;
+  var b = new Uint8Array(size);
+  var length = 0;
+  for (var i = zeros; i < bytes.length; i++) {
+    var carry = bytes[i];
+    var j = 0;
+    for (var k = size - 1; (carry !== 0 || j < length) && k >= 0; k--, j++) {
+      carry += 256 * b[k];
+      b[k] = carry % 58;
+      carry = (carry / 58) | 0;
+    }
+    length = j;
+  }
+  var it = size - length;
+  while (it < size && b[it] === 0) it++;
+  var out = "";
+  for (var z = 0; z < zeros; z++) out += "1";
+  for (; it < size; it++) out += B58_ALPHABET[b[it]];
+  return out;
+}
+
+function b58decode(str) {
+  if (typeof str !== "string" || str.length === 0) throw new Error("base58: empty input");
+  var zeros = 0;
+  while (zeros < str.length && str[zeros] === "1") zeros++;
+  var size = (((str.length - zeros) * 733) / 1000 | 0) + 1;
+  var b = new Uint8Array(size);
+  var length = 0;
+  for (var i = zeros; i < str.length; i++) {
+    var val = B58_MAP[str[i]];
+    if (val === undefined) throw new Error("base58: invalid character '" + str[i] + "'");
+    var carry = val;
+    var j = 0;
+    for (var k = size - 1; (carry !== 0 || j < length) && k >= 0; k--, j++) {
+      carry += 58 * b[k];
+      b[k] = carry % 256;
+      carry = (carry / 256) | 0;
+    }
+    length = j;
+  }
+  var it = size - length;
+  while (it < size && b[it] === 0) it++;
+  var out = new Uint8Array(zeros + (size - it));
+  var n = zeros;
+  for (; it < size; it++) out[n++] = b[it];
+  return out;
+}
+
+/** A pubkey is exactly 32 bytes. Anything else is a typo, and a typo that
+ *  reaches an instruction is a key nobody holds. */
+function parsePubkey(str, what) {
+  var bytes;
+  try {
+    bytes = b58decode(String(str).trim());
+  } catch (e) {
+    throw new Error((what || "address") + ": " + e.message);
+  }
+  if (bytes.length !== 32) {
+    throw new Error((what || "address") + ": decodes to " + bytes.length + " bytes, not 32 — not a Solana address");
+  }
+  return bytes;
+}
+
+function isValidPubkey(str) {
+  try { parsePubkey(str); return true; } catch (e) { return false; }
+}
+
+/* ── SHA 256 ────────────────────────────────────────────────────────────────
+   Written out rather than reached for through crypto.subtle: SubtleCrypto is
+   gated on a secure context and is async, and PDA derivation needs a
+   synchronous hash it can call a few hundred times inside one bump search. */
+var SHA256_K = new Uint32Array([
+  0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+  0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+  0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+  0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+  0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+  0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+  0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+  0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
+]);
+
+function sha256(msg) {
+  msg = Uint8Array.from(msg);
+  var H = new Uint32Array([0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19]);
+  var bitLen = msg.length * 8;
+  var padded = new Uint8Array(Math.ceil((msg.length + 1 + 8) / 64) * 64);
+  padded.set(msg);
+  padded[msg.length] = 0x80;
+  var dv = new DataView(padded.buffer);
+  dv.setUint32(padded.length - 4, bitLen >>> 0, false);
+  dv.setUint32(padded.length - 8, Math.floor(bitLen / 0x100000000), false);
+  var w = new Uint32Array(64);
+  function rotr(x, n) { return (x >>> n) | (x << (32 - n)); }
+  for (var off = 0; off < padded.length; off += 64) {
+    for (var i = 0; i < 16; i++) w[i] = dv.getUint32(off + i * 4, false);
+    for (i = 16; i < 64; i++) {
+      var s0 = rotr(w[i - 15], 7) ^ rotr(w[i - 15], 18) ^ (w[i - 15] >>> 3);
+      var s1 = rotr(w[i - 2], 17) ^ rotr(w[i - 2], 19) ^ (w[i - 2] >>> 10);
+      w[i] = (w[i - 16] + s0 + w[i - 7] + s1) >>> 0;
+    }
+    var a = H[0], b = H[1], c = H[2], d = H[3], e = H[4], f = H[5], g = H[6], h = H[7];
+    for (i = 0; i < 64; i++) {
+      var S1 = rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25);
+      var ch = (e & f) ^ (~e & g);
+      var t1 = (h + S1 + ch + SHA256_K[i] + w[i]) >>> 0;
+      var S0 = rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22);
+      var maj = (a & b) ^ (a & c) ^ (b & c);
+      var t2 = (S0 + maj) >>> 0;
+      h = g; g = f; f = e; e = (d + t1) >>> 0;
+      d = c; c = b; b = a; a = (t1 + t2) >>> 0;
+    }
+    H[0] = (H[0] + a) >>> 0; H[1] = (H[1] + b) >>> 0; H[2] = (H[2] + c) >>> 0; H[3] = (H[3] + d) >>> 0;
+    H[4] = (H[4] + e) >>> 0; H[5] = (H[5] + f) >>> 0; H[6] = (H[6] + g) >>> 0; H[7] = (H[7] + h) >>> 0;
+  }
+  var out = new Uint8Array(32);
+  var odv = new DataView(out.buffer);
+  for (var q = 0; q < 8; q++) odv.setUint32(q * 4, H[q], false);
+  return out;
+}
+
+function hex(bytes) {
+  // A loud refusal rather than a quiet empty string. This function feeds
+  // planDigest, and something that is not a byte array would otherwise render
+  // as "" — making two DIFFERENT instructions digest identically and silently
+  // disarming the one mechanism that stops an unshown transaction being sent.
+  if (!bytes || typeof bytes.length !== "number") {
+    throw new Error("hex: expected a byte array, got " + Object.prototype.toString.call(bytes));
+  }
+  var s = "";
+  for (var i = 0; i < bytes.length; i++) {
+    var b = bytes[i];
+    if (typeof b !== "number" || b < 0 || b > 255) throw new Error("hex: byte " + i + " is not a byte");
+    s += (b < 16 ? "0" : "") + b.toString(16);
+  }
+  return s;
+}
+
+/* ── ed25519 on curve test ──────────────────────────────────────────────────
+   findProgramAddress requires the derived point to be OFF the curve. This is
+   the only reason the field arithmetic is here: without it we cannot tell which
+   bump is canonical, and a wrong PDA addresses an account that does not exist —
+   which reads on screen as "no proposal found" rather than as a bug. */
+var P25519 = (1n << 255n) - 19n;
+var D25519 = 37095705934669439343138083508754565189542113879843219016388785533085940283555n;
+var SQRT_M1 = 19681161376707505956807079304988542015446066515923890162744021073123829784752n;
+
+function powMod(base, exp, mod) {
+  var result = 1n;
+  base %= mod;
+  while (exp > 0n) {
+    if (exp & 1n) result = (result * base) % mod;
+    base = (base * base) % mod;
+    exp >>= 1n;
+  }
+  return result;
+}
+
+function isOnCurve(bytes) {
+  if (bytes.length !== 32) return false;
+  var y = 0n;
+  for (var i = 31; i >= 0; i--) y = (y << 8n) | BigInt(i === 31 ? bytes[i] & 0x7f : bytes[i]);
+  if (y >= P25519) return false;
+  var y2 = (y * y) % P25519;
+  var u = (y2 - 1n + P25519) % P25519;
+  var v = (D25519 * y2 + 1n) % P25519;
+  var v2 = (v * v) % P25519;
+  var v3 = (v2 * v) % P25519;
+  var v7 = (((v3 * v3) % P25519) * v) % P25519;
+  var x = (((u * v3) % P25519) * powMod((u * v7) % P25519, (P25519 - 5n) / 8n, P25519)) % P25519;
+  var vx2 = (v * ((x * x) % P25519)) % P25519;
+  var uu = u % P25519;
+  if (vx2 === uu) return true;
+  if (vx2 === (P25519 - uu) % P25519) {
+    x = (x * SQRT_M1) % P25519;
+    return (v * ((x * x) % P25519)) % P25519 === uu;
+  }
+  return false;
+}
+
+/* ── bytes, PDAs ────────────────────────────────────────────────────────── */
+function concatBytes(chunks) {
+  var len = 0, i;
+  for (i = 0; i < chunks.length; i++) len += chunks[i].length;
+  var out = new Uint8Array(len);
+  var o = 0;
+  for (i = 0; i < chunks.length; i++) { out.set(chunks[i], o); o += chunks[i].length; }
+  return out;
+}
+function utf8(s) { return new TextEncoder().encode(s); }
+function u64le(n) {
+  var b = new Uint8Array(8);
+  new DataView(b.buffer).setBigUint64(0, BigInt(n), true);
+  return b;
+}
+
+var PDA_MARKER = utf8("ProgramDerivedAddress");
+
+function createProgramAddress(seeds, programId) {
+  for (var i = 0; i < seeds.length; i++) {
+    if (seeds[i].length > 32) throw new Error("PDA seed longer than 32 bytes");
+  }
+  var h = sha256(concatBytes(seeds.concat([programId, PDA_MARKER])));
+  if (isOnCurve(h)) throw new Error("on curve");
+  return h;
+}
+
+function findProgramAddress(seeds, programId) {
+  for (var bump = 255; bump >= 0; bump--) {
+    try {
+      return { address: createProgramAddress(seeds.concat([Uint8Array.of(bump)]), programId), bump: bump };
+    } catch (e) { /* on curve — step the bump down */ }
+  }
+  throw new Error("no viable program address bump");
+}
+
+/* ── shortvec (compact u16) ─────────────────────────────────────────────── */
+function encodeLength(n) {
+  var out = [];
+  var rem = n;
+  for (;;) {
+    var elem = rem & 0x7f;
+    rem >>= 7;
+    if (rem === 0) { out.push(elem); break; }
+    out.push(elem | 0x80);
+  }
+  return Uint8Array.from(out);
+}
+
+/* ── transaction message ────────────────────────────────────────────────────
+   This is @solana/web3.js's Transaction.compileMessage, step for step. Matching
+   it exactly is not cosmetic: it is what lets the test suite diff our bytes
+   against the reference implementation and call any difference a bug. The
+   runtime itself is laxer — it only demands the four role groups in order — so a
+   divergence would not necessarily fail on chain. It would just mean we had
+   nothing to check ourselves against. */
+var LOCALE_OPTS = {
+  localeMatcher: "best fit", usage: "sort", sensitivity: "variant",
+  ignorePunctuation: false, numeric: false, caseFirst: "lower"
+};
+
+function compileMessage(opts) {
+  var payer = opts.payer, instructions = opts.instructions, recentBlockhash = opts.recentBlockhash;
+  var accountMetas = [], programIds = [], i, j;
+
+  for (i = 0; i < instructions.length; i++) {
+    var ix = instructions[i];
+    for (j = 0; j < ix.keys.length; j++) {
+      accountMetas.push({ pubkey: ix.keys[j].pubkey, isSigner: !!ix.keys[j].isSigner, isWritable: !!ix.keys[j].isWritable });
+    }
+    if (programIds.indexOf(ix.programId) === -1) programIds.push(ix.programId);
+  }
+  for (i = 0; i < programIds.length; i++) {
+    accountMetas.push({ pubkey: programIds[i], isSigner: false, isWritable: false });
+  }
+
+  // Dedupe: first occurrence keeps its slot, flags are OR-ed, so an account
+  // writable in ANY instruction is writable in the message.
+  var unique = [];
+  for (i = 0; i < accountMetas.length; i++) {
+    var m = accountMetas[i];
+    var at = -1;
+    for (j = 0; j < unique.length; j++) if (unique[j].pubkey === m.pubkey) { at = j; break; }
+    if (at > -1) {
+      unique[at].isWritable = unique[at].isWritable || m.isWritable;
+      unique[at].isSigner = unique[at].isSigner || m.isSigner;
+    } else {
+      unique.push(m);
+    }
+  }
+
+  unique.sort(function (x, y) {
+    if (x.isSigner !== y.isSigner) return x.isSigner ? -1 : 1;
+    if (x.isWritable !== y.isWritable) return x.isWritable ? -1 : 1;
+    return x.pubkey.localeCompare(y.pubkey, "en", LOCALE_OPTS);
+  });
+
+  // The fee payer is hoisted to the front and is always a writable signer.
+  var pi = -1;
+  for (i = 0; i < unique.length; i++) if (unique[i].pubkey === payer) { pi = i; break; }
+  if (pi > -1) {
+    var pm = unique.splice(pi, 1)[0];
+    pm.isSigner = true;
+    pm.isWritable = true;
+    unique.unshift(pm);
+  } else {
+    unique.unshift({ pubkey: payer, isSigner: true, isWritable: true });
+  }
+
+  var numRequiredSignatures = 0, numReadonlySigned = 0, numReadonlyUnsigned = 0;
+  for (i = 0; i < unique.length; i++) {
+    if (unique[i].isSigner) {
+      numRequiredSignatures++;
+      if (!unique[i].isWritable) numReadonlySigned++;
+    } else if (!unique[i].isWritable) {
+      numReadonlyUnsigned++;
+    }
+  }
+
+  var keys = unique.map(function (a) { return a.pubkey; });
+  function indexOf(pk) {
+    var k = keys.indexOf(pk);
+    if (k < 0) throw new Error("account missing from compiled key list: " + pk);
+    return k;
+  }
+
+  var parts = [];
+  parts.push(Uint8Array.of(numRequiredSignatures, numReadonlySigned, numReadonlyUnsigned));
+  parts.push(encodeLength(keys.length));
+  for (i = 0; i < keys.length; i++) parts.push(parsePubkey(keys[i]));
+  parts.push(parsePubkey(recentBlockhash, "blockhash"));
+  parts.push(encodeLength(instructions.length));
+  for (i = 0; i < instructions.length; i++) {
+    var inst = instructions[i];
+    parts.push(Uint8Array.of(indexOf(inst.programId)));
+    parts.push(encodeLength(inst.keys.length));
+    parts.push(Uint8Array.from(inst.keys.map(function (k) { return indexOf(k.pubkey); })));
+    parts.push(encodeLength(inst.data.length));
+    parts.push(Uint8Array.from(inst.data));
+  }
+
+  return {
+    message: concatBytes(parts),
+    accountKeys: keys,
+    signerKeys: keys.slice(0, numRequiredSignatures),
+    header: {
+      numRequiredSignatures: numRequiredSignatures,
+      numReadonlySignedAccounts: numReadonlySigned,
+      numReadonlyUnsignedAccounts: numReadonlyUnsigned
+    }
+  };
+}
+
+/** Wire format: shortvec signature count, then one 64 byte slot per signer in
+ *  account key order, then the message. A signer we do not yet hold gets an
+ *  all zero slot, which is what makes a partly signed transaction carryable
+ *  from one wallet to the next. */
+function assembleTransaction(message, signerKeys, signatures) {
+  var parts = [encodeLength(signerKeys.length)];
+  for (var i = 0; i < signerKeys.length; i++) {
+    var sig = signatures[signerKeys[i]];
+    parts.push(sig ? Uint8Array.from(sig) : new Uint8Array(64));
+  }
+  parts.push(message);
+  return concatBytes(parts);
+}
+
+/* ── borsh reader ───────────────────────────────────────────────────────── */
+function Reader(buf, offset) {
+  this.buf = buf;
+  this.off = offset || 0;
+  this.dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+}
+Reader.prototype.u8 = function () { return this.buf[this.off++]; };
+Reader.prototype.u16 = function () { var v = this.dv.getUint16(this.off, true); this.off += 2; return v; };
+Reader.prototype.u32 = function () { var v = this.dv.getUint32(this.off, true); this.off += 4; return v; };
+Reader.prototype.u64 = function () { var v = this.dv.getBigUint64(this.off, true); this.off += 8; return v; };
+Reader.prototype.i64 = function () { var v = this.dv.getBigInt64(this.off, true); this.off += 8; return v; };
+Reader.prototype.bytes = function (n) { var v = this.buf.subarray(this.off, this.off + n); this.off += n; return v; };
+Reader.prototype.pubkey = function () { return b58encode(this.bytes(32)); };
+Reader.prototype.option = function (fn) { return this.u8() === 1 ? fn() : null; };
+Reader.prototype.vec = function (fn) {
+  var n = this.u32(), out = [];
+  for (var i = 0; i < n; i++) out.push(fn());
+  return out;
+};
+
+/* ── program constants ──────────────────────────────────────────────────────
+   Anchor discriminators are sha256("global:<snake_name>")[0..8] and
+   sha256("account:<Name>")[0..8]. They are written out rather than computed so
+   the shipped bytes are auditable by eye. The test suite recomputes them from
+   the names and fails if any of these literals drift. */
+var SQUADS_PROGRAM_ID = "SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf";
+var SYSTEM_PROGRAM_ID = "11111111111111111111111111111111";
+var DEFAULT_PUBKEY = "11111111111111111111111111111111";
+
+var DISC = {
+  // accounts
+  Multisig: [224, 116, 121, 186, 68, 161, 79, 236],
+  Proposal: [26, 94, 189, 187, 116, 136, 53, 33],
+  ConfigTransaction: [94, 8, 4, 35, 113, 139, 139, 112],
+  VaultState: [228, 196, 82, 165, 98, 210, 235, 152],
+  GovernanceConfig: [81, 63, 124, 107, 210, 100, 145, 70],
+  // instructions
+  proposalApprove: [144, 37, 164, 136, 188, 216, 42, 248],
+  configTransactionExecute: [114, 146, 244, 189, 252, 140, 36, 40],
+  updateSigners: [228, 82, 68, 150, 92, 66, 140, 174]
+};
+
+/** VaultState is zero_copy + repr(C): every field's OFFSET is its identity.
+ *  Mirrors scripts/lib/vault-layout.js, which the Rust struct is checked
+ *  against in scripts/tests/vault-layout.test.js. */
+var VAULT = {
+  OFFSETS: { signers: 0, threshold: 96, bump: 97, paused: 98, payout_mint: 99, treasury_authority: 131, signers_ext: 1443 },
+  DATA_LEN: 1507,
+  ACCOUNT_LEN: 1515,
+  BASE_SLOTS: 3,
+  EXT_SLOTS: 2,
+  MAX_SIGNERS: 5
+};
+
+var PROPOSAL_STATUS = ["Draft", "Active", "Rejected", "Approved", "Executing", "Executed", "Cancelled"];
+
+function discMatches(data, want) {
+  if (!data || data.length < 8) return false;
+  for (var i = 0; i < 8; i++) if (data[i] !== want[i]) return false;
+  return true;
+}
+
+/* ── Squads account decoders ────────────────────────────────────────────── */
+function decodeMultisig(data) {
+  if (!discMatches(data, DISC.Multisig)) throw new Error("not a Squads Multisig account (discriminator mismatch)");
+  var r = new Reader(data, 8);
+  return {
+    createKey: r.pubkey(),
+    configAuthority: r.pubkey(),
+    threshold: r.u16(),
+    timeLock: r.u32(),
+    transactionIndex: r.u64(),
+    staleTransactionIndex: r.u64(),
+    rentCollector: r.option(function () { return r.pubkey(); }),
+    bump: r.u8(),
+    members: r.vec(function () { return { key: r.pubkey(), mask: r.u8() }; })
+  };
+}
+
+function decodeProposal(data) {
+  if (!discMatches(data, DISC.Proposal)) throw new Error("not a Squads Proposal account");
+  var r = new Reader(data, 8);
+  var multisig = r.pubkey();
+  var transactionIndex = r.u64();
+  var variant = r.u8();
+  var status = PROPOSAL_STATUS[variant] || ("Unknown(" + variant + ")");
+  // Every status wraps a timestamp EXCEPT Executing, which carries no field.
+  var timestamp = variant === 4 ? null : r.i64();
+  return {
+    multisig: multisig,
+    transactionIndex: transactionIndex,
+    status: status,
+    statusVariant: variant,
+    timestamp: timestamp,
+    bump: r.u8(),
+    approved: r.vec(function () { return r.pubkey(); }),
+    rejected: r.vec(function () { return r.pubkey(); }),
+    cancelled: r.vec(function () { return r.pubkey(); })
+  };
+}
+
+var PERMISSION_NAMES = [
+  [1, "Initiate"],
+  [2, "Vote"],
+  [4, "Execute"]
+];
+
+function describeMask(mask) {
+  var names = [];
+  for (var i = 0; i < PERMISSION_NAMES.length; i++) {
+    if (mask & PERMISSION_NAMES[i][0]) names.push(PERMISSION_NAMES[i][1]);
+  }
+  return names.length ? names.join(" + ") : "no permissions";
+}
+
+/** Decode the config actions into plain words.
+ *
+ *  UNKNOWN VARIANTS ARE NOT SKIPPED. Anything this decoder cannot name is
+ *  returned as `understood: false`, and the UI refuses to offer execute on a
+ *  proposal holding one. A config action nobody can read is exactly the thing
+ *  an operator must not wave through, and silently dropping it from the list
+ *  would make the proposal look smaller than it is. */
+function decodeConfigTransaction(data) {
+  if (!discMatches(data, DISC.ConfigTransaction)) throw new Error("not a Squads ConfigTransaction account");
+  var r = new Reader(data, 8);
+  var out = {
+    multisig: r.pubkey(),
+    creator: r.pubkey(),
+    index: r.u64(),
+    bump: r.u8(),
+    actions: []
+  };
+  var count = r.u32();
+  for (var i = 0; i < count; i++) {
+    var v = r.u8();
+    if (v === 0) {
+      var key = r.pubkey(), mask = r.u8();
+      out.actions.push({ understood: true, kind: "AddMember", verb: "add member", key: key, mask: mask,
+        detail: "permissions " + describeMask(mask) + " (mask " + mask + ")" });
+    } else if (v === 1) {
+      out.actions.push({ understood: true, kind: "RemoveMember", verb: "remove member", key: r.pubkey(), detail: "" });
+    } else if (v === 2) {
+      out.actions.push({ understood: true, kind: "ChangeThreshold", verb: "threshold", value: r.u16(), detail: "" });
+    } else if (v === 3) {
+      out.actions.push({ understood: true, kind: "SetTimeLock", verb: "time lock", value: r.u32(), detail: "seconds" });
+    } else if (v === 5) {
+      out.actions.push({ understood: true, kind: "RemoveSpendingLimit", verb: "remove spending limit", key: r.pubkey(), detail: "" });
+    } else if (v === 6) {
+      var rc = r.option(function () { return r.pubkey(); });
+      out.actions.push({ understood: true, kind: "SetRentCollector", verb: "rent collector", key: rc, detail: rc ? "" : "cleared" });
+    } else {
+      // AddSpendingLimit (4) and anything newer carry variable length payloads
+      // this decoder does not walk, so the read position is no longer
+      // trustworthy. Stop, and say so.
+      out.actions.push({ understood: false, kind: "Unknown", verb: "UNDECODED ACTION", variant: v,
+        detail: "variant " + v + " is not decoded by this console" });
+      out.truncated = true;
+      break;
+    }
+  }
+  out.declaredActionCount = count;
+  out.allUnderstood = out.actions.length === count && out.actions.every(function (a) { return a.understood; });
+  return out;
+}
+
+/* ── Squads instruction builders ────────────────────────────────────────── */
+function ixProposalApprove(multisig, member, proposal) {
+  return {
+    programId: SQUADS_PROGRAM_ID,
+    keys: [
+      { pubkey: multisig, isSigner: false, isWritable: false },
+      { pubkey: member, isSigner: true, isWritable: true },
+      { pubkey: proposal, isSigner: false, isWritable: true }
+    ],
+    // ProposalVoteArgs { memo: Option<String> } — None is a single zero byte.
+    data: concatBytes([Uint8Array.from(DISC.proposalApprove), Uint8Array.of(0)])
+  };
+}
+
+function ixConfigTransactionExecute(multisig, member, proposal, transaction, rentPayer) {
+  // rentPayer is a real signer, not decoration: AddMember grows the Multisig
+  // account, and the realloc is funded from here.
+  return {
+    programId: SQUADS_PROGRAM_ID,
+    keys: [
+      { pubkey: multisig, isSigner: false, isWritable: true },
+      { pubkey: member, isSigner: true, isWritable: false },
+      { pubkey: proposal, isSigner: false, isWritable: true },
+      { pubkey: transaction, isSigner: false, isWritable: false },
+      { pubkey: rentPayer, isSigner: true, isWritable: true },
+      { pubkey: SYSTEM_PROGRAM_ID, isSigner: false, isWritable: false }
+    ],
+    data: Uint8Array.from(DISC.configTransactionExecute)
+  };
+}
+
+function squadsTransactionPda(multisig, index) {
+  return b58encode(findProgramAddress(
+    [utf8("multisig"), parsePubkey(multisig), utf8("transaction"), u64le(index)],
+    parsePubkey(SQUADS_PROGRAM_ID)
+  ).address);
+}
+
+function squadsProposalPda(multisig, index) {
+  return b58encode(findProgramAddress(
+    [utf8("multisig"), parsePubkey(multisig), utf8("transaction"), u64le(index), utf8("proposal")],
+    parsePubkey(SQUADS_PROGRAM_ID)
+  ).address);
+}
+
+/* ── Turf Vault ─────────────────────────────────────────────────────────── */
+function vaultStatePda(programId) {
+  return b58encode(findProgramAddress([utf8("vault")], parsePubkey(programId)).address);
+}
+function governancePda(programId) {
+  return b58encode(findProgramAddress([utf8("governance")], parsePubkey(programId)).address);
+}
+
+function readSignerSlots(data) {
+  if (!data || data.length < VAULT.ACCOUNT_LEN) {
+    throw new Error("vault_state is " + (data ? data.length : 0) + " bytes; expected " + VAULT.ACCOUNT_LEN +
+      ". Refusing to decode — a short buffer reads garbage at these offsets.");
+  }
+  var slots = [];
+  for (var i = 0; i < VAULT.MAX_SIGNERS; i++) {
+    var inExt = i >= VAULT.BASE_SLOTS;
+    var base = inExt
+      ? VAULT.OFFSETS.signers_ext + (i - VAULT.BASE_SLOTS) * 32
+      : VAULT.OFFSETS.signers + i * 32;
+    var key = b58encode(data.subarray(8 + base, 8 + base + 32));
+    slots.push({ index: i, field: inExt ? "signers_ext" : "signers", key: key, empty: key === DEFAULT_PUBKEY });
+  }
+  return slots;
+}
+
+/** Slots are LEFT PACKED — the program refuses a live key after an empty one. */
+function isLeftPacked(slots) {
+  var firstEmpty = -1;
+  for (var i = 0; i < slots.length; i++) if (slots[i].empty) { firstEmpty = i; break; }
+  if (firstEmpty === -1) return true;
+  for (i = firstEmpty; i < slots.length; i++) if (!slots[i].empty) return false;
+  return true;
+}
+
+/** THE STRUCTURAL PROBE.
+ *
+ *  Written when turf-vault shipped BOTH programs reporting metadata.version
+ *  0.25.0: a version string then returned a plausible answer and picked the
+ *  WRONG shape. The crate reads 0.26.0 since 2026-09-15 and a guard keeps it
+ *  ahead of the last release (/tasks/cargo-version-lies-about-program), and
+ *  this probe still does not read it — a version is a DECLARATION, true only
+ *  because someone wrote it down. The shapes differ in the thing that actually
+ *  matters — the account list:
+ *
+ *    three slot   admin, cosigner, vault_state              args [Pubkey; 3]
+ *    five  slot   admin, cosigner, vault_state, governance  args [Pubkey; 5]
+ *                 plus extra cosigners as remaining accounts
+ *
+ *  So the probe asks the chain for the account that differs. GovernanceConfig at
+ *  seeds ["governance"] exists only under the five slot program, and the five
+ *  slot update_signers cannot be built without it. Present means five, absent
+ *  means three, and the answer is the account list itself rather than a proxy
+ *  for it. */
+function detectVaultShape(governanceAccount) {
+  if (!governanceAccount) {
+    return { slots: 3, name: "three slot (no GovernanceConfig on chain)", hasGovernance: false };
+  }
+  if (!discMatches(governanceAccount.data, DISC.GovernanceConfig)) {
+    return { slots: 3, name: "three slot (governance address holds a foreign account)", hasGovernance: false, anomaly: true };
+  }
+  return { slots: 5, name: "five slot (GovernanceConfig present)", hasGovernance: true };
+}
+
+function decodeGovernance(data) {
+  if (!discMatches(data, DISC.GovernanceConfig)) throw new Error("not a GovernanceConfig account");
+  var r = new Reader(data, 8);
+  var thresholds = [];
+  for (var i = 0; i < 32; i++) thresholds.push(r.u8());
+  return { thresholds: thresholds, mintWindowSeconds: r.i64(), mintWindowCap: r.u32(), bump: r.u8() };
+}
+
+/** update_signers, built for whichever shape the probe reported.
+ *
+ *  Account order mirrors scripts/rotate-devnet-signers.js, which is the shape
+ *  instructions::governance::authorize reads: the two named signers first, then
+ *  vault_state, then governance on the five slot program, then any further
+ *  cosigners as leading remaining accounts. */
+function ixUpdateSigners(opts) {
+  var programId = opts.programId;
+  var slotsWanted = opts.shape.slots;
+  var newSigners = opts.newSigners.slice();
+  if (newSigners.length > slotsWanted) {
+    throw new Error("this program holds " + slotsWanted + " signer slots; " + newSigners.length + " keys were given");
+  }
+  while (newSigners.length < slotsWanted) newSigners.push(DEFAULT_PUBKEY);
+
+  var keys = [
+    { pubkey: opts.signers[0], isSigner: true, isWritable: true },
+    { pubkey: opts.signers[1], isSigner: true, isWritable: false },
+    { pubkey: opts.vaultState, isSigner: false, isWritable: true }
+  ];
+  if (opts.shape.hasGovernance) {
+    keys.push({ pubkey: opts.governance, isSigner: false, isWritable: false });
+  }
+  for (var i = 2; i < opts.signers.length; i++) {
+    keys.push({ pubkey: opts.signers[i], isSigner: true, isWritable: false });
+  }
+
+  var parts = [Uint8Array.from(DISC.updateSigners)];
+  for (i = 0; i < newSigners.length; i++) parts.push(parsePubkey(newSigners[i], "signer slot " + i));
+
+  return { programId: programId, keys: keys, data: concatBytes(parts) };
+}
+
+/* ── the refusal ────────────────────────────────────────────────────────────
+   "Refuses to send anything it has not displayed" is a mechanism, not a slogan.
+   Everything that decided what was rendered is folded into one digest at the
+   moment of display; at the moment of sending, the SAME inputs are re read from
+   chain and re folded. A differing digest aborts the send.
+
+   Note what is deliberately inside the fold: not merely the transaction bytes,
+   but the on chain subject — the proposal's approvals, the multisig's threshold
+   and members, and the decoded actions. A proposal that gained an approval, or
+   a multisig whose threshold moved, changes what pressing "execute" MEANS even
+   when the instruction bytes are identical. */
+function planDigest(plan) {
+  var canonical = JSON.stringify({
+    kind: plan.kind,
+    cluster: plan.cluster,
+    rpc: plan.rpc,
+    payer: plan.payer,
+    instructions: plan.instructions.map(function (ix) {
+      return {
+        programId: ix.programId,
+        keys: ix.keys.map(function (k) { return [k.pubkey, k.isSigner ? 1 : 0, k.isWritable ? 1 : 0]; }),
+        data: hex(ix.data)
+      };
+    }),
+    subject: plan.subject
+  });
+  return hex(sha256(utf8(canonical))).slice(0, 32);
+}
+
+/* ── export ─────────────────────────────────────────────────────────────── */
+var VaultConsoleCore = {
+  b58encode: b58encode,
+  b58decode: b58decode,
+  parsePubkey: parsePubkey,
+  isValidPubkey: isValidPubkey,
+  sha256: sha256,
+  hex: hex,
+  isOnCurve: isOnCurve,
+  createProgramAddress: createProgramAddress,
+  findProgramAddress: findProgramAddress,
+  encodeLength: encodeLength,
+  compileMessage: compileMessage,
+  assembleTransaction: assembleTransaction,
+  concatBytes: concatBytes,
+  utf8: utf8,
+  u64le: u64le,
+  Reader: Reader,
+  DISC: DISC,
+  VAULT: VAULT,
+  SQUADS_PROGRAM_ID: SQUADS_PROGRAM_ID,
+  SYSTEM_PROGRAM_ID: SYSTEM_PROGRAM_ID,
+  DEFAULT_PUBKEY: DEFAULT_PUBKEY,
+  PROPOSAL_STATUS: PROPOSAL_STATUS,
+  discMatches: discMatches,
+  decodeMultisig: decodeMultisig,
+  decodeProposal: decodeProposal,
+  decodeConfigTransaction: decodeConfigTransaction,
+  decodeGovernance: decodeGovernance,
+  describeMask: describeMask,
+  ixProposalApprove: ixProposalApprove,
+  ixConfigTransactionExecute: ixConfigTransactionExecute,
+  ixUpdateSigners: ixUpdateSigners,
+  squadsTransactionPda: squadsTransactionPda,
+  squadsProposalPda: squadsProposalPda,
+  vaultStatePda: vaultStatePda,
+  governancePda: governancePda,
+  readSignerSlots: readSignerSlots,
+  isLeftPacked: isLeftPacked,
+  detectVaultShape: detectVaultShape,
+  planDigest: planDigest
+};
+</script>
+
+<!--
+  ════════════════════════════════════════════════════════════════════════
+  UI — everything below touches the DOM, the wallet, and the RPC.
+  ════════════════════════════════════════════════════════════════════════
+-->
+<script id="console-ui">
+"use strict";
+(function () {
+  var C = VaultConsoleCore;
+
+  var RPC_PRESETS = {
+    "devnet": "https://api.devnet.solana.com",
+    "mainnet-beta": "https://api.mainnet-beta.solana.com",
+    "custom": ""
+  };
+
+  var state = {
+    cluster: "",
+    rpc: "",
+    rpcOk: false,
+    wallet: null,
+    provider: null,
+    multisig: null,
+    multisigAddr: "",
+    proposals: [],
+    selected: null,
+    plan: null,
+    vault: null
+  };
+
+  var $ = function (id) { return document.getElementById(id); };
+  function el(tag, cls, text) {
+    var n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text !== undefined && text !== null) n.textContent = String(text);
+    return n;
+  }
+  function clear(node) { while (node.firstChild) node.removeChild(node.firstChild); }
+  function addr(text) { return el("span", "addr", text); }
+
+  /* ── environment ─────────────────────────────────────────────────────── */
+  function renderEnvNotice() {
+    var host = $("env-notice");
+    clear(host);
+    var isFile = location.protocol === "file:";
+    var isLocal = location.hostname === "localhost" || location.hostname === "127.0.0.1";
+    var isHttps = location.protocol === "https:";
+
+    if (isFile) {
+      var n = el("div", "notice bad");
+      n.appendChild(el("h3", null, "Opened as a file. The wallet will not appear."));
+      var p1 = el("p");
+      p1.appendChild(document.createTextNode(
+        "Phantom injects its provider only into pages served over https, or from localhost / 127.0.0.1. " +
+        "A file:// page gets no window.solana at all, and Chrome separately withholds file access from every " +
+        "extension unless you tick “Allow access to file URLs” by hand. Serve this file instead:"));
+      n.appendChild(p1);
+      n.appendChild(el("pre", null, "cd " + "‹folder holding this file›" + "\npython3 -m http.server 8000\nopen http://localhost:8000/vault-console.html"));
+      host.appendChild(n);
+      return;
+    }
+    if (!isLocal && !isHttps) {
+      var w = el("div", "notice");
+      w.appendChild(el("h3", null, "Served over plain http from a remote host."));
+      w.appendChild(el("p", null, "Phantom injects only on https, localhost, or 127.0.0.1. Move this file to your own machine and serve it from localhost."));
+      host.appendChild(w);
+    }
+  }
+
+  /* ── RPC ─────────────────────────────────────────────────────────────── */
+  function rpcCall(method, params) {
+    if (!state.rpc) return Promise.reject(new Error("no RPC endpoint chosen"));
+    return fetch(state.rpc, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: method, params: params })
+    }).then(function (r) {
+      // fetch does not reject on an HTTP error status, so check it explicitly.
+      if (!r.ok) throw new Error("RPC HTTP " + r.status + " " + r.statusText);
+      return r.json();
+    }).then(function (j) {
+      if (j.error) throw new Error(method + ": " + (j.error.message || JSON.stringify(j.error)));
+      return j.result;
+    });
+  }
+
+  function b64ToBytes(b64) {
+    var bin = atob(b64);
+    var out = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  }
+  function bytesToB64(bytes) {
+    var s = "";
+    for (var i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+    return btoa(s);
+  }
+
+  function getAccount(address) {
+    return rpcCall("getAccountInfo", [address, { encoding: "base64", commitment: "confirmed" }])
+      .then(function (r) {
+        if (!r || !r.value) return null;
+        return { owner: r.value.owner, lamports: r.value.lamports, data: b64ToBytes(r.value.data[0]) };
+      });
+  }
+
+  function getMultipleAccounts(addresses) {
+    if (!addresses.length) return Promise.resolve([]);
+    return rpcCall("getMultipleAccounts", [addresses, { encoding: "base64", commitment: "confirmed" }])
+      .then(function (r) {
+        return (r.value || []).map(function (v) {
+          if (!v) return null;
+          return { owner: v.owner, lamports: v.lamports, data: b64ToBytes(v.data[0]) };
+        });
+      });
+  }
+
+  /* ── wallet ──────────────────────────────────────────────────────────── */
+  function getProvider() {
+    if (window.phantom && window.phantom.solana && window.phantom.solana.isPhantom) return window.phantom.solana;
+    if (window.solana) return window.solana;
+    return null;
+  }
+
+  function renderWallet() {
+    var body = $("wallet-body");
+    clear(body);
+    var provider = getProvider();
+
+    if (!provider) {
+      var n = el("div", "notice bad");
+      n.appendChild(el("h3", null, "No wallet provider found."));
+      n.appendChild(el("p", null,
+        location.protocol === "file:"
+          ? "This page is open as a file. Serve it from localhost (see the banner above) and reload."
+          : "No window.solana on this page. Install or unlock Phantom, then reload. If this page is not on localhost, 127.0.0.1 or https, the extension will not inject at all."));
+      body.appendChild(n);
+      $("btn-connect").disabled = true;
+      return;
+    }
+
+    if (!state.wallet) {
+      body.appendChild(el("p", "small muted", "Provider detected. Connect the wallet you intend to sign with."));
+      $("btn-connect").disabled = false;
+      $("btn-disconnect").hidden = true;
+      return;
+    }
+
+    $("btn-connect").disabled = true;
+    $("btn-disconnect").hidden = false;
+    var lbl = el("span", "label", "Connected");
+    body.appendChild(lbl);
+    body.appendChild(addr(state.wallet));
+    refreshBalance(body);
+  }
+
+  function refreshBalance(body) {
+    if (!state.rpcOk) return;
+    var line = el("p", "small muted");
+    line.textContent = "reading balance…";
+    body.appendChild(line);
+    rpcCall("getBalance", [state.wallet, { commitment: "confirmed" }]).then(function (r) {
+      var sol = (r.value || 0) / 1e9;
+      line.textContent = "balance " + sol.toFixed(6) + " SOL on " + state.cluster;
+      if (sol < 0.002) {
+        line.className = "small warnc";
+        line.textContent += " — likely too little to pay fees and rent";
+      }
+    }).catch(function (e) { line.textContent = "balance unavailable: " + e.message; });
+  }
+
+  function connect() {
+    var provider = getProvider();
+    if (!provider) { renderWallet(); return; }
+    provider.connect().then(function (res) {
+      var pk = (res && res.publicKey) ? res.publicKey.toString() : (provider.publicKey && provider.publicKey.toString());
+      state.wallet = pk;
+      state.provider = provider;
+      renderWallet();
+      renderProposals();
+      renderReview();
+    }).catch(function (e) {
+      var body = $("wallet-body");
+      clear(body);
+      var n = el("div", "notice bad");
+      n.appendChild(el("h3", null, "Connect refused."));
+      n.appendChild(el("p", null, e && e.message ? e.message : String(e)));
+      body.appendChild(n);
+    });
+  }
+
+  /* ── multisig ────────────────────────────────────────────────────────── */
+  function loadMultisig() {
+    var address = $("ms-addr").value.trim();
+    var body = $("ms-body");
+    clear(body);
+    if (!C.isValidPubkey(address)) {
+      body.appendChild(noticeBad("Not an address", "That is not a 32 byte Solana address."));
+      return;
+    }
+    body.appendChild(el("p", "small muted", "reading " + address + " …"));
+
+    getAccount(address).then(function (acct) {
+      clear(body);
+      if (!acct) { body.appendChild(noticeBad("Not found", "No account at " + address + " on " + state.cluster + ".")); return; }
+      if (acct.owner !== C.SQUADS_PROGRAM_ID) {
+        body.appendChild(noticeBad("Not a Squads account",
+          "That account is owned by " + acct.owner + ", not the Squads v4 program (" + C.SQUADS_PROGRAM_ID + ")."));
+        return;
+      }
+      var ms;
+      try { ms = C.decodeMultisig(acct.data); }
+      catch (e) { body.appendChild(noticeBad("Could not decode", e.message)); return; }
+
+      state.multisig = ms;
+      state.multisigAddr = address;
+      renderMultisig(body, ms);
+      $("card-proposals").hidden = false;
+      loadProposals();
+    }).catch(function (e) {
+      clear(body);
+      body.appendChild(noticeBad("Read failed", e.message));
+    });
+  }
+
+  function renderMultisig(body, ms) {
+    var grid = el("div");
+    var t = el("table");
+    var tb = el("tbody");
+    function row(k, v, cls) {
+      var tr = el("tr");
+      tr.appendChild(el("th", null, k));
+      var td = el("td", cls);
+      if (v instanceof Node) td.appendChild(v); else td.textContent = v;
+      tr.appendChild(td);
+      tb.appendChild(tr);
+    }
+    row("threshold", ms.threshold + " of " + ms.members.length, "num");
+    row("transaction index", String(ms.transactionIndex), "num");
+    row("stale before", String(ms.staleTransactionIndex), "num");
+    row("time lock", ms.timeLock + " s", "num");
+    row("config authority", ms.configAuthority === C.DEFAULT_PUBKEY
+      ? (function () { var s = el("span"); s.appendChild(el("span", "pill ok", "autonomous")); s.appendChild(document.createTextNode(" every config change goes to a vote")); return s; })()
+      : (function () { var s = el("span"); s.appendChild(el("span", "pill warn", "controlled")); s.appendChild(el("div", "addr", ms.configAuthority)); return s; })());
+    t.appendChild(tb);
+    grid.appendChild(t);
+    body.appendChild(grid);
+
+    body.appendChild(el("span", "label", "Members (" + ms.members.length + ")"));
+    var mt = el("table");
+    var mh = el("thead");
+    var hr = el("tr");
+    ["#", "address", "permissions"].forEach(function (h) { hr.appendChild(el("th", null, h)); });
+    mh.appendChild(hr);
+    mt.appendChild(mh);
+    var mb = el("tbody");
+    ms.members.forEach(function (m, i) {
+      var tr = el("tr");
+      tr.appendChild(el("td", "num", String(i + 1)));
+      var td = el("td");
+      td.appendChild(addr(m.key));
+      if (state.wallet === m.key) {
+        td.appendChild(document.createTextNode(" "));
+        td.appendChild(el("span", "pill ok", "you"));
+      }
+      tr.appendChild(td);
+      tr.appendChild(el("td", "small", C.describeMask(m.mask) + " (" + m.mask + ")"));
+      mb.appendChild(tr);
+    });
+    mt.appendChild(mb);
+    var wrap = el("div", "scroll-x");
+    wrap.appendChild(mt);
+    body.appendChild(wrap);
+
+    if (state.wallet && !ms.members.some(function (m) { return m.key === state.wallet; })) {
+      body.appendChild(noticeBad("Your wallet is not a member",
+        state.wallet + " does not appear in this multisig. It cannot approve or execute here."));
+    }
+  }
+
+  function noticeBad(title, text) {
+    var n = el("div", "notice bad");
+    n.appendChild(el("h3", null, title));
+    n.appendChild(el("p", null, text));
+    return n;
+  }
+  function noticeWarn(title, text) {
+    var n = el("div", "notice");
+    n.appendChild(el("h3", null, title));
+    n.appendChild(el("p", null, text));
+    return n;
+  }
+
+  /* ── proposals ───────────────────────────────────────────────────────── */
+  var PROPOSAL_SCAN_DEPTH = 12;
+
+  function loadProposals() {
+    var body = $("proposals-body");
+    clear(body);
+    body.appendChild(el("p", "small muted", "deriving and reading proposal accounts…"));
+
+    var last = Number(state.multisig.transactionIndex);
+    var first = Math.max(1, last - PROPOSAL_SCAN_DEPTH + 1);
+    var indexes = [];
+    for (var i = last; i >= first; i--) indexes.push(i);
+
+    var proposalPdas, txPdas;
+    try {
+      proposalPdas = indexes.map(function (i) { return C.squadsProposalPda(state.multisigAddr, i); });
+      txPdas = indexes.map(function (i) { return C.squadsTransactionPda(state.multisigAddr, i); });
+    } catch (e) {
+      clear(body);
+      body.appendChild(noticeBad("PDA derivation failed", e.message));
+      return;
+    }
+
+    Promise.all([getMultipleAccounts(proposalPdas), getMultipleAccounts(txPdas)]).then(function (res) {
+      var pAccts = res[0], tAccts = res[1];
+      var stale = Number(state.multisig.staleTransactionIndex);
+      state.proposals = [];
+      for (var k = 0; k < indexes.length; k++) {
+        if (!pAccts[k]) continue;
+        var p;
+        try { p = C.decodeProposal(pAccts[k].data); } catch (e) { continue; }
+        var entry = {
+          index: indexes[k],
+          proposalPda: proposalPdas[k],
+          transactionPda: txPdas[k],
+          proposal: p,
+          stale: indexes[k] <= stale,
+          config: null,
+          configError: null
+        };
+        if (tAccts[k]) {
+          if (C.discMatches(tAccts[k].data, C.DISC.ConfigTransaction)) {
+            try { entry.config = C.decodeConfigTransaction(tAccts[k].data); }
+            catch (e) { entry.configError = e.message; }
+          } else {
+            entry.configError = "not a configuration proposal — this console only decodes and executes config transactions";
+          }
+        } else {
+          entry.configError = "transaction account is absent (already closed for rent)";
+        }
+        state.proposals.push(entry);
+      }
+      renderProposals();
+    }).catch(function (e) {
+      clear(body);
+      body.appendChild(noticeBad("Read failed", e.message));
+    });
+  }
+
+  function renderProposals() {
+    if (!state.multisig) return;
+    var body = $("proposals-body");
+    clear(body);
+
+    var actionable = state.proposals.filter(function (e) {
+      return !e.stale && (e.proposal.status === "Active" || e.proposal.status === "Approved");
+    });
+
+    if (!state.proposals.length) {
+      body.appendChild(noticeWarn("No proposals found",
+        "Nothing in the last " + PROPOSAL_SCAN_DEPTH + " transaction indexes. The multisig's transaction index is " +
+        state.multisig.transactionIndex + "."));
+      return;
+    }
+    if (!actionable.length) {
+      body.appendChild(noticeWarn("Nothing awaiting a vote",
+        "Every proposal in the last " + PROPOSAL_SCAN_DEPTH + " indexes is executed, cancelled, rejected or stale."));
+    }
+
+    state.proposals.forEach(function (entry) { body.appendChild(renderProposalCard(entry)); });
+  }
+
+  function renderProposalCard(entry) {
+    var p = entry.proposal;
+    var ms = state.multisig;
+    var card = el("div");
+    card.style.border = "1px solid var(--rule)";
+    card.style.borderRadius = "8px";
+    card.style.padding = "12px";
+    card.style.marginBottom = "10px";
+    card.style.background = "var(--bg-3)";
+
+    var head = el("div");
+    head.style.display = "flex";
+    head.style.flexWrap = "wrap";
+    head.style.gap = "8px";
+    head.style.alignItems = "center";
+    head.style.marginBottom = "8px";
+
+    var title = el("strong", null, "Proposal #" + entry.index);
+    head.appendChild(title);
+
+    var statusCls = p.status === "Active" ? "warn" : p.status === "Approved" ? "ok" : p.status === "Executed" ? "dim" : "bad";
+    head.appendChild(el("span", "pill " + statusCls, p.status));
+    if (entry.stale) head.appendChild(el("span", "pill bad", "stale"));
+
+    var approvals = p.approved.length;
+    head.appendChild(el("span", "pill " + (approvals >= ms.threshold ? "ok" : "warn"),
+      approvals + " / " + ms.threshold + " approvals"));
+    card.appendChild(head);
+
+    if (entry.stale) {
+      card.appendChild(el("p", "small badc",
+        "Stale. The multisig's configuration changed after this was created (stale before index " +
+        ms.staleTransactionIndex + "), so it can never be executed."));
+    }
+
+    // Decoded actions, in plain words.
+    if (entry.config) {
+      var lbl = el("span", "label", "What it does (" + entry.config.declaredActionCount + " action" +
+        (entry.config.declaredActionCount === 1 ? "" : "s") + ")");
+      card.appendChild(lbl);
+      entry.config.actions.forEach(function (a) { card.appendChild(renderAction(a)); });
+      if (!entry.config.allUnderstood) {
+        card.appendChild(noticeBad("This proposal holds an action this console cannot decode",
+          "Execute is withheld. A config action nobody can read is exactly the one not to wave through — " +
+          "approve it from a tool that can name every action, or reject it."));
+      }
+    } else {
+      card.appendChild(el("p", "small warnc", entry.configError || "no transaction detail"));
+    }
+
+    // Approvals, in full.
+    if (p.approved.length) {
+      card.appendChild(el("span", "label", "Approved by"));
+      p.approved.forEach(function (k) {
+        var d = el("div");
+        d.appendChild(addr(k));
+        if (k === state.wallet) { d.appendChild(document.createTextNode(" ")); d.appendChild(el("span", "pill ok", "you")); }
+        card.appendChild(d);
+      });
+    }
+    if (p.rejected.length) {
+      card.appendChild(el("span", "label", "Rejected by"));
+      p.rejected.forEach(function (k) { card.appendChild(addr(k)); });
+    }
+
+    var meta = el("p", "small dimmer");
+    meta.style.marginBottom = "0";
+    meta.appendChild(document.createTextNode("proposal "));
+    meta.appendChild(addr(entry.proposalPda));
+    meta.appendChild(document.createTextNode(" · transaction "));
+    meta.appendChild(addr(entry.transactionPda));
+    card.appendChild(meta);
+
+    // Actions available to the connected wallet.
+    var isMember = state.wallet && ms.members.some(function (m) { return m.key === state.wallet; });
+    var alreadyApproved = state.wallet && p.approved.indexOf(state.wallet) > -1;
+    var canAct = isMember && !entry.stale && entry.config && entry.config.allUnderstood &&
+      (p.status === "Active" || p.status === "Approved");
+
+    var btns = el("div", "btnrow");
+    if (canAct) {
+      var bApprove = el("button", "primary", alreadyApproved ? "Already approved by you" : "Review approval");
+      bApprove.disabled = !!alreadyApproved;
+      bApprove.onclick = function () { buildPlan(entry, "approve"); };
+      btns.appendChild(bApprove);
+
+      var remaining = ms.threshold - p.approved.length;
+      var bExec = el("button", null, "Review execute");
+      if (remaining > 0) {
+        bExec.disabled = true;
+        bExec.title = remaining + " more approval(s) needed";
+        btns.appendChild(bExec);
+        btns.appendChild(el("span", "small muted",
+          remaining + " more approval" + (remaining === 1 ? "" : "s") + " needed before this can execute"));
+      } else {
+        bExec.onclick = function () { buildPlan(entry, "execute"); };
+        btns.appendChild(bExec);
+      }
+    } else if (!state.wallet) {
+      btns.appendChild(el("span", "small muted", "connect a wallet to act on this"));
+    } else if (!isMember) {
+      btns.appendChild(el("span", "small muted", "your wallet is not a member of this multisig"));
+    }
+    card.appendChild(btns);
+    return card;
+  }
+
+  function renderAction(a) {
+    var line = el("div", "action-line");
+    var cls = a.kind === "AddMember" ? "add"
+      : a.kind === "RemoveMember" ? "remove"
+      : a.understood ? "set" : "unknown";
+    line.appendChild(el("span", "action-verb " + cls, a.verb));
+    var rest = el("div");
+    rest.style.minWidth = "0";
+    if (a.key) {
+      rest.appendChild(addr(a.key));
+      if (a.detail) rest.appendChild(el("div", "small dimmer", a.detail));
+    } else if (a.value !== undefined) {
+      var v = el("span", "mono");
+      v.textContent = "→ " + a.value + (a.detail ? " " + a.detail : "");
+      rest.appendChild(v);
+    } else {
+      rest.appendChild(el("span", "small warnc", a.detail || ""));
+    }
+    line.appendChild(rest);
+    return line;
+  }
+
+  /* ── the plan: display, freeze, verify, send ─────────────────────────── */
+  function buildPlan(entry, kind) {
+    var ms = state.multisig;
+    var ixs;
+    if (kind === "approve") {
+      ixs = [C.ixProposalApprove(state.multisigAddr, state.wallet, entry.proposalPda)];
+    } else {
+      ixs = [C.ixConfigTransactionExecute(state.multisigAddr, state.wallet, entry.proposalPda, entry.transactionPda, state.wallet)];
+    }
+
+    // The subject is the on chain meaning, folded into the digest alongside the
+    // bytes: an extra approval or a moved threshold changes what this does even
+    // when the instruction bytes are identical.
+    var subject = {
+      multisig: state.multisigAddr,
+      index: entry.index,
+      proposalStatus: entry.proposal.status,
+      approvals: entry.proposal.approved.slice().sort(),
+      threshold: ms.threshold,
+      members: ms.members.map(function (m) { return m.key + ":" + m.mask; }).sort(),
+      actions: entry.config ? entry.config.actions.map(function (a) {
+        return a.kind + "|" + (a.key || "") + "|" + (a.value !== undefined ? a.value : "") + "|" + (a.mask !== undefined ? a.mask : "");
+      }) : null
+    };
+
+    state.plan = {
+      kind: kind,
+      cluster: state.cluster,
+      rpc: state.rpc,
+      payer: state.wallet,
+      instructions: ixs,
+      subject: subject,
+      entry: entry
+    };
+    state.plan.digest = C.planDigest(state.plan);
+
+    $("card-review").hidden = false;
+    renderReview();
+    $("card-review").scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  function renderReview() {
+    var body = $("review-body");
+    clear(body);
+    var plan = state.plan;
+    if (!plan) { body.appendChild(el("p", "small muted", "Choose an action on a proposal above.")); return; }
+
+    var e = plan.entry;
+    var head = el("div");
+    head.appendChild(el("h3", null, (plan.kind === "approve" ? "Approve" : "Execute") + " proposal #" + e.index));
+    head.style.marginBottom = "8px";
+    body.appendChild(head);
+
+    if (plan.kind === "approve") {
+      body.appendChild(el("p", "small",
+        "Your wallet " + state.wallet + " will be recorded as approving this proposal. " +
+        "Approving does not execute it."));
+    } else {
+      body.appendChild(el("p", "small",
+        "This applies the configuration changes below to the multisig, immediately and irreversibly."));
+    }
+
+    if (e.config) {
+      body.appendChild(el("span", "label", "Exactly what will be applied"));
+      e.config.actions.forEach(function (a) { body.appendChild(renderAction(a)); });
+      body.appendChild(consequences(e));
+    }
+
+    // The instruction, shown as bytes. Nothing here is elided.
+    body.appendChild(el("span", "label", "The instruction being signed"));
+    plan.instructions.forEach(function (ix, n) {
+      var box = el("div");
+      box.style.marginBottom = "10px";
+      box.appendChild(el("div", "small dimmer", "instruction " + (n + 1) + " · program"));
+      box.appendChild(addr(ix.programId));
+      var tbl = el("table");
+      var th = el("thead"); var hr = el("tr");
+      ["#", "account", "signer", "writable"].forEach(function (h) { hr.appendChild(el("th", null, h)); });
+      th.appendChild(hr); tbl.appendChild(th);
+      var tb = el("tbody");
+      ix.keys.forEach(function (k, i) {
+        var tr = el("tr");
+        tr.appendChild(el("td", "num", String(i)));
+        var td = el("td"); td.appendChild(addr(k.pubkey));
+        if (k.pubkey === state.wallet) { td.appendChild(document.createTextNode(" ")); td.appendChild(el("span", "pill ok", "you")); }
+        tr.appendChild(td);
+        tr.appendChild(el("td", null, k.isSigner ? "yes" : "no"));
+        tr.appendChild(el("td", null, k.isWritable ? "yes" : "no"));
+        tb.appendChild(tr);
+      });
+      tbl.appendChild(tb);
+      var sc = el("div", "scroll-x"); sc.appendChild(tbl);
+      box.appendChild(sc);
+      box.appendChild(el("div", "small dimmer", "data (" + ix.data.length + " bytes)"));
+      box.appendChild(el("pre", null, C.hex(ix.data)));
+      body.appendChild(box);
+    });
+
+    var dg = el("p", "small");
+    dg.appendChild(document.createTextNode("Displayed plan digest: "));
+    dg.appendChild(el("span", "digest", plan.digest));
+    body.appendChild(dg);
+    body.appendChild(el("p", "small dimmer",
+      "Before signing, the proposal and multisig are read again and this digest recomputed. " +
+      "If anything moved, the send aborts instead of signing."));
+
+    var btns = el("div", "btnrow");
+    var go = el("button", "primary", plan.kind === "approve" ? "Verify and approve" : "Verify and execute");
+    go.onclick = function () { verifyAndSend(go); };
+    btns.appendChild(go);
+    var sim = el("button", null, "Simulate only");
+    sim.onclick = function () { simulateOnly(sim); };
+    btns.appendChild(sim);
+    var cancel = el("button", null, "Cancel");
+    cancel.onclick = function () { state.plan = null; $("card-review").hidden = true; };
+    btns.appendChild(cancel);
+    body.appendChild(btns);
+
+    body.appendChild(el("div", null, "")).id = "send-log";
+  }
+
+  /** Consequences the raw action list does not spell out. */
+  function consequences(entry) {
+    var box = el("div");
+    var ms = state.multisig;
+    var notes = [];
+
+    // Executing a config transaction bumps stale_transaction_index, which
+    // kills every other open proposal. That is invisible in the action list.
+    var others = state.proposals.filter(function (o) {
+      return o.index !== entry.index && !o.stale &&
+        (o.proposal.status === "Active" || o.proposal.status === "Approved");
+    });
+    if (others.length) {
+      notes.push("Executing this makes every other open proposal STALE and permanently unexecutable. Open now: " +
+        others.map(function (o) { return "#" + o.index; }).join(", ") + ". Whichever you execute first, the others must be recreated.");
+    }
+
+    // Where the membership and threshold land afterwards.
+    if (entry.config) {
+      var members = ms.members.map(function (m) { return m.key; });
+      var threshold = ms.threshold;
+      var ok = true;
+      entry.config.actions.forEach(function (a) {
+        if (a.kind === "AddMember") { if (members.indexOf(a.key) === -1) members.push(a.key); }
+        else if (a.kind === "RemoveMember") { var i = members.indexOf(a.key); if (i > -1) members.splice(i, 1); }
+        else if (a.kind === "ChangeThreshold") { threshold = a.value; }
+        else if (!a.understood) { ok = false; }
+      });
+      if (ok) {
+        notes.push("Afterwards: " + members.length + " members at threshold " + threshold + ".");
+        if (state.wallet && members.indexOf(state.wallet) === -1) {
+          notes.push("YOUR WALLET IS REMOVED BY THIS PROPOSAL. After it executes, " + state.wallet +
+            " can no longer approve or execute anything in this multisig.");
+        }
+        if (threshold > members.length) {
+          notes.push("The resulting threshold exceeds the member count. The multisig would be unable to act.");
+        }
+      }
+    }
+
+    if (!notes.length) return box;
+    var n = el("div", "notice");
+    n.appendChild(el("h3", null, "Consequences"));
+    var ul = el("ul", "tight");
+    notes.forEach(function (t) { ul.appendChild(el("li", null, t)); });
+    n.appendChild(ul);
+    box.appendChild(n);
+    return box;
+  }
+
+  /** Re read the on chain subject and re fold the digest. */
+  function reverify() {
+    var plan = state.plan;
+    var e = plan.entry;
+    return Promise.all([getAccount(state.multisigAddr), getAccount(e.proposalPda), getAccount(e.transactionPda)])
+      .then(function (r) {
+        var msA = r[0], prA = r[1], txA = r[2];
+        if (!msA) throw new Error("the multisig account has vanished");
+        if (!prA) throw new Error("the proposal account has vanished");
+        var ms = C.decodeMultisig(msA.data);
+        var p = C.decodeProposal(prA.data);
+        var cfg = null;
+        if (txA && C.discMatches(txA.data, C.DISC.ConfigTransaction)) cfg = C.decodeConfigTransaction(txA.data);
+
+        var fresh = {
+          index: e.index,
+          proposal: p,
+          proposalPda: e.proposalPda,
+          transactionPda: e.transactionPda,
+          config: cfg,
+          stale: e.index <= Number(ms.staleTransactionIndex)
+        };
+        var savedMs = state.multisig;
+        state.multisig = ms;
+        var probe = {
+          kind: plan.kind,
+          cluster: plan.cluster,
+          rpc: plan.rpc,
+          payer: plan.payer,
+          instructions: plan.instructions,
+          subject: {
+            multisig: state.multisigAddr,
+            index: e.index,
+            proposalStatus: p.status,
+            approvals: p.approved.slice().sort(),
+            threshold: ms.threshold,
+            members: ms.members.map(function (m) { return m.key + ":" + m.mask; }).sort(),
+            actions: cfg ? cfg.actions.map(function (a) {
+              return a.kind + "|" + (a.key || "") + "|" + (a.value !== undefined ? a.value : "") + "|" + (a.mask !== undefined ? a.mask : "");
+            }) : null
+          }
+        };
+        state.multisig = savedMs;
+        return { digest: C.planDigest(probe), fresh: fresh, ms: ms };
+      });
+  }
+
+  function logLine(text, cls) {
+    var log = $("send-log");
+    if (!log) return null;
+    var p = el("p", "small " + (cls || "muted"), text);
+    p.style.margin = "4px 0 0";
+    log.appendChild(p);
+    return p;
+  }
+
+  function buildMessage() {
+    return rpcCall("getLatestBlockhash", [{ commitment: "finalized" }]).then(function (r) {
+      var bh = r.value.blockhash;
+      var compiled = C.compileMessage({
+        payer: state.wallet,
+        instructions: state.plan.instructions,
+        recentBlockhash: bh
+      });
+      return { compiled: compiled, blockhash: bh, lastValidBlockHeight: r.value.lastValidBlockHeight };
+    });
+  }
+
+  function simulateOnly(btn) {
+    btn.disabled = true;
+    var log = $("send-log");
+    clear(log);
+    logLine("simulating against " + state.cluster + " — nothing is signed or sent", "muted");
+    buildMessage().then(function (m) {
+      var wire = C.assembleTransaction(m.compiled.message, m.compiled.signerKeys, {});
+      return rpcCall("simulateTransaction", [bytesToB64(wire), {
+        encoding: "base64", sigVerify: false, replaceRecentBlockhash: true, commitment: "confirmed"
+      }]);
+    }).then(function (r) {
+      renderSimulation(r.value);
+      btn.disabled = false;
+    }).catch(function (e) {
+      logLine("simulation failed: " + e.message, "badc");
+      btn.disabled = false;
+    });
+  }
+
+  function renderSimulation(v) {
+    if (!v) { logLine("no simulation result", "warnc"); return; }
+    if (v.err) {
+      logLine("simulation says this transaction would FAIL: " + JSON.stringify(v.err), "badc");
+    } else {
+      logLine("simulation succeeded — the chain accepts this transaction as built", "ok");
+    }
+    if (v.unitsConsumed !== undefined && v.unitsConsumed !== null) {
+      logLine("compute units " + v.unitsConsumed, "dimmer");
+    }
+    if (v.logs && v.logs.length) {
+      var log = $("send-log");
+      var pre = el("pre", null, v.logs.join("\n"));
+      log.appendChild(pre);
+    }
+  }
+
+  function verifyAndSend(btn) {
+    btn.disabled = true;
+    var log = $("send-log");
+    clear(log);
+
+    logLine("re reading the proposal and multisig…");
+    reverify().then(function (check) {
+      if (check.digest !== state.plan.digest) {
+        logLine("REFUSED. The on chain subject changed after it was displayed.", "badc");
+        logLine("displayed " + state.plan.digest + "   now " + check.digest, "badc");
+        logLine("Nothing was signed. Reload the proposals and review the current state before acting.", "warnc");
+        var reload = el("button", null, "Reload proposals");
+        reload.onclick = function () { state.plan = null; $("card-review").hidden = true; loadMultisig(); };
+        log.appendChild(reload);
+        return null;
+      }
+      logLine("verified — digest still " + check.digest, "ok");
+      logLine("building the transaction…");
+      return buildMessage();
+    }).then(function (m) {
+      if (!m) { btn.disabled = false; return; }
+
+      // The blockhash window is real and has already cost a mainnet incident:
+      // a flagged Phantom warning ate the roughly ninety seconds a transaction
+      // survives, and the send died on BlockhashNotFound. We accept the window
+      // rather than reaching for a durable nonce, because a nonce needs a funded
+      // account the operator may not have on a borrowed laptop and it would add
+      // an instruction to the very transaction we just asked them to verify. We
+      // pay for that choice by fetching the blockhash as late as possible, by
+      // showing the window draining, and by retrying cleanly when it lapses.
+      var started = Date.now();
+      var timer = logLine("blockhash " + m.blockhash + " — valid for about 90 s. Approve in Phantom now.", "warnc");
+      var tick = setInterval(function () {
+        var s = Math.round((Date.now() - started) / 1000);
+        timer.textContent = "blockhash " + m.blockhash + " — " + s + " s elapsed of roughly 90. Approve in Phantom now.";
+        if (s > 90) timer.className = "small badc";
+      }, 1000);
+
+      var wire = C.assembleTransaction(m.compiled.message, m.compiled.signerKeys, {});
+      return state.provider.request({
+        method: "signAndSendTransaction",
+        params: { message: C.b58encode(m.compiled.message) }
+      }).then(function (res) {
+        clearInterval(tick);
+        var sig = res && res.signature ? res.signature : (typeof res === "string" ? res : null);
+        if (!sig) throw new Error("the wallet returned no signature: " + JSON.stringify(res));
+        logLine("submitted " + sig, "ok");
+        return confirmSignature(sig);
+      }).catch(function (e) {
+        clearInterval(tick);
+        throw e;
+      });
+    }).then(function () {
+      btn.disabled = false;
+    }).catch(function (e) {
+      var msg = (e && e.message) ? e.message : String(e);
+      if (/blockhash not found/i.test(msg)) {
+        logLine("The blockhash expired before the wallet released the transaction. Nothing was sent.", "badc");
+        logLine("Press the button again — a fresh blockhash is fetched each time, and the review above is unchanged.", "warnc");
+      } else if (e && e.code === 4001) {
+        logLine("You rejected the request in the wallet. Nothing was sent.", "warnc");
+      } else {
+        logLine("failed: " + msg, "badc");
+      }
+      btn.disabled = false;
+    });
+  }
+
+  function confirmSignature(sig) {
+    logLine("waiting for confirmation…");
+    var tries = 0;
+    return new Promise(function (resolve, reject) {
+      var poll = setInterval(function () {
+        tries++;
+        rpcCall("getSignatureStatuses", [[sig], { searchTransactionHistory: true }]).then(function (r) {
+          var st = r.value && r.value[0];
+          if (st) {
+            if (st.err) {
+              clearInterval(poll);
+              logLine("the transaction landed but FAILED: " + JSON.stringify(st.err), "badc");
+              resolve();
+              return;
+            }
+            if (st.confirmationStatus === "confirmed" || st.confirmationStatus === "finalized") {
+              clearInterval(poll);
+              logLine("confirmed (" + st.confirmationStatus + ")", "ok");
+              logLine("re reading the multisig to prove the change landed…");
+              loadMultisig();
+              resolve();
+              return;
+            }
+          }
+          if (tries > 45) {
+            clearInterval(poll);
+            logLine("still unconfirmed after 90 s. Check the signature on an explorer before retrying — " +
+              "it may yet land, and sending again could double apply.", "warnc");
+            resolve();
+          }
+        }).catch(function (e) {
+          clearInterval(poll);
+          reject(e);
+        });
+      }, 2000);
+    });
+  }
+
+  /* ── turf vault panel ────────────────────────────────────────────────── */
+  function loadVault() {
+    var programId = $("vault-prog").value.trim();
+    var body = $("vault-body");
+    clear(body);
+    if (!C.isValidPubkey(programId)) {
+      body.appendChild(noticeBad("Not an address", "That is not a 32 byte program id."));
+      return;
+    }
+    body.appendChild(el("p", "small muted", "deriving PDAs and reading…"));
+
+    var vsPda, govPda;
+    try {
+      vsPda = C.vaultStatePda(programId);
+      govPda = C.governancePda(programId);
+    } catch (e) {
+      clear(body); body.appendChild(noticeBad("PDA derivation failed", e.message)); return;
+    }
+
+    Promise.all([getAccount(vsPda), getAccount(govPda)]).then(function (r) {
+      clear(body);
+      var vsA = r[0], govA = r[1];
+      if (!vsA) {
+        body.appendChild(noticeBad("No vault at that program",
+          "Derived " + vsPda + " from seeds [\"vault\"], and there is no account there on " + state.cluster + "."));
+        return;
+      }
+      if (!C.discMatches(vsA.data, C.DISC.VaultState)) {
+        body.appendChild(noticeBad("Not a VaultState", "The account at " + vsPda + " does not carry the VaultState discriminator."));
+        return;
+      }
+      var shape = C.detectVaultShape(govA);
+      var slots;
+      try { slots = C.readSignerSlots(vsA.data); }
+      catch (e) { body.appendChild(noticeBad("Could not decode", e.message)); return; }
+
+      state.vault = { programId: programId, vaultStatePda: vsPda, governancePda: govPda, shape: shape, slots: slots, data: vsA.data };
+      renderVault(body);
+      $("card-rotate").hidden = false;
+      renderRotate();
+    }).catch(function (e) {
+      clear(body); body.appendChild(noticeBad("Read failed", e.message));
+    });
+  }
+
+  function renderVault(body) {
+    var v = state.vault;
+    var t = el("table"); var tb = el("tbody");
+    function row(k, val) {
+      var tr = el("tr");
+      tr.appendChild(el("th", null, k));
+      var td = el("td");
+      if (val instanceof Node) td.appendChild(val); else td.textContent = val;
+      tr.appendChild(td); tb.appendChild(tr);
+    }
+    row("vault_state", addr(v.vaultStatePda));
+    row("governance", (function () {
+      var d = el("div");
+      d.appendChild(addr(v.governancePda));
+      d.appendChild(el("div", "small " + (v.shape.hasGovernance ? "ok" : "dimmer"),
+        v.shape.hasGovernance ? "present" : "absent"));
+      return d;
+    })());
+    var shapePill = el("span", "pill " + (v.shape.anomaly ? "bad" : "ok"), v.shape.slots + " signer slots");
+    var sd = el("div");
+    sd.appendChild(shapePill);
+    sd.appendChild(el("div", "small dimmer", v.shape.name + " — detected structurally, never from a version string"));
+    row("program shape", sd);
+    row("paused", v.data[8 + C.VAULT.OFFSETS.paused] ? "yes" : "no");
+    row("legacy threshold byte", String(v.data[8 + C.VAULT.OFFSETS.threshold]));
+    t.appendChild(tb);
+    body.appendChild(t);
+
+    body.appendChild(el("span", "label", "Signer slots"));
+    var st = el("table");
+    var th = el("thead"); var hr = el("tr");
+    ["slot", "field", "key"].forEach(function (h) { hr.appendChild(el("th", null, h)); });
+    th.appendChild(hr); st.appendChild(th);
+    var sb = el("tbody");
+    v.slots.forEach(function (s) {
+      var tr = el("tr");
+      tr.appendChild(el("td", "num", String(s.index)));
+      tr.appendChild(el("td", "small dimmer", s.field));
+      var td = el("td");
+      if (s.empty) {
+        td.appendChild(el("span", "pill dim", "empty"));
+      } else {
+        td.appendChild(addr(s.key));
+        if (s.key === state.wallet) { td.appendChild(document.createTextNode(" ")); td.appendChild(el("span", "pill ok", "you")); }
+      }
+      tr.appendChild(td);
+      sb.appendChild(tr);
+    });
+    st.appendChild(sb);
+    var sc = el("div", "scroll-x"); sc.appendChild(st);
+    body.appendChild(sc);
+
+    if (!C.isLeftPacked(v.slots)) {
+      body.appendChild(noticeBad("Slots are not left packed",
+        "A live key sits after an empty slot. The program refuses this shape, so this vault reads inconsistently to different tools."));
+    }
+    if (v.shape.slots > 3 && v.slots.slice(3).every(function (s) { return s.empty; })) {
+      body.appendChild(noticeWarn("Appended slots are still empty",
+        "This program holds five slots and the last two have never been written, so the vault is in its pre rotation shape."));
+    }
+  }
+
+  /* ── rotation (update_signers) ───────────────────────────────────────── */
+  function renderRotate() {
+    var body = $("rotate-body");
+    clear(body);
+    var v = state.vault;
+    if (!v) return;
+
+    var n = el("div", "notice");
+    n.appendChild(el("h3", null, "This builds a native multi signature transaction, not a Squads proposal."));
+    var p = el("p");
+    p.textContent = "update_signers needs several distinct wallets to sign ONE transaction. Each wallet signs the " +
+      "same message in turn and the signatures are assembled here; no wallet ever sees another's key. " +
+      "Slots left blank become empty. Slots must be left packed — no gaps.";
+    n.appendChild(p);
+    body.appendChild(n);
+
+    body.appendChild(el("span", "label", "New signer set (" + v.shape.slots + " slots on this program)"));
+    for (var i = 0; i < v.shape.slots; i++) {
+      var d = el("div");
+      d.style.marginBottom = "6px";
+      var inp = el("input");
+      inp.type = "text";
+      inp.id = "rot-slot-" + i;
+      inp.placeholder = "slot " + i + (v.slots[i] && !v.slots[i].empty ? " — currently " + v.slots[i].key : " — currently empty");
+      inp.value = v.slots[i] && !v.slots[i].empty ? v.slots[i].key : "";
+      inp.spellcheck = false;
+      inp.autocapitalize = "off";
+      inp.autocomplete = "off";
+      d.appendChild(inp);
+      body.appendChild(d);
+    }
+
+    body.appendChild(el("span", "label", "Authorizing wallets, in signing order (one address per line)"));
+    var ta = el("textarea");
+    ta.id = "rot-signers";
+    ta.spellcheck = false;
+    ta.placeholder = "the first line is the fee payer and the named admin\nthe second is the named cosigner\nany further lines ride as remaining accounts";
+    ta.value = state.wallet || "";
+    body.appendChild(ta);
+    body.appendChild(el("p", "small dimmer",
+      v.shape.slots === 5
+        ? "The five slot program floors update_signers at three signatures, and at least three of the authorizing keys must survive the rotation."
+        : "The three slot program requires two distinct signers, and both authorizing keys must survive the rotation."));
+
+    var btns = el("div", "btnrow");
+    var b = el("button", "primary", "Build and simulate");
+    b.onclick = function () { buildRotation(b); };
+    btns.appendChild(b);
+    body.appendChild(btns);
+    body.appendChild(el("div", null, "")).id = "rotate-log";
+  }
+
+  function buildRotation(btn) {
+    var log = $("rotate-log");
+    clear(log);
+    var v = state.vault;
+    var newSigners = [];
+    var i;
+    try {
+      for (i = 0; i < v.shape.slots; i++) {
+        var raw = $("rot-slot-" + i).value.trim();
+        if (raw) {
+          C.parsePubkey(raw, "slot " + i);
+          newSigners.push(raw);
+        } else {
+          newSigners.push(C.DEFAULT_PUBKEY);
+        }
+      }
+      // Left packed: an occupied slot after an empty one is refused by the program.
+      var sawEmpty = false;
+      for (i = 0; i < newSigners.length; i++) {
+        if (newSigners[i] === C.DEFAULT_PUBKEY) sawEmpty = true;
+        else if (sawEmpty) throw new Error("slot " + i + " is filled but an earlier slot is empty — the program refuses gaps");
+      }
+      var filled = newSigners.filter(function (k) { return k !== C.DEFAULT_PUBKEY; });
+      for (i = 0; i < filled.length; i++) {
+        for (var j = i + 1; j < filled.length; j++) {
+          if (filled[i] === filled[j]) throw new Error("slot duplicate: " + filled[i] + " appears twice");
+        }
+      }
+
+      var signers = $("rot-signers").value.split("\n").map(function (s) { return s.trim(); }).filter(Boolean);
+      if (signers.length < 2) throw new Error("at least two authorizing wallets are needed");
+      signers.forEach(function (s, k) { C.parsePubkey(s, "authorizing wallet " + (k + 1)); });
+      var minSigs = v.shape.slots === 5 ? 3 : 2;
+      if (signers.length < minSigs) throw new Error("this program requires at least " + minSigs + " signatures for update_signers");
+
+      var survivors = signers.filter(function (s) { return filled.indexOf(s) > -1; });
+      if (survivors.length < minSigs) {
+        throw new Error("continuity: only " + survivors.length + " of the authorizing wallets survive this rotation, and the program needs " +
+          minSigs + ". To evict a key, sign with keys that are STAYING.");
+      }
+
+      var ix = C.ixUpdateSigners({
+        programId: v.programId,
+        shape: v.shape,
+        vaultState: v.vaultStatePda,
+        governance: v.governancePda,
+        signers: signers,
+        newSigners: newSigners
+      });
+
+      renderRotationPlan(log, ix, newSigners, signers, btn);
+    } catch (e) {
+      var p = el("p", "small badc", e.message);
+      log.appendChild(p);
+    }
+  }
+
+  function renderRotationPlan(log, ix, newSigners, signers, btn) {
+    log.appendChild(el("span", "label", "Resulting signer set"));
+    newSigners.forEach(function (k, i) {
+      var d = el("div", "small");
+      d.appendChild(el("span", "dimmer", "slot " + i + "  "));
+      if (k === C.DEFAULT_PUBKEY) d.appendChild(el("span", "pill dim", "empty"));
+      else d.appendChild(addr(k));
+      log.appendChild(d);
+    });
+
+    log.appendChild(el("span", "label", "Signatures required, in order"));
+    signers.forEach(function (s, i) {
+      var d = el("div", "small");
+      d.appendChild(el("span", "dimmer", (i === 0 ? "admin + fee payer  " : i === 1 ? "cosigner  " : "extra cosigner  ")));
+      d.appendChild(addr(s));
+      log.appendChild(d);
+    });
+
+    log.appendChild(el("span", "label", "The instruction"));
+    log.appendChild(el("div", "small dimmer", "program"));
+    log.appendChild(addr(ix.programId));
+    log.appendChild(el("div", "small dimmer", "data (" + ix.data.length + " bytes: 8 discriminator + " + (ix.data.length - 8) / 32 + " pubkeys)"));
+    log.appendChild(el("pre", null, C.hex(ix.data)));
+
+    var sim = el("button", null, "Simulate against " + state.cluster);
+    sim.onclick = function () {
+      sim.disabled = true;
+      var out = el("div");
+      log.appendChild(out);
+      rpcCall("getLatestBlockhash", [{ commitment: "finalized" }]).then(function (r) {
+        var compiled = C.compileMessage({ payer: signers[0], instructions: [ix], recentBlockhash: r.value.blockhash });
+        var wire = C.assembleTransaction(compiled.message, compiled.signerKeys, {});
+        return rpcCall("simulateTransaction", [bytesToB64(wire), {
+          encoding: "base64", sigVerify: false, replaceRecentBlockhash: true, commitment: "confirmed"
+        }]);
+      }).then(function (r) {
+        var v = r.value;
+        out.appendChild(el("p", "small " + (v.err ? "badc" : "ok"),
+          v.err ? "simulation says this would FAIL: " + JSON.stringify(v.err) : "simulation succeeded — the chain accepts this transaction as built"));
+        if (v.logs && v.logs.length) out.appendChild(el("pre", null, v.logs.join("\n")));
+        sim.disabled = false;
+      }).catch(function (e) {
+        out.appendChild(el("p", "small badc", "simulation failed: " + e.message));
+        sim.disabled = false;
+      });
+    };
+    var row = el("div", "btnrow");
+    row.appendChild(sim);
+    log.appendChild(row);
+
+    log.appendChild(noticeWarn("Collecting the signatures",
+      "Each wallet must sign the same message. Phantom's sign only method is documented as legacy and its return " +
+      "shape is not pinned by the docs, so this console stops at a verified, simulated transaction rather than " +
+      "pretending a multi wallet collection flow has been proven. Sign this set through the ceremony script " +
+      "(scripts/rotate-devnet-signers.js) until that path is exercised on a live cluster."));
+  }
+
+  /* ── wiring ──────────────────────────────────────────────────────────── */
+  function onClusterChange() {
+    var v = $("cluster").value;
+    state.cluster = v;
+    state.rpcOk = false;
+    $("rpc-status").textContent = "";
+    var rpc = $("rpc");
+    if (!v) {
+      rpc.value = ""; rpc.disabled = true; rpc.placeholder = "choose a cluster first";
+      $("btn-rpc-check").disabled = true;
+      $("btn-load-ms").disabled = true;
+      $("btn-load-vault").disabled = true;
+      return;
+    }
+    rpc.disabled = false;
+    rpc.value = RPC_PRESETS[v] || "";
+    rpc.placeholder = v === "custom" ? "https://your-rpc-endpoint" : "";
+    $("btn-rpc-check").disabled = false;
+    state.rpc = rpc.value;
+
+    // Sensible starting points, never a cluster default.
+    if (v === "devnet" && !$("vault-prog").value) {
+      $("vault-prog").value = "EQGFJAcABtDb6VXtiijTjZ6cE2UqdvhnqJvoharJbpMJ";
+    } else if (v === "mainnet-beta" && !$("vault-prog").value) {
+      $("vault-prog").value = "DaFv83yokwTz8msP9CzJ13eazSGk15NuUTxjkfzJzxMM";
+    }
+  }
+
+  function checkRpc() {
+    state.rpc = $("rpc").value.trim();
+    var st = $("rpc-status");
+    st.className = "small muted";
+    st.textContent = "checking…";
+    rpcCall("getGenesisHash", []).then(function (h) {
+      // Genesis hashes are the only honest way to tell a cluster apart: the
+      // endpoint's hostname is a label, this is the chain's identity.
+      var known = {
+        "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG": "devnet",
+        "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d": "mainnet-beta",
+        "4uhcVJyU9pJkvQyS88uRDiswHXSCkY3zQawwpjk2NsNY": "testnet"
+      };
+      var name = known[h] || "unknown chain";
+      state.rpcOk = true;
+      if (state.cluster !== "custom" && name !== state.cluster) {
+        st.className = "small badc";
+        st.textContent = "MISMATCH — you chose " + state.cluster + " but this endpoint serves " + name + " (genesis " + h + ")";
+        state.rpcOk = false;
+      } else {
+        st.className = "small ok";
+        st.textContent = "reachable · serving " + name;
+      }
+      $("btn-load-ms").disabled = !state.rpcOk;
+      $("btn-load-vault").disabled = !state.rpcOk;
+      if (state.wallet) renderWallet();
+    }).catch(function (e) {
+      st.className = "small badc";
+      st.textContent = "unreachable: " + e.message;
+      state.rpcOk = false;
+      $("btn-load-ms").disabled = true;
+      $("btn-load-vault").disabled = true;
+    });
+  }
+
+  $("cluster").addEventListener("change", onClusterChange);
+  $("rpc").addEventListener("input", function () { state.rpc = $("rpc").value.trim(); state.rpcOk = false; $("rpc-status").textContent = ""; $("btn-load-ms").disabled = true; $("btn-load-vault").disabled = true; });
+  $("btn-rpc-check").addEventListener("click", checkRpc);
+  $("btn-connect").addEventListener("click", connect);
+  $("btn-disconnect").addEventListener("click", function () {
+    if (state.provider && state.provider.disconnect) state.provider.disconnect();
+    state.wallet = null; state.provider = null;
+    renderWallet(); renderProposals();
+  });
+  $("btn-load-ms").addEventListener("click", loadMultisig);
+  $("btn-load-vault").addEventListener("click", loadVault);
+
+  renderEnvNotice();
+  renderWallet();
+  onClusterChange();
+})();
+</script>
+</body>
+</html>

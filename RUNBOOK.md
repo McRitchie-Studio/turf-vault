@@ -33,8 +33,29 @@ Live deployment identity lives in [`docs/CURRENT_DEPLOYMENT.md`](docs/CURRENT_DE
 - Fix: Check binary size: `ls -la target/deploy/turf_vault.so`. Reduce program size: remove unused instructions, consolidate error messages, use `msg!()` sparingly. Enable size optimization in `Cargo.toml`: `[profile.release] opt-level = "z"`.
 
 **`anchor deploy` fails / program authority is the Squads multisig**
-- Diagnosis: `anchor deploy` fails because the program's upgrade authority is not a single keypair. As of 2026-05-19 (OPSEC-002) the upgrade authority is a Squads V4 2-of-3 multisig vault PDA, not `~/.config/solana/id.json`. **The vault PDA differs per cluster** — devnet `BW13kgfiG2koFn3WRkte21NW9TFygsD1ge2fNJdjH6kC`, mainnet `Bk9sS7iiSRL18vuo2KVzkeGw7EekKqxMCjrdoyGGdJm`. Confirm the one you are about to deploy against with `solana program show <PROGRAM_ID> --url <cluster>`.
-- Fix: Do not use `anchor deploy` for an existing deployed program under Squads authority. Upgrades go through `scripts/squad-upgrade.js`: build, `solana program write-buffer`, `solana program set-buffer-authority` to the vault PDA, then `node scripts/squad-upgrade.js <BUFFER_ADDR>` (propose → approve ×2 → execute). Verify the current authority with the program ID in `docs/CURRENT_DEPLOYMENT.md`.
+- Diagnosis: `anchor deploy` fails because the program's upgrade authority is not a single keypair. As of 2026-05-19 (OPSEC-002) the upgrade authority is a Squads V4 multisig vault PDA, not `~/.config/solana/id.json`. **The vault PDA differs per cluster** — devnet `BW13kgfiG2koFn3WRkte21NW9TFygsD1ge2fNJdjH6kC`, mainnet `Bk9sS7iiSRL18vuo2KVzkeGw7EekKqxMCjrdoyGGdJm`. Confirm the one you are about to deploy against with `solana program show <PROGRAM_ID> --url <cluster>`.
+- Fix: Do not use `anchor deploy` for an existing deployed program under Squads authority. Upgrades go through `scripts/squad-upgrade.js`: build, `solana program write-buffer`, `solana program set-buffer-authority` to the vault PDA, then `node scripts/squad-upgrade.js --cluster=<devnet|mainnet> <BUFFER_ADDR>`. **`--cluster` is required and there is no default**, and the run is a DRY RUN until you add `--send`. Verify the current authority with the program ID in `docs/CURRENT_DEPLOYMENT.md`.
+
+**How far the run gets is decided by the chain, not by you.** The script reads the
+live Squads membership, intersects it with the agent seats it can sign for, and
+takes one of two paths:
+
+| Cluster | Threshold | Agent seats | What the script does |
+|---------|-----------|-------------|----------------------|
+| devnet `7nRuVw3V…` | 3 of 5 | 3 (`system.devnet`, `admin`, Xan) | **AUTONOMOUS** — create → propose → approve ×3 → execute |
+| mainnet `4H3fP3ot…` | 3 of 5 | 2 (`system`, `admin`) | **HANDOFF** — create → propose → approve ×2 → **stop**, and print the transaction index, the on-chain instruction read back from chain, and which of Mr. McRitchie's wallets must approve |
+
+That asymmetry is deliberate (2026-09-15): devnet runs unattended, mainnet needs
+Mr. McRitchie. Confirm it before a ceremony with `node scripts/squad-inventory.js`,
+which reads both multisigs and prints which path an upgrade would take. Never read
+membership out of a doc, this one included — it is a snapshot the moment it is
+written, and it went stale twice in one morning.
+
+**On the mainnet handoff.** The agent's two approvals are already cast; Mr.
+McRitchie approves from one of `7ZDJp7FU…`, `3Qj4v9qj…` or `9gACbz…` and then
+executes. Before approving, compare what the Squads UI shows against the block the
+script printed — the script refuses to approve a transaction whose on-chain
+instruction is not the planned upgrade, and the same check is worth making by eye.
 
 ## Test Failures
 
@@ -112,7 +133,11 @@ minutes by running the two back to back.
 
 ```bash
 # 1. Upgrade the program through Squads as usual (see Deploy Failures above).
-node scripts/squad-upgrade.js <BUFFER_ADDR>
+#    Dry run first; --send arms it. On mainnet this STOPS after the agent's two
+#    approvals and hands the third to Mr. McRitchie, so budget for that pause
+#    BEFORE step 2's window opens.
+node scripts/squad-upgrade.js --cluster=mainnet <BUFFER_ADDR>
+node scripts/squad-upgrade.js --cluster=mainnet <BUFFER_ADDR> --send
 
 # 2. IMMEDIATELY: create the governance table. Two signatures, any two current
 #    vault signers. It takes NO arguments — it can only write the shipped

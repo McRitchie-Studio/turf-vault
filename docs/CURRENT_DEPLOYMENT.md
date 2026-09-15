@@ -38,6 +38,8 @@ The retired Alex Bot signer `F6f8...KzhZ` has zero devnet authority after the 20
 
 Both clusters run **v0.25.0** today; mainnet reached it on 2026-06-11, nine minutes after devnet. The next upgrade window carries `burn_entry_token` AND the v0.26 governance change (both Unreleased in `CHANGELOG.md`), which change the IDL and so need a freshly built `EXPECTED_IDL_HASH` pinned on `turf-monster-mainnet`. The Version row above is read off the deployed executable, not inferred from a commit message; the method is under **Verification** below.
 
+**The crate version is not this row.** `programs/turf_vault/Cargo.toml` reads `0.26.0` as of 2026-09-15: that is what the SOURCE is, and it is the label a freshly built IDL will carry. Both tables above say v0.25.0 because that is what the CHAIN runs. The two agree again only after the upgrade window. Reading `0.26.0` in the crate and concluding these rows are stale is the mistake this paragraph exists to prevent.
+
 **The `Threshold` rows above describe v0.25, which is what is DEPLOYED.** They say
 2-of-3 because that is what the deployed program can express: `validate_multisig`
 takes exactly two signers and never reads the `threshold` field at all. v0.26
@@ -58,7 +60,7 @@ both clusters, with slots 4 and 5 empty.
 
 **The upgrade authority is per cluster.** Mainnet's Squads vault PDA (`Bk9sS7ii...`) is a different vault from devnet's (`BW13kgfi...`). Never carry one cluster's vault address to the other; the devnet address is the one that historically leaked into mainnet-facing prose. The `VaultState` signer set and threshold are identical on both clusters today, but nothing in the program ties them together — each cluster's `VaultState` was written by its own `initialize`, and `update_signers` can move one without the other. Read the cluster you mean.
 
-Do not infer the live mainnet version from Turf Monster's committed IDL file alone. The source tree can carry a next-upgrade IDL before the Heroku app has accepted it, and an unreleased tree need not bump the crate version — so an IDL's `metadata.version` can match the live one while the builds differ. Live truth is the chain: the instruction-set probe under **Verification** below, cross-checked against the `EXPECTED_IDL_HASH` configured on `turf-monster-mainnet`. This note records that reading; it does not replace it. Its mainnet rows once sat nearly three months stale while claiming to have been verified.
+Do not infer the live mainnet version from Turf Monster's committed IDL file alone. The source tree can carry a next-upgrade IDL before the Heroku app has accepted it, so that file can describe a program which is not yet on chain. Until 2026-09-15 there was a second and worse way to be misled: an unreleased tree could keep the released crate version, so a freshly built IDL's `metadata.version` read identically to the live one and no comparison could separate them. `scripts/tests/crate-version.test.js` now refuses that tree. Treat the version as a label for humans even so — it is a DECLARATION rather than a measurement, true only because someone wrote it down, so never branch on it. Live truth is the chain: the instruction-set probe under **Verification** below, cross-checked against the `EXPECTED_IDL_HASH` configured on `turf-monster-mainnet`. This note records that reading; it does not replace it. Its mainnet rows once sat nearly three months stale while claiming to have been verified.
 
 ## Verification
 
@@ -147,9 +149,18 @@ instruction surface, not v0.24.0's and not the unreleased tree's.
 The pinned IDL agrees from the other side, and it is the weaker of the two
 readings: `EXPECTED_IDL_HASH` on `turf-monster-mainnet` is the sha256 of
 `turf-monster/config/turf_vault.mainnet.idl.json`, which declares
-`metadata.version` `0.25.0` against address `DaFv83...`. Weaker because the
-unreleased tree has not bumped the crate version, so a freshly built IDL would
-still read `0.25.0`; only the discriminator probe separates the two.
+`metadata.version` `0.25.0` against address `DaFv83...`. Weaker because it reads a
+file in another repo rather than the chain: the pin proves which IDL
+turf-monster is configured to ACCEPT, never which program is executing. Since
+2026-09-15 the crate version does at least distinguish the two — a freshly
+built IDL now reads `0.26.0`, where before it also read `0.25.0` and nothing
+separated them. turf-monster still carries the proof of that: its staged
+`config/turf_vault.mainnet.v026.idl.json` declares `metadata.version` `0.25.0`
+against this same `DaFv83...` address while describing the 28-instruction v0.26
+program, indistinguishable by label from the 22-instruction file beside it. It
+reads `0.26.0` once rebuilt from the corrected tree. That improves the label
+without promoting it: the version is still written by hand, so the discriminator
+probe stays the reading that decides.
 
 **What neither reading proves.** An instruction set fixes the release, not the
 build — a patch inside a handler leaves every discriminator unchanged. The
@@ -245,10 +256,67 @@ this yourself** B, decoding the same offsets — deliberately, so a rotation and
 this reference cannot disagree about what the vault holds. Change one and change
 the other.
 
-`VaultState`'s in-program 2-of-3 is a separate mechanism from the Squads vault that holds the program upgrade authority. Both are 2-of-3; they are not the same multisig.
+`VaultState`'s in-program 2-of-3 is a separate mechanism from the Squads vault
+that holds the program upgrade authority, and **they no longer even have the same
+shape**. `VaultState` is still 2-of-3 with the signers listed in the tables above;
+both Squads multisigs are 3-of-5 as of 2026-09-15. Two multisigs, two vocabularies
+— see **Squads Governance** below, and read `scripts/squad.json`'s `_members_are`
+note before touching that file.
+
+## Squads Governance — who can upgrade, per cluster
+
+**Do not read the membership out of this section.** It is a snapshot, it changed
+twice on 2026-09-15 alone, and every written copy of it has gone stale faster than
+anyone re-read it. The live answer is one command:
+
+```bash
+node scripts/squad-inventory.js              # both clusters, read-only, no keys
+node scripts/squad-inventory.js --cluster=mainnet
+```
+
+What it reports, and what the numbers mean, as of **2026-09-15**:
+
+| Cluster | Multisig | Threshold | Agent-held seats | An upgrade run would |
+|---------|----------|-----------|------------------|----------------------|
+| devnet | `7nRuVw3VZFC6z85tYVDitPnaUHZCkqLpJRSTBNtPmtZB` | 3 of 5 | 3 — `system.devnet` `2eGs8G3w…`, `admin` `BLSBw8fX…`, Xan `8K81w4e6…` | run **AUTONOMOUS**, end to end |
+| mainnet | `4H3fP3otjMtupk1DQDjKXYY1dWjT6LNM4H4ZWZ1XcKSX` | 3 of 5 | 2 — `system` `7auwTLSv…`, `admin` `BLSBw8fX…` | **HAND OFF** one approval and the execute to Mr. McRitchie |
+
+**The asymmetry is the design, not a gap.** Devnet is meant to run unattended;
+mainnet is meant to need Mr. McRitchie. His three wallets — `7ZDJp7FU…` (Alex
+Phantom), `3Qj4v9qj…` (Alex two), `9gACbz…` (Alex three) — sit on mainnet, and any
+one of them closes the mainnet quorum. Mainnet crossing into AUTONOMOUS is a
+governance regression to investigate, and devnet falling out of it is a broken
+automation lane; `squad-inventory.js` prints either in one line.
+
+Every seat holds mask 7 (Initiate|Vote|Execute) today, so any agent seat can open
+a transaction and cast a vote. Confirm rather than assume — the mask, not the
+membership, is what decides whether a seat can do the step being asked of it.
+
+**Retired 2026-09-15, with Mr. McRitchie's authorization:** Xan `8K81w4e6…` off
+mainnet (still seated on devnet) and Mason `CytJS23p…` off both. Neither is a
+Squads member on the cluster the old tooling named them for. They remain
+`VaultState` signers, which is a different multisig — see above.
+
+The scripts that ran that rotation are preserved in
+[`scripts/ceremony/`](../scripts/ceremony/README.md), with what each one did and
+the three failure modes they found the hard way. They are a record, not a
+toolkit: each validates its plan against live membership and now refuses.
 
 ## Upgrade Rule
 
-`anchor deploy` is not the upgrade path for an existing deployed program under Squads authority. Build the program, write a buffer, set the buffer authority to the Squads vault PDA, then execute the upgrade through `scripts/squad-upgrade.js`.
+`anchor deploy` is not the upgrade path for an existing deployed program under
+Squads authority. Build the program, write a buffer, set the buffer authority to
+the Squads vault PDA, then execute the upgrade through `scripts/squad-upgrade.js`:
 
-After any upgrade, re-pin Turf Monster from the built IDL, not from `anchor idl fetch`; Squads upgrades do not update the on-chain IDL account.
+```bash
+node scripts/squad-upgrade.js --cluster=mainnet <BUFFER_ADDR>          # dry run
+node scripts/squad-upgrade.js --cluster=mainnet <BUFFER_ADDR> --send   # armed
+```
+
+`--cluster` is required and has no default; the run is a dry run until `--send`.
+A dry run reads no key material at all, so it is free to run before the buffer
+even exists — which is the order the money wants, because a mainnet buffer costs
+~2.76 SOL to write.
+
+After any upgrade, re-pin Turf Monster from the built IDL, not from `anchor idl
+fetch`; Squads upgrades do not update the on-chain IDL account.

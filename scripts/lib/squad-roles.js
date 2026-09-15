@@ -1,40 +1,39 @@
 /**
- * squad-roles — decide WHO signs each step of a mainnet upgrade, and refuse
- * before anything is spent if the quorum is not actually there.
+ * squad-roles — MEASURE the live multisig, then decide whether this run can
+ * finish an upgrade by itself or must stop and hand the rest to a human.
  *
- * WHY THIS EXISTS. A mainnet upgrade SPENDS before it votes: by the time
- * `proposalApprove` runs, the bot has already paid for ExtendProgram and created
- * the vault transaction, and a buffer is sitting on chain. If a key it needs
- * cannot do what the step asks — a member evicted by a rotation, a mask granted
- * narrower than the tooling uses, an approver who cannot Vote, or simply fewer
- * approvers than the threshold — the run dies mid-ceremony and the operator is
- * left with a half-done upgrade and no way to finish it from where they stand.
+ * WHAT CHANGED, AND WHY (2026-09-15). This module used to answer one question —
+ * "can the bot and Mason reach quorum?" — and THROW when the answer was no. That
+ * was correct while every cluster's multisig was 2-of-3 with two agent-held
+ * seats. It stopped being correct at 09:41, when the Squads rotation left the
+ * two clusters deliberately ASYMMETRIC:
  *
- * So `squad-upgrade.js` asks this module first, against the multisig's OWN
- * members, masks and threshold read from chain, and refuses BEFORE the first
- * lamport. It reads the chain and decides nothing on its own.
+ *   devnet   7nRuVw3V…   3 of 5, and THREE of the five are agent-held
+ *   mainnet  4H3fP3ot…   3 of 5, and TWO of the five are agent-held
  *
- * WHO SIGNS WHAT, as the script actually runs it (2026-09-14, unchanged by
- * /tasks/narrow-bot-squads-permissions, which was declined — see below):
+ * Devnet is meant to run unattended. Mainnet is meant to need Mr. McRitchie.
+ * A module that throws on a short quorum turns the mainnet half of that design
+ * into a broken script, so the short quorum is no longer an error — it is a
+ * MODE. One script, two behaviours, chosen by counting seats on chain rather
+ * than by a flag somebody has to remember to pass.
  *
- *   Initiate (1)  vaultTransactionCreate and proposalCreate — the bot
- *   Vote     (2)  proposalApprove — the bot AND Mason, two of the three members
- *   Execute  (4)  vaultTransactionExecute — the bot
+ *   mode "autonomous"  the agent holds enough Vote seats to reach threshold AND
+ *                      an Execute seat — create, propose, approve, execute.
+ *   mode "handoff"     it does not — create, propose, cast every approval it
+ *                      CAN, then stop and name what is still owed.
  *
- * and the bot pays every fee, so an approver needs nothing but their key.
+ * WHAT IS STILL A REFUSAL, because these are dead ends rather than handoffs:
  *
- * THE BOT DELIBERATELY KEEPS Vote. Narrowing it to Initiate|Execute was
- * proposed and DECLINED by Mr. McRitchie: Squads counts approvals only from
- * Vote-holders, so dropping the bot's would leave exactly two voters against
- * threshold 2 — lose either human key and upgrade authority freezes with no
- * quorum left to add a replacement. He chose the spare, accepting that a leaked
- * bot key plus one human key still reaches quorum. Do not re-litigate it here;
- * this module describes what the script does, and requires of the bot exactly
- * the bits the script uses.
+ *   · no seat at all. Every candidate key was removed from the multisig, which
+ *     is exactly the 09:41 state. There is nothing to create WITH.
+ *   · no seat that can Initiate. Same: nothing can open the transaction.
+ *   · a handoff whose shortfall the remaining members cannot cover. Creating a
+ *     proposal that can never pass leaves rent-paying litter on the multisig
+ *     and a transaction index that looks like progress.
  *
- * The caller hands in the multisig as plain data — members as base58 strings
- * with their on-chain mask — so this file has no network, no SDK and no key
- * material, and its refusals can be graded in CI (scripts/tests/squad-roles.test.js).
+ * THE CALLER HANDS IN PLAIN DATA — members as base58 strings with their
+ * on-chain mask — so this file has no network, no SDK and no key material, and
+ * every branch above is graded in scripts/tests/squad-roles.test.js.
  */
 
 "use strict";
@@ -51,9 +50,6 @@ class SquadRoleError extends Error {
     this.name = "SquadRoleError";
   }
 }
-
-/** Every bit the bot exercises: it initiates, votes, and executes. */
-const BOT_MASK_REQUIRED = INITIATE | VOTE | EXECUTE;
 
 const BIT_NAMES = [
   [INITIATE, "Initiate"],
@@ -73,25 +69,23 @@ function short(key) {
     : String(key);
 }
 
-function missingBits(mask, required) {
-  return BIT_NAMES.filter(([bit]) => required & bit && !(mask & bit)).map(
-    ([, name]) => name
-  );
-}
-
 /**
- * Plan the signers for one upgrade, or throw.
+ * Classify one upgrade against live membership.
  *
  * @param {{threshold: number, members: Array<{key: string, mask: number}>}} multisig
  *        the ON-CHAIN Multisig account, flattened. Live truth — never squad.json.
- * @param {string} bot       base58 pubkey of the Alex Bot key (creates, pays, executes)
- * @param {string[]} approvers base58 pubkeys casting the approvals, in order. The
- *        bot may be one of them — it holds Vote, by decision.
- * @returns {{transactionCreator: string, creator: string, approvers: string[],
- *            executor: string, approvals: number, threshold: number,
- *            quorumReached: boolean, botMask: number, botMaskRequired: number}}
+ * @param {Array<{role: string, pubkey: string}>} seats
+ *        the keys this run can offer. A seat that is not a live member is
+ *        reported in `unseated` and dropped; it is NOT an error.
+ * @returns {{mode: "autonomous"|"handoff", threshold: number,
+ *            seated: Array<{role, pubkey, mask}>, unseated: Array<{role, pubkey}>,
+ *            voters: Array<{role, pubkey, mask}>, initiator: {role, pubkey, mask},
+ *            executor: {role, pubkey, mask}|null,
+ *            approvalsAvailable: number, shortfall: number,
+ *            outsideVoters: Array<{pubkey, mask}>, outsideExecutors: Array<{pubkey, mask}>}}
+ * @throws  {SquadRoleError}
  */
-function planUpgradeSigners({ multisig, bot, approvers: approverKeys }) {
+function planUpgrade({ multisig, seats }) {
   if (!multisig || !Array.isArray(multisig.members)) {
     throw new SquadRoleError(
       "multisig account has no members array — read it from chain before planning"
@@ -103,100 +97,99 @@ function planUpgradeSigners({ multisig, bot, approvers: approverKeys }) {
       `multisig threshold is ${multisig.threshold}, which is not a usable quorum`
     );
   }
+  const candidates = Array.isArray(seats) ? seats : [];
 
-  const maskOf = (key) => {
-    const member = multisig.members.find((m) => m.key === key);
-    return member ? Number(member.mask) : null;
-  };
+  const members = new Map(
+    multisig.members.map((m) => [m.key, Number(m.mask)])
+  );
 
-  // --- the bot: Initiate + Vote + Execute (BOT_MASK_REQUIRED, :56) ----------
-  // Vote is REQUIRED here, not optional: narrowing the bot to Initiate|Execute
-  // was proposed and DECLINED (see the header, :26). This check throws without
-  // it. Do not "fix" the mask to match a narrower comment.
-  const botMask = maskOf(bot);
-  if (botMask === null) {
-    throw new SquadRoleError(
-      `bot ${short(
-        bot
-      )} is not a member of this multisig — it cannot create or execute the upgrade`
-    );
-  }
-  const botMissing = missingBits(botMask, BOT_MASK_REQUIRED);
-  if (botMissing.length) {
-    throw new SquadRoleError(
-      `bot ${short(bot)} holds ${describeMask(
-        botMask
-      )} but needs ${botMissing.join(" and ")} ` +
-        `to create and execute the upgrade (required ${describeMask(
-          BOT_MASK_REQUIRED
-        )})`
-    );
+  // --- intersect the roster with the chain ---------------------------------
+  // A seat that vanished from the multisig is DROPPED, loudly, not fatal. This
+  // is the branch the 09:41 rotation needed and the old module did not have.
+  const seated = [];
+  const unseated = [];
+  const claimed = new Set();
+  for (const seat of candidates) {
+    if (claimed.has(seat.pubkey)) continue; // one key is one seat, however many roles name it
+    claimed.add(seat.pubkey);
+    const mask = members.get(seat.pubkey);
+    if (mask === undefined) unseated.push({ role: seat.role, pubkey: seat.pubkey });
+    else seated.push({ role: seat.role, pubkey: seat.pubkey, mask });
   }
 
-  // --- the approvers: distinct, members, able to vote -----------------------
-  const approvers = Array.isArray(approverKeys) ? approverKeys.slice() : [];
-  approvers.forEach((key, i) => {
-    if (approvers.indexOf(key) !== i) {
-      throw new SquadRoleError(
-        `approver ${short(key)} is supplied twice — that is one vote, not two`
-      );
-    }
-    const mask = maskOf(key);
-    if (mask === null) {
-      throw new SquadRoleError(
-        `approver ${short(key)} is not a member of this multisig`
-      );
-    }
-    if (!(mask & VOTE)) {
-      throw new SquadRoleError(
-        `approver ${short(key)} holds ${describeMask(mask)} and cannot Vote`
-      );
-    }
-  });
-
-  if (approvers.length < threshold) {
+  if (seated.length === 0) {
     throw new SquadRoleError(
-      `${approvers.length} approver(s) supplied against threshold ${threshold} — ` +
-        `${threshold} keys able to Vote must sign this upgrade`
+      `none of this run's ${candidates.length} candidate key(s) is a member of this multisig ` +
+        `— it cannot open an upgrade transaction at all.\n` +
+        `    offered: ${candidates.map((s) => `${s.role} ${short(s.pubkey)}`).join(", ") || "(none)"}\n` +
+        `    live:    ${multisig.members.map((m) => short(m.key)).join(", ")}\n` +
+        `    Re-seat a key, or point the roster in scripts/lib/squad-clusters.js at one that is seated.`
     );
   }
 
-  // --- who opens the proposal ----------------------------------------------
-  // The bot, as the script does it. Whether `proposalCreate` demands Initiate or
-  // Vote is NOT settled from the vendored IDL (no per-instruction permission
-  // docs) and the Rust program is not vendored here — so this requires BOTH of
-  // the bot, which it holds, and the question stops deciding anything. Narrow
-  // the bot's mask one day and settle it first.
-  const creator = bot;
-  const creatorMissing = missingBits(botMask, INITIATE | VOTE);
-  if (creatorMissing.length) {
+  const initiator = seated.find((s) => s.mask & INITIATE);
+  if (!initiator) {
     throw new SquadRoleError(
-      `proposal creator ${short(creator)} holds ${describeMask(
-        botMask
-      )}; it needs ${creatorMissing.join(" and ")} ` +
-        "because the Squads program's requirement for proposalCreate is not settled here"
+      `this run holds ${seated.length} seat(s) but none can Initiate — ` +
+        seated.map((s) => `${s.role} ${short(s.pubkey)} ${describeMask(s.mask)}`).join(", ") +
+        `. A vault transaction cannot be opened.`
     );
+  }
+
+  const voters = seated.filter((s) => s.mask & VOTE);
+  const executor = seated.find((s) => s.mask & EXECUTE) || null;
+
+  const approvalsAvailable = voters.length;
+  const shortfall = Math.max(0, threshold - approvalsAvailable);
+
+  // Members nobody here holds a key for — who the handoff is addressed TO.
+  const held = new Set(seated.map((s) => s.pubkey));
+  const outside = multisig.members
+    .filter((m) => !held.has(m.key))
+    .map((m) => ({ pubkey: m.key, mask: Number(m.mask) }));
+  const outsideVoters = outside.filter((m) => m.mask & VOTE);
+  const outsideExecutors = outside.filter((m) => m.mask & EXECUTE);
+
+  const mode = shortfall === 0 && executor ? "autonomous" : "handoff";
+
+  // A handoff nobody can finish is litter, not a handoff. Refuse BEFORE the
+  // transaction account is paid for.
+  if (mode === "handoff") {
+    if (outsideVoters.length < shortfall) {
+      throw new SquadRoleError(
+        `quorum is unreachable: threshold ${threshold}, this run can cast ${approvalsAvailable} ` +
+          `approval(s), and only ${outsideVoters.length} other member(s) can Vote. ` +
+          `Creating the proposal would leave a transaction that can never pass.`
+      );
+    }
+    if (!executor && outsideExecutors.length === 0) {
+      throw new SquadRoleError(
+        `no member of this multisig holds Execute — an approved upgrade could never be executed.`
+      );
+    }
   }
 
   return {
-    transactionCreator: bot,
-    creator,
-    approvers,
-    executor: bot,
-    approvals: approvers.length,
+    mode,
     threshold,
-    quorumReached: approvers.length >= threshold,
-    botMask,
-    botMaskRequired: BOT_MASK_REQUIRED,
+    seated,
+    unseated,
+    voters,
+    initiator,
+    executor,
+    approvalsAvailable,
+    shortfall,
+    outsideVoters,
+    outsideExecutors,
   };
 }
 
 module.exports = {
-  SquadRoleError,
-  INITIATE,
-  VOTE,
   EXECUTE,
-  BOT_MASK_REQUIRED,
+  INITIATE,
+  SquadRoleError,
+  VOTE,
   describeMask,
-  planUpgradeSigners,
+  planUpgrade,
+  short,
 };

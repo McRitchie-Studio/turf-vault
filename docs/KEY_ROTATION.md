@@ -703,12 +703,17 @@ heroku run 'bin/rails runner "puts Solana::Vault.new.read_vault_state.inspect"' 
 > **Its cost, and how to keep it small.** Both keys leave Phantom, which is
 > precisely the property the console existed to avoid; that is traded knowingly.
 > But do not reach for keypair FILES by default. `squad-upgrade.js` — this repo's
-> other two-signature script — loads both signing keys from base58 env vars
-> (`ALEX_BOT_KEY` / `MASON_KEY`), explicitly "never argv — argv leaks in `ps`",
-> and never writes them to disk. Match that — the HANDLING, not the pair.
-> Those two variables name Alex Bot and Mason because a Squads UPGRADE is what
-> `squad-upgrade.js` signs, and the bot casts one of its two approvals (narrowing
-> it out of that was proposed and declined, 2026-09-14). For the rotation THIS
+> other multi-signature script — loads every signing key from a 1Password item or
+> a `SQUAD_KEY_*` env override, explicitly "never argv — argv leaks in `ps`", and
+> never writes them to disk. Match that — the HANDLING, not the identities.
+> **It no longer names a fixed pair of people at all.** Until 2026-09-15 it read
+> `ALEX_BOT_KEY` (Xan) and `MASON_KEY` (Mason) and assumed both could drive an
+> upgrade unattended; the rotation that morning removed both from both Squads
+> multisigs and the script could not run on either cluster. It now takes a ROSTER
+> of candidate seats per cluster, intersects it with live membership, and branches
+> on the count — so a future rotation drops a seat out of the plan instead of
+> breaking the tool. Read the roster in `scripts/lib/squad-clusters.js`. For the
+> rotation THIS
 > runbook is about — evicting a
 > compromised Alex Bot — the signing pair MUST be **Alex
 > (`7ZDJp7FU…59Tcr`) and Mason (`CytJS23p…qWjrR`)**, the two human signers in the

@@ -4,6 +4,48 @@ All notable changes to TurfVault are documented here. Format based on [Keep a Ch
 
 ## [Unreleased]
 
+**This section ships as v0.26.0, and the crate finally says so.**
+`programs/turf_vault/Cargo.toml` declared `0.25.0` until 2026-09-15 — the version
+both clusters run on chain — while this tree already carried the five-signer
+governance rewrite and the username registry. `anchor idl build` stamps
+`metadata.version` from that file, so an IDL built here was labelled identically
+to the deployed program's, and a consumer asking which program it held got a
+PLAUSIBLE WRONG ANSWER rather than no answer. Anchor account lists are
+positional, so a wrong answer selects the wrong account shape and can inspect one
+account while reporting on another — which has already happened once here, when
+`assert_entry_cosign_safe!` read a hard-coded index that `governance` shifted.
+`scripts/tests/crate-version.test.js` now refuses a tree whose crate version
+still names the newest released version while this section carries work.
+
+**The collision is already committed, not merely possible.** turf-monster carries
+FOUR IDLs, and every one of them is labelled `0.25.0`. Re-derived from the remote
+with `git show origin/accepted:<path>` — a local primary lags `accepted` and shows
+only the first two:
+
+| file | `metadata.version` | instructions | `init_governance` | `address` |
+|---|---|---|---|---|
+| `config/turf_vault.idl.json` | `0.25.0` | 22 | no | `EQGFJAc…` |
+| `config/turf_vault.mainnet.idl.json` | `0.25.0` | 22 | no | `DaFv83y…` |
+| `config/turf_vault.v026.idl.json` | `0.25.0` | **28** | **yes** | `EQGFJAc…` |
+| `config/turf_vault.mainnet.v026.idl.json` | `0.25.0` | **28** | **yes** | `DaFv83y…` |
+
+The first pair describe the programs actually on chain, so their `0.25.0` is true.
+The `v026` pair are builds of THIS tree, staged for the upgrade window, and their
+`0.25.0` is this defect having already produced artifacts. Each sits at the SAME
+`address` as its truthful counterpart while describing a different program with a
+shifted account layout, and **nothing inside the file separates the two** — which is
+precisely the indistinguishability described above, on disk rather than in theory.
+
+**The bump deploys nothing, re-pins nothing, and changes no probe.** Both clusters
+still run v0.25.0 (`docs/CURRENT_DEPLOYMENT.md`). The four files are rebuilt and
+re-pinned from the corrected tree during the upgrade window, together with
+`EXPECTED_IDL_HASH` — and because of this bump, that rebuild stamps `0.26.0` on the
+`v026` pair by itself.
+
+A version remains a DECLARATION rather than a measurement: it is true only because
+someone wrote it down. Every probe that selects an account shape stays structural,
+asking the chain for the account that actually differs.
+
 ### Added
 
 - **THE USERNAME REGISTRY — UNIQUENESS AND THE BLOCKED LIST AS ONE MECHANISM.**
