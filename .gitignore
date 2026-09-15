@@ -6,5 +6,13 @@ node_modules
 test-ledger
 .yarn
 
+# The Anchor suite lane's local artifacts, and the recipe a human reproduces it
+# with (docs/VERIFICATION_MATRIX.md "Keeping it armed"). ci-wallet.json is an
+# EPHEMERAL localnet keypair — worthless, and still a keypair, so it is ignored
+# rather than left one `git add -A` away from the history.
+ci-wallet.json
+validator.log
+.ci-test-ledger
+
 # Hidden per-task git worktrees.
 .worktrees/

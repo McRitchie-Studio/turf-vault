@@ -20,7 +20,14 @@ If `anchor test` cannot inherit Node/Yarn, use the direct test path from
 [`../RUNBOOK.md`](../RUNBOOK.md). After any source change, regenerate the IDL and
 re-pin Turf Monster from the freshly built file, not from `anchor idl fetch`.
 
-Latest local proof, **2026-09-15**, on the v0.26 governance tree:
+**The suite is no longer hand-run only.** `.github/workflows/anchor-suite.yml`
+runs it on every program/suite pull request, on every such push to `accepted`,
+`release` and `main`, on a daily schedule, and on demand — see
+[The Lane That Runs This Suite](#the-lane-that-runs-this-suite). The stamp below
+is still recorded, because a stamp names a TREE and a lane names a run, but it is
+no longer the only execution evidence this repo has.
+
+Latest local proof, **2026-09-15**, on the username-registry tree:
 
 ```bash
 yarn install
@@ -28,17 +35,41 @@ anchor build
 anchor test          # spins its own validator, deploys, runs tests/turf_vault.ts
 ```
 
-Result: **`38 passing`, 0 failing** (was `27` at the 2026-09-06 stamp; +11 for
-the v0.26 governance surface). This is a RUN RESULT, not an `it()` count.
+Result: **`45 passing`, 0 failing** (was `38` earlier the same day, and `27` at
+the 2026-09-06 stamp). This is a RUN RESULT, not an `it()` count — though on this
+tree the two happen to agree, because every `it()` in the file ran.
 
-> **THE STAMP ABOVE PREDATES THE USERNAME REGISTRY, AND IS NOT EVIDENCE FOR
-> IT.** The registry change added seven `it()` blocks to the suite, rewrote two
-> more, and changed the account list of `create_user_account` and
-> `set_username` — so the tree this stamp was taken on no longer exists. It is
-> deliberately NOT refreshed here: re-dating a proof stamp asserts every row
-> under it, and no run has been taken since. The registry rows in the
-> instruction matrix below are marked **UNPROVEN** for exactly as long as that
-> is true.
+That run was taken through the lane's own recipe rather than a plain
+`anchor test`: the validator is started with the built `.so` loaded at the
+DECLARED program ID (`solana-test-validator --upgradeable-program`), and the
+suite runs with `--skip-build --skip-deploy --skip-local-validator`. The reason
+is in the workflow and worth knowing before you reproduce it — a machine without
+`target/deploy/turf_vault-keypair.json` (a secret, gitignored, and absent from
+any fresh checkout) gets a RANDOM program keypair from `anchor build`, and every
+test then fails `DeclaredProgramIdMismatch`. The keypair-free path is what CI
+runs, so it is what the stamp should be taken through.
+
+> **THE REGISTRY ROWS ARE PROVEN AS OF THIS STAMP — and the first run that
+> reached them found two tests that had never bitten.** The stamp this replaced
+> predated the username registry and said so; its rows carried **UNPROVEN**
+> marks that are now cleared, because every registry `it()` has executed against
+> a chain on this tree.
+>
+> Two of them FAILED on that first run, and the failure was in the tests, not in
+> the program. `username_record` is declared
+> `seeds = [b"username", name_key.as_ref()]`, and Anchor validates account
+> constraints BEFORE the handler body — so a case that passed a bad `name_key`
+> alongside a record derived from the GOOD one was refused by `ConstraintSeeds`
+> and never reached the guard it named. Both read
+> `AnchorError caused by account: username_record` where they expected
+> `UsernameInvalidChars` (6021) and `UsernameKeyMismatch` (6061). They now derive
+> the record from the key actually being passed, so the seeds constraint is
+> satisfied and the handler's own refusal is what the assertion sees. The program
+> refused in both cases either way; what was missing was proof of WHICH guard
+> refused, which is the whole content of those two rows.
+>
+> This is the argument for the lane in one paragraph: two assertions sat green-by-
+> absence for as long as nothing ran them.
 >
 > The unit lanes ARE current and did run on this tree — see `bin/release-check`
 > below, now **48 `cargo test` cases** (was 19) and **79 `node:test` cases**.
@@ -46,20 +77,23 @@ the v0.26 governance surface). This is a RUN RESULT, not an `it()` count.
 > cannot carry is whether the instructions reach them, which is what the
 > unstamped Anchor cases exist to prove.
 >
-> **Re-run `anchor test` and re-stamp before the Squads upgrade**, and only
-> then clear the UNPROVEN marks.
+> **The UNPROVEN marks are cleared as of this stamp**, and keeping them cleared
+> is no longer a matter of remembering: the Anchor Suite lane re-runs these cases
+> on every program or suite change, on every push to `accepted`, and daily on
+> `main`.
 
-**This stamp is the first one taken AFTER turf-vault PR #18**, which is what the
-qualification below was waiting for. #18 (merged 2026-09-07) repaired the suite's
-`expectRejected` helper — inert until then at all 45 of its call sites — and
-corrected the lock-gate margin. Every rejection assertion THAT EXISTED AT THIS
-STAMP has been observed to run against a repaired helper, so that caveat is
-discharged for those call sites AND ONLY THOSE. The username registry added 13
-more (58 → 71) that no run has reached; the caveat still stands for them.
-Re-run and re-stamp before the next Squads upgrade.
+**Every rejection assertion in this suite has now been observed against the
+repaired helper.** turf-vault PR #18 (merged 2026-09-07) fixed `expectRejected`,
+which had been inert at all 45 of its call sites, and corrected the lock-gate
+margin. The 13 call sites the username registry added afterwards were the last
+ones no run had reached; this stamp reaches them, and two of the 13 were found to
+be asserting the wrong error (above). The caveat is discharged for the whole
+file — and, unlike every previous discharge, it stays discharged without anyone
+remembering to re-run, because the lane runs on its own.
 
-Two further lanes now certify this repo, and unlike `anchor test` they run in
-CI on every push and PR:
+Two further lanes certify this repo in the `CI` workflow, and they are the fast,
+always-run ones — they never start a validator, so they run on every push and PR
+without a path filter:
 
 ```bash
 bin/release-check          # the four CI lanes plus, new in v0.26, `cargo test`
@@ -92,82 +126,105 @@ compiles cleanly) and confirming the guard failed with `left: 131, right: 99`.
 > set a lock one second in the on-chain past against a chain clock running one to
 > two seconds behind wall clock, so the gate they assert was never engaged).
 >
-> **DISCHARGED 2026-09-15.** This paragraph used to end "because no run has
-> followed the repair, no helper-mediated rejection assertion in this suite has
-> yet been OBSERVED to bite". The `38 passing` run at the top of this file is
-> that run — the first since #18 — so every rejection the suite held AT THAT
-> STAMP has executed against a helper that bites, and the lock-gate fix with
-> it. It does NOT reach the 13 call sites the username registry added after
-> it. Nothing recorded BEFORE #18 is evidence, and nothing added since this
-> stamp is. Which refusals carry evidence on their own is swept row by
-> row in [What the Suite Evidences](#what-the-suite-evidences).
+> **DISCHARGED 2026-09-15, for the whole file.** This paragraph used to end
+> "because no run has followed the repair, no helper-mediated rejection assertion
+> in this suite has yet been OBSERVED to bite". The `45 passing` run at the top of
+> this file has now reached every call site, the 13 the username registry added
+> included — and two of those 13 were found to be refusing at the wrong guard,
+> which is what an observed assertion buys you over an unobserved one. Nothing
+> recorded BEFORE #18 is evidence. Which refusals carry evidence on their own is
+> swept row by row in [What the Suite Evidences](#what-the-suite-evidences).
 
-## No Lane Runs This Suite
+## The Lane That Runs This Suite
 
-Nothing automatic executes `tests/turf_vault.ts`. The commands above run when a
-person types them, and at no other time.
+`tests/turf_vault.ts` is executed automatically, by
+[`.github/workflows/anchor-suite.yml`](../.github/workflows/anchor-suite.yml)
+(workflow name **Anchor Suite**). Until 2026-09-15 nothing but a person typing
+`anchor test` ever ran it, and this heading said so.
 
-Measured 2026-09-08 from `.github/workflows/ci.yml` and from the step list of CI
-run `34146086293` (the `accepted`-rung push for PR #27). The steps below are
-read off the RUN, not off the workflow's comments — the comments are the claim
-under test:
+**What the lane does**, in order: installs a pinned Agave CLI and a pinned
+prebuilt `anchor-cli`, `yarn install --frozen-lockfile`, `anchor build`, starts
+`solana-test-validator` with the freshly built `.so` loaded at the DECLARED
+program ID, then `anchor test --skip-build --skip-deploy --skip-local-validator`
+against it. It is the only automated thing in this repo that RUNS THE PROGRAM.
 
-| Lane | Steps it actually ran | Reaches `tests/turf_vault.ts`? |
-|------|-----------------------|--------------------------------|
-| CI job `program` (20s) | `rustup show active-toolchain`, `cargo check --workspace --all-targets --locked`, `cargo clippy … -D clippy::correctness`, `cargo test --workspace --locked` | no |
-| CI job `guards` (9s) | `npm run check:doc-op-refs`, `npm run test:scripts` | no |
+**When it runs, and what each trigger is for:**
 
-Those are the workflow's only two jobs, and the steps above are the only ones
-in them that run anything under test. Each job also does an `actions/checkout`;
-`program` additionally prints its toolchain and restores a cargo cache, and
-`guards` additionally does an `actions/setup-node`. None of those four reach the
-suite either, so the conclusion is unchanged. `anchor`, `ts-mocha` and `tests/`
-appear nowhere else in `.github/workflows/` except inside comments explaining
-their absence.
+| Trigger | Why |
+|---------|-----|
+| `pull_request`, filtered to `programs/**`, `tests/**`, `Anchor.toml`, `Cargo.*`, `rust-toolchain.toml`, `package.json`, `yarn.lock`, `tsconfig.json`, and the workflow itself | The suite observes program behaviour, so those are the only paths whose change it can catch. A docs or scripts PR gets no run — deliberately. |
+| `push` to `accepted`, `release`, `main`, same filter | `accepted` carries a COMBINATION of individually-green changes that no PR run ever executed, and it is the rung `bin/release prepare` promotes. |
+| `schedule`, daily | The belt. Every other trigger is change-driven, so a quiet week would leave the eviction test unrun. The cron holds `main` — the tip closest to what mainnet is upgraded from — unconditionally. |
+| `workflow_dispatch` | Leg 3 of the control below: the clean-machine run before a Squads upgrade, with a kept log. |
 
-The studio certification path DOES reach this repo — as of 2026-09-14 — and what
-it runs is the four lanes above, never the suite.
+**It is deliberately NOT part of the `CI` workflow**, for two reasons that are
+not taste. `Release::AcceptedCertification` resolves an app repo's suite workflow
+by the literal workflow NAME `CI` and refuses to promote `accepted` when it is
+not green — so a flaky validator lane inside `CI` would block the release sweep
+for the whole ecosystem. And `PATH_FILTER_KEYS` refuses a `CI` workflow carrying
+`paths:`, which is exactly the filter this lane needs. `CI` stays the fast,
+never-filtered gate the release guard reads; **Anchor Suite** is the slow, deep,
+filtered one, and nothing on the release path reads it.
+
+**The lane holds no keypair and reaches no real cluster.** `anchor test` normally
+DEPLOYS using `target/deploy/turf_vault-keypair.json` — the identity key of the
+live devnet program, gitignored, and a secret that must never reach a runner. On
+a fresh checkout `anchor build` silently generates a random one instead, and
+every test then fails `DeclaredProgramIdMismatch`. So the lane never deploys: it
+hands the `.so` to the validator at genesis, at the declared address, with
+`--upgradeable-program` (the same BPFUpgradeableLoader shape the live clusters
+run). The wallet is generated in the job, is the genesis mint — which is how the
+suite's accounts get funded, since `tests/turf_vault.ts` contains zero
+airdrops — and exists for one job on one loopback validator.
+
+**Measured 2026-09-15 on the tree that introduced the lane: `45 passing`, 0
+failing.** The first automated run found two tests asserting the wrong error; see
+the note under [Baseline Commands](#baseline-commands).
+
+**What still does not run it.** The studio certification path reaches this repo —
 `mcritchie-studio/config/release_repos.yml` names `bin/release-check` on the
 `turf-vault` row, so both `bin/fast-check` and `bin/full-suite-check` run THAT
-SCRIPT as the whole gate and never reach the Rails lanes this repo has no runner
-for (the test-DB reset does not apply to a repo that declares its own gate, and
-the rubocop lane is declared absent with `lint_lane: none` — this tree ships no
-Ruby). A local cert here is therefore real evidence of a `cargo check`, a clippy
-`correctness` pass, `cargo test` (19 Rust assertions, v0.26), the
-`check:doc-op-refs` guard and 68 `node:test` cases. It is still NOT evidence
-that the PROGRAM ran against a chain: `bin/release-check` runs exactly what CI
-runs, and neither runs `tests/turf_vault.ts`. Read the rest of this section
-before treating a green cert as execution evidence.
+SCRIPT as the whole gate — and that script runs the `CI` workflow's four lanes and
+NOT this one. That carve-out is deliberate and pinned by
+`scripts/tests/release-check-covers-ci.test.js`: a local cert that demanded a
+validator would fail `COULD NOT RUN` on every machine with no Solana toolchain,
+which is most of them. So a green local cert is evidence of a `cargo check`, a
+clippy `correctness` pass, `cargo test`, the `check:doc-op-refs` guard and the
+`node:test` cases — and is still NOT evidence that the program ran. The CI run for
+the head is.
 
-Until 2026-09-14 neither door opened at all, which is why older notes and task
-records describe a bypass. `bin/full-suite-check` opened with `bin/rails
+Until 2026-09-14 neither cert door opened at all, which is why older notes and
+task records describe a bypass. `bin/full-suite-check` opened with `bin/rails
 db:test:purge db:test:prepare` and REFUSED rather than skipping, because a
 skipped prepare lane would hand back a green cert for a repo whose tests never
 ran. `bin/fast-check` never got that far: it decided first that no LOCAL lane
 could certify this CHECKOUT and recorded a fingerprint-bound
 `[cert-deferred@<fp>]` receipt, which `bin/dor-check` credits ONLY alongside a
-green GitHub CI, never provisionally (measured on this repo 2026-09-08:
-`[cert-deferred@<tree-hash>:turf-vault]` on every push). The blocker was never
-"this repo has no tests" — it was that the cert's whole-gate branch keyed on the
-`gems` SECTION, so an `apps` row could not reach it however completely it
-declared a lane. Either receipt's fingerprint hashes the TREE, so each push
-retires the previous one — read the task's `checks_run` for the receipt that
-binds the head you are looking at, rather than trusting a fingerprint copied into
-prose.
+green GitHub CI, never provisionally. The blocker was never "this repo has no
+tests" — it was that the cert's whole-gate branch keyed on the `gems` SECTION, so
+an `apps` row could not reach it however completely it declared a lane. Either
+receipt's fingerprint hashes the TREE, so each push retires the previous one —
+read the task's `checks_run` for the receipt that binds the head you are looking
+at, rather than trusting a fingerprint copied into prose.
 
 ## The Compensating Control, and What It Does Not Cover
 
-Skipping a validator lane in CI is a reasoned trade, argued in
-`.github/workflows/ci.yml` and in [`../README.md`](../README.md). A trade is only
-honest while the control standing in for the suite is described with its gaps: a
-control named without them buys confidence it has not earned.
+This section is older than the suite lane, and most of it survives the lane
+unchanged: the lane closes the largest gap it described and leaves the rest
+exactly where they were. A control named without its gaps buys confidence it has
+not earned, so the gaps below are kept even where they shrank.
 
 ### What the control is
 
-1. **The static CI lanes above**, on every pull request and on every push to
-   `main`, `release` and `accepted`.
-2. **A hand-run local-validator proof**, stamped with its date and its passing
-   count under [Baseline Commands](#baseline-commands) in this file.
+1. **The static `CI` lanes above**, on every pull request and on every push to
+   `main`, `release` and `accepted` — never filtered, never validator-backed.
+2. **The Anchor Suite lane** — `tests/turf_vault.ts` against a real validator, on
+   the triggers tabled in
+   [The Lane That Runs This Suite](#the-lane-that-runs-this-suite). This leg used
+   to read "a hand-run local-validator proof, stamped with its date": that stamp
+   still exists under [Baseline Commands](#baseline-commands) and is still worth
+   taking before an upgrade, but it is no longer the only thing standing between
+   an edit here and `main`.
 3. **The rollout gate** — the program is upgraded by hand through
    `scripts/squad-upgrade.js` against a Squads multisig (3-of-5 on both clusters
    since 2026-09-15), and this matrix is the checklist that upgrade is read
@@ -190,8 +247,8 @@ control named without them buys confidence it has not earned.
   the floors, and the 6046-6059 error boundary. It is the lane `cargo check`
   cannot substitute for, because `--all-targets` compiles test code without
   running it.
-- `npm run test:scripts` is a real executing suite: 68 `node:test` cases across
-  seven files, measured 2026-09-15 (61 across six before v0.26 added the
+- `npm run test:scripts` is a real executing suite: 170 `node:test` cases across
+  twelve files, measured 2026-09-15 (61 across six before v0.26 added the
   vault-layout parity guard, which parses `state.rs` and recomputes every offset
   so the scripts' copy of the layout cannot drift from the Rust one) (the count below was written when the suite was
   32 across two, and the four files added since are named at the end of this
@@ -210,14 +267,16 @@ control named without them buys confidence it has not earned.
   certifies the code, not the artifact — which is why the 5 are named and the
   21 are not counted as if they were. "No lane runs the Anchor suite" and
   "nothing is tested" are different sentences; only the first is true.
-  The remaining 6 are `scripts/tests/anchor-suite-lane.test.js`, which pins the
-  two facts the `## No Lane Runs This Suite` heading and the first two bullets
-  of [What it does not cover](#what-it-does-not-cover) rest on — see
-  [Re-arming it](#re-arming-it). They read `.github/workflows/` and assert no
-  step runs the Anchor suite and none subjects it to a TypeScript reader; the
-  other 4 are controls that fail if the guard's comment stripper, its step
-  extractor, its Prettier premise or its own doc citations stop working, so it
-  cannot pass by reading nothing.
+  The remaining 10 are `scripts/tests/anchor-suite-lane.test.js`, INVERTED on
+  2026-09-15 from the guard that used to pin "no lane runs this suite" — see
+  [Keeping it armed](#keeping-it-armed). They now assert that a lane DOES run the
+  suite, that the lane is not the `CI` workflow the release guard reads, that the
+  eviction case is still in the file that lane runs, that the workflow still
+  declares all four triggers and that its two `paths:` lists agree, that the
+  pinned `anchor-cli` matches the program's `anchor-lang`, and that NO workflow
+  reaches a real cluster or reads a repository secret; the last three are controls
+  that fail if the guard's comment stripper, its step extractor or its own doc
+  citations stop working, so it cannot pass by reading nothing.
   The rest are the upgrade-path files, recounted 2026-09-15 after the Squads
   rewrite: 13 in `scripts/tests/squad-roles.test.js` (which of the two behaviours
   a run takes, graded against the planner, including the three cases that are
@@ -229,25 +288,47 @@ control named without them buys confidence it has not earned.
   `scripts/tests/upgrade-instruction.test.js` (the read-back that refuses to
   approve a transaction that is not the planned upgrade, graded field by field),
   16 in `scripts/tests/squad-clusters.test.js` (which chain, which addresses, and
-  the two vocabularies inside `squad.json`), and 5 in
+  the two vocabularies inside `squad.json`), and 6 in
   `scripts/tests/release-check-covers-ci.test.js`, which holds `bin/release-check`
   — the local gate the studio's cert now runs for this repo — identical to the
-  lanes this workflow runs. `npm run test:scripts` reported **156 passing** on
-  2026-09-15; re-derive rather than trust the number.
+  lanes the `CI` workflow runs, and refuses a validator-backed lane in it. `npm run test:scripts` reported **170 passing**
+  on 2026-09-15 (155 top-level `test()` cases across 12 files, the rest
+  subtests); re-derive rather than trust the number.
 - `npm run check:doc-op-refs` fails on a stale 1Password vault reference in this
   repo's prose.
+- **`anchor test` over `tests/turf_vault.ts`** — 45 cases, `45 passing` on
+  2026-09-15, and the only ones that EXECUTE the program. What they reach is swept
+  instruction by instruction in
+  [What the Suite Evidences](#what-the-suite-evidences); the case the lane exists
+  for is `THE EVICTION: three personal wallets remove the agent-reachable slots`,
+  which rotates to a five-signer set, reads `VaultState` back off chain, and proves
+  by NEGATIVE assertion that the two agent-reachable keys can no longer pause the
+  vault. `scripts/tests/anchor-suite-lane.test.js` fails if that case is renamed or
+  deleted out of the file the lane runs, so the lane cannot quietly end up guarding
+  less than this bullet claims.
 
 ### What it does not cover
 
-- **No lane executes the program.** Nothing automatic contacts a Solana cluster,
-  so no `require!`, no `#[account]` constraint, no seed derivation and no
-  arithmetic in this program is ever RUN before it reaches `main`. Every
-  behavioural claim in the [Instruction Matrix](#instruction-matrix) below rests
-  on the hand-run stamp, or on source review.
-- **No lane even reads the suite.** `tests/turf_vault.ts` is TypeScript:
-  `cargo check` cannot see it, `node --test scripts/tests/` does not glob it, and
-  neither `tsc` nor `npm run lint` (Prettier) is wired into a workflow. A syntax
-  error in this file reaches `accepted` green.
+- **A lane executes the program now — on filtered triggers, and only against a
+  loopback validator.** This bullet used to read "No lane executes the program",
+  and the two things that replaced it are worth separating. (a) The Anchor Suite
+  lane is PATH-FILTERED: a PR touching only `scripts/**`, `docs/**`,
+  `migrations/**` or prose executes nothing, by design, because those paths cannot
+  change what the suite asserts. (b) The validator is a fresh loopback ledger, so
+  what is proved is the program's behaviour, never the state of the live devnet or
+  mainnet vaults — no lane reads either, and none should.
+- **The mainnet BINARY is still never executed.** `cargo build`/`anchor build`
+  here is the default feature set; the mainnet program is built
+  `--features mainnet`, which selects different USDC/USDT mint constants and a
+  different `declare_id!`. The suite runs the DEVNET-flavoured binary. Nothing
+  automatic has ever executed the artifact that mainnet actually receives, and the
+  Squads rollout gate is still where that is checked.
+- **The suite is now READ as well as run**, which retires a separate bullet this
+  section used to carry. `ts-mocha` type-checks `tests/turf_vault.ts` on the way
+  to executing it, so a syntax error in that file now reddens the Anchor Suite
+  lane instead of reaching `accepted` green — but only on the paths that trigger
+  the lane. `npm run lint` (Prettier) is still not wired, for the reason
+  [`../README.md`](../README.md) records: 22 files are unformatted.
 - **A Rust test lane exists as of v0.26, and it was needed.** This bullet
   previously read "a Rust test lane would add nothing today — `programs/`
   carries zero `#[test]` functions", which was true when written and stopped
@@ -292,24 +373,27 @@ control named without them buys confidence it has not earned.
   transaction changes the multisig's MEMBERSHIP or THRESHOLD". Those are dry
   runs: nothing was signed or sent. Re-derive with
   `node scripts/squad-upgrade.js --cluster=devnet <BUFFER> --index=13`.
-- **The stamp ages, and nothing notices.** The local proof records a TREE, not
-  `HEAD`. Between stamps no run re-checks it, and this file cannot tell you
-  whether the tree it stamped is the tree you are about to upgrade from. The
-  `27 passing` stamp is the worked example: it sat here for nine days across
-  PR #18, which repaired the very helper it was being cited as evidence from,
-  and nothing in this file noticed. It was replaced on 2026-09-15 only because
-  a person ran the suite. **The `cargo test` lane added in v0.26 does not age
-  this way** — it runs on every push and PR — but it reaches only the Rust
-  assertions, never `tests/turf_vault.ts`.
+- **The stamp still ages; the LANE is what does not.** The local proof records a
+  TREE, not `HEAD`, and this file cannot tell you whether the tree it stamped is
+  the tree you are about to upgrade from. The `27 passing` stamp is the worked
+  example: it sat here for nine days across PR #18, which repaired the very helper
+  it was being cited as evidence from, and nothing in this file noticed. Prefer
+  the Anchor Suite run for the head you are looking at over any stamp in this
+  file — the run is SHA-addressed and the stamp is not. Where a stamp is still the
+  only evidence, it is because the lane's path filter did not fire, or because the
+  question is about the mainnet-featured binary the lane never builds.
 - **A rotted suite still prints green, measured rather than imagined.**
   `expectRejected` — the suite's only negative-assertion primitive, 45 call
   sites — was inert for the suite's entire life, repaired only in PR #18. While
   it was inert a harness bug redeployed a stale `.so` with the lock gate
   DELETED, and the suite still reported the lock-gate entries as passing: a
-  deleted money-path guard, and a green suite over it. The helper is fixed; the
-  thing that let it stay broken unnoticed for so long — that no lane runs the
-  suite — is what this section is about. A green count from a suite nobody has
-  re-run since is a weaker claim than it looks.
+  deleted money-path guard, and a green suite over it. The helper is fixed, and
+  the thing that let it stay broken unnoticed for so long — that no lane ran the
+  suite — is fixed too. What the lane cannot fix is an assertion that runs and
+  proves the wrong thing: the two registry cases repaired on 2026-09-15 were
+  refusing at `ConstraintSeeds` rather than at the guard they named, and only a
+  reader noticing the error TEXT caught that. A green count is evidence that the
+  assertions ran, never that they assert what their titles claim.
 - **No merge or release gate reads any of it.** `bin/dor-check` waives the suite
   gate for a `docs`-shaped diff, and for every other shape accepts a recorded
   receipt instead. Since 2026-09-14 that receipt can be a REAL local cert
@@ -317,37 +401,54 @@ control named without them buys confidence it has not earned.
   `bin/release-check`); before that it could only be a fingerprint-bound
   `[cert-deferred@<fp>]` alongside a green CI, or an author-written
   `[full-suite-bypass] <reason>`, which still works and is flagged loudly. The
-  upgrade is real and it does not touch this gap: the cert runs CI's four lanes,
-  so NO receipt any gate reads is evidence that this program ran. The
-  pre-QA (G3) and ship (G4) gates skip this repo, which registers no `test_cmd`
-  and no `qa_test_cmd`, and the release records no QA evidence for it at all
-  (`qa_evidence: exempt`). Each of those is correct on its
+  upgrade is real and it does not touch this gap: the cert runs `CI`'s four lanes,
+  so NO LOCAL receipt is evidence that this program ran. What IS such evidence is
+  the Anchor Suite run on the PR or on `accepted`, read from GitHub — and because
+  it is a separate workflow, a reader checking only the `CI` workflow's conclusion
+  will not see it. The pre-QA (G3) and ship (G4) gates skip this repo, which
+  registers no `test_cmd` and no `qa_test_cmd`, and the release records no QA
+  evidence for it at all (`qa_evidence: exempt`). Each of those is correct on its
   own — an Anchor program has no dyno to boot and no URL to smoke — and together
   they mean nothing between an edit here and `main` runs the program.
 
-### Re-arming it
+### Keeping it armed
 
-Re-run the Baseline Commands block and re-stamp BOTH numbers, the date and the
-passing count, before the next Squads upgrade. The vault PDA is a SINGLETON, so
-every run needs a FRESH ledger (`solana-test-validator --reset`); a re-used
-ledger fails `initialize` with `Account already in use`.
+**Reproducing the lane by hand.** The vault PDA is a SINGLETON, so every run needs
+a FRESH ledger (`solana-test-validator --reset`); a re-used ledger fails
+`initialize` with `Account already in use`. On a machine that holds
+`target/deploy/turf_vault-keypair.json`, a plain `anchor test` still works and is
+the shortest path. On one that does not — any fresh checkout, and every CI
+runner — use the lane's recipe, because `anchor build` will otherwise mint a
+random program keypair and every test will fail `DeclaredProgramIdMismatch`:
 
-If a lane is ever wired to run the suite, the heading that stops being true is
-`## No Lane Runs This Suite` — delete THAT section, not merely this
-`### Re-arming it` sub-subsection, and rewrite the bullets under
-[What it does not cover](#what-it-does-not-cover) that rest on it. Deleting only
-the sub-subsection you are reading leaves the false heading standing above a
-matrix an operator reads before a mainnet upgrade.
+```bash
+anchor build
+solana-keygen new --no-bip39-passphrase --force -o ci-wallet.json
+W=$(solana-keygen pubkey ci-wallet.json)
+solana-test-validator --reset --quiet --mint "$W" \
+  --upgradeable-program "$(node -e 'process.stdout.write(require("./target/idl/turf_vault.json").address)')" \
+  target/deploy/turf_vault.so "$W" &
+anchor test --skip-build --skip-deploy --skip-local-validator \
+  --provider.cluster http://127.0.0.1:8899 --provider.wallet "$PWD/ci-wallet.json"
+```
 
-You will be told rather than trusted to remember.
-`scripts/tests/anchor-suite-lane.test.js` runs in CI's `guards` lane and fails
-the moment a workflow step runs the suite OR merely reads it, printing the
-workflow file, the line, the resolved command chain, and this list of sections.
-It pins BOTH facts because the second is the fragile one: `npm run lint`
-(Prettier) already exists in `package.json`, is listed in
-[`../README.md`](../README.md) as deliberately deferred, and globs
-`tests/turf_vault.ts` — so wiring that ONE line would falsify "no lane even
-reads the suite" while leaving `## No Lane Runs This Suite` literally true.
+**If the lane is ever retired or narrowed**, the heading that stops being true is
+`## The Lane That Runs This Suite` — rewrite THAT section, not merely this
+sub-subsection, along with the bullets under
+[What it does not cover](#what-it-does-not-cover) that now rest on the lane
+existing. A stale heading above an instruction matrix is read by an operator
+before a mainnet upgrade, which is the whole reason this file is written the way
+it is.
+
+**You will be told rather than trusted to remember.**
+`scripts/tests/anchor-suite-lane.test.js` runs in `CI`'s `guards` lane — the fast
+workflow, so this guard reports on every PR even when the suite lane itself is
+filtered out — and fails if: no workflow runs the suite; the `CI` workflow starts
+running it (which would put a validator in the release guard's path); the
+`THE EVICTION: …` case leaves the suite file; the workflow drops a trigger or its
+two `paths:` lists drift apart; the pinned `anchor-cli` stops matching
+`anchor-lang`; or any workflow reaches a real cluster or reads a repository
+secret. Each failure names the file, the line and the sections to rewrite.
 
 ## What the Suite Evidences
 
@@ -361,10 +462,9 @@ through the helper, and both blocks holding them are among the four
 were, at that stamp, the only refusals in the file it actually evidenced.
 
 **That qualification is now historical.** The 2026-09-15 run at the top of this
-file (`38 passing`) is the first taken AFTER turf-vault PR #18 repaired the
-helper, so every refusal the suite held AT THAT STAMP has been observed to run
-against a helper that bites. The 13 the username registry added since are
-unexercised. The table below is kept because it records which three
+file (`45 passing`) is taken AFTER turf-vault PR #18 repaired the helper, and it
+reaches every refusal in the file — the 13 the username registry added included.
+The table below is kept because it records which three
 refusals stood on their own evidence even while the helper was inert:
 
 | Refusal | The assertion that follows it | Strength |
@@ -441,12 +541,12 @@ deployed, are in the PDA at seeds `[b"governance"]`.
 | Currency registry | `deactivate_currency` | Requires **3**; flips `active=false`; preserves slot and historical tallies. |
 | Pause control | `pause` | Requires **2** (floor 1 — `cosigner` is `Option<Signer>` so the account struct cannot out-vote the table, and a retune to 1 really reaches one signature); records reason; blocks `enter_contest` and `enter_contest_with_token` only. |
 | Pause control | `unpause` | Requires **3** (floor 3 — deliberately harder than pausing, so a captured system can brake and never release); clears pause; paid and token entries work again. |
-| User account | `create_user_account` | Permissionless payer can create a wallet account; username charset, length, and reserved-prefix checks hold. **UNPROVEN since the registry change:** it now also CLAIMS the name in the same transaction, so a signup for a taken or reserved name fails with `UsernameAlreadyClaimed` (6060) rather than creating an account that displays a name it does not hold. Takes `name_key` (the lowercased, zero-padded form — the record's PDA seed). |
-| User account | `set_username` | Requires owner signature; rejects non-owner, invalid charset, short names, and reserved prefixes — now including `xan`. **UNPROVEN since the registry change:** claims `name_key` in the registry and CLOSES the record for the name given up, refunding its rent to the wallet. A rename that omits the old record is refused (`UsernameRecordMissing`, 6062) — without that, a holder keeps every name they ever had at ~0.0015 SOL each. A case-only change keeps the same key and closes nothing. |
-| Username registry | `overwrite_username` | **UNPROVEN.** Requires **3** (floor 3) and the renamed user does **NOT** sign — the point of the instruction. Replaces `admin_set_username`, which required the owner's consent and was therefore useless against the only two things it was wanted for: a squatter and a slur. Emits `UsernameOverwritten` (who, before, after, which vault signer was named, how many signatures the table demanded, when) — a log line, so no rent and no storage. Waives the reserved-prefix branch and nothing else. Does NOT lock the vacated name; `reserve_username` is the follow-up. |
-| Username registry | `reserve_username` | **UNPROVEN.** Requires **3** (floor 3). The blocked list, as a claim rather than a list: the vault takes a free name, and every claim path then refuses it through the SAME check that stops a second player. Idempotent; refuses a name a player already holds. |
-| Username registry | `release_reserved_username` | **UNPROVEN.** Requires **3** (floor 3) — a reservation is a brake, and nothing an agent reaches alone lifts a brake, the same asymmetry as `pause`/`unpause`. Rent goes to the pinned treasury (`InvalidRentDestination`, 6056, otherwise). Refuses a record the vault does not hold (`UsernameNotReserved`, 6066), so a player's name can never be closed through this path. |
-| Username registry | `backfill_username_record` | **UNPROVEN.** MIGRATION ONLY, and permissionless BY DESIGN: it takes both the name and the owner from the `UserAccount`'s own fields, so it has no discretion and can only assert what the chain already says. Refuses a `name_key` that is not that account's own name, and refuses a blank name (every blank account would collide on one record). Idempotent. 47 production users, 47 with usernames, zero case-insensitive duplicates (measured 2026-09-15) — so this reconciles nothing. |
+| User account | `create_user_account` | Permissionless payer can create a wallet account; username charset, length, and reserved-prefix checks hold. It also CLAIMS the name in the same transaction, so a signup for a taken or reserved name fails with `UsernameAlreadyClaimed` (6060) rather than creating an account that displays a name it does not hold. Takes `name_key` (the lowercased, zero-padded form — the record's PDA seed). |
+| User account | `set_username` | Requires owner signature; rejects non-owner, invalid charset, short names, and reserved prefixes — now including `xan`. Claims `name_key` in the registry and CLOSES the record for the name given up, refunding its rent to the wallet. A rename that omits the old record is refused (`UsernameRecordMissing`, 6062) — without that, a holder keeps every name they ever had at ~0.0015 SOL each. A case-only change keeps the same key and closes nothing. |
+| Username registry | `overwrite_username` | Requires **3** (floor 3) and the renamed user does **NOT** sign — the point of the instruction. Replaces `admin_set_username`, which required the owner's consent and was therefore useless against the only two things it was wanted for: a squatter and a slur. Emits `UsernameOverwritten` (who, before, after, which vault signer was named, how many signatures the table demanded, when) — a log line, so no rent and no storage. Waives the reserved-prefix branch and nothing else. Does NOT lock the vacated name; `reserve_username` is the follow-up. |
+| Username registry | `reserve_username` | Requires **3** (floor 3). The blocked list, as a claim rather than a list: the vault takes a free name, and every claim path then refuses it through the SAME check that stops a second player. Idempotent; refuses a name a player already holds. |
+| Username registry | `release_reserved_username` | Requires **3** (floor 3) — a reservation is a brake, and nothing an agent reaches alone lifts a brake, the same asymmetry as `pause`/`unpause`. Rent goes to the pinned treasury (`InvalidRentDestination`, 6056, otherwise). Refuses a record the vault does not hold (`UsernameNotReserved`, 6066), so a player's name can never be closed through this path. |
+| Username registry | `backfill_username_record` | MIGRATION ONLY, and permissionless BY DESIGN: it takes both the name and the owner from the `UserAccount`'s own fields, so it has no discretion and can only assert what the chain already says. Refuses a `name_key` that is not that account's own name, and refuses a blank name (every blank account would collide on one record). Idempotent. 47 production users, 47 with usernames, zero case-insensitive duplicates (measured 2026-09-15) — so this reconciles nothing. |
 | Season | `create_season` | Requires **3** (it sets the per-entry seed schedule with no ceiling checked); creates immutable entry seed schedule and quest seed schedule; rejects duplicate season ID. |
 | Contest | `create_contest` | Requires **1** payer plus creator; funds prize-pool ATA; validates payout tiers sum to prize pool; stores per-currency fees and lock timestamp. |
 | Contest | `set_contest_lock_time` | Requires **2** before lock and **3** to RE-OPEN a lock that has passed (the results-known vector); rejects invalid timestamp/order and post-finality changes without required cosign path. |
@@ -472,11 +572,15 @@ deployed, are in the PDA at seeds `[b"governance"]`.
 
 ## Known Gaps
 
-- **The largest gap is that no lane runs this suite at all** — see
-  [No Lane Runs This Suite](#no-lane-runs-this-suite) and
+- **The largest gap used to be that no lane ran this suite at all.** It is
+  closed as of 2026-09-15 — see
+  [The Lane That Runs This Suite](#the-lane-that-runs-this-suite) and
   [The Compensating Control, and What It Does Not Cover](#the-compensating-control-and-what-it-does-not-cover)
-  above. The gaps below are the ones that remain even after a successful
-  hand-run.
+  above. What replaces it is narrower and worth stating in its place: **the lane
+  is PATH-FILTERED and runs the DEFAULT feature build**, so a change outside
+  `programs/**`, `tests/**` and the toolchain files executes nothing, and the
+  mainnet-featured binary is still never executed by anything. The gaps below are
+  the ones that remain even after a green lane.
 - Local TypeScript tests run the default localnet/devnet build. The
   mainnet-only `INIT_AUTHORITY`, canonical USDC, and canonical USDT checks are
   feature-gated and should be proven as part of mainnet build/deploy review.
