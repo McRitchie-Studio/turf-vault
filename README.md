@@ -263,10 +263,14 @@ See [`docs/CURRENT_DEPLOYMENT.md`](docs/CURRENT_DEPLOYMENT.md) for live deployme
 
 ### Prerequisites
 
-- [Rust](https://rustup.rs/) 1.89+
-- [Solana CLI](https://docs.solanalabs.com/cli/install) 2.x
-- [Anchor CLI](https://www.anchor-lang.com/docs/installation) 0.32.1
-- [Node.js](https://nodejs.org/) + Yarn
+- [Rust](https://rustup.rs/) 1.89 (pinned by `rust-toolchain.toml`)
+- [Agave (Solana) CLI](https://docs.anza.xyz/cli/install) 3.1.x — the Anchor
+  Suite lane pins `v3.1.14`, the highest 3.1 published at release.anza.xyz
+- [Anchor CLI](https://www.anchor-lang.com/docs/installation) 0.32.1 — must match
+  `anchor-lang` in `programs/turf_vault/Cargo.toml`, which
+  `scripts/tests/anchor-suite-lane.test.js` asserts against the version the lane
+  installs
+- [Node.js](https://nodejs.org/) 20 + Yarn
 
 ### Build
 
