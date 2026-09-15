@@ -154,8 +154,13 @@ file in another repo rather than the chain: the pin proves which IDL
 turf-monster is configured to ACCEPT, never which program is executing. Since
 2026-09-15 the crate version does at least distinguish the two — a freshly
 built IDL now reads `0.26.0`, where before it also read `0.25.0` and nothing
-separated them. That improves the label without promoting it: the version is
-still written by hand, so the discriminator probe stays the reading that decides.
+separated them. turf-monster still carries the proof of that: its staged
+`config/turf_vault.mainnet.v026.idl.json` declares `metadata.version` `0.25.0`
+against this same `DaFv83...` address while describing the 28-instruction v0.26
+program, indistinguishable by label from the 22-instruction file beside it. It
+reads `0.26.0` once rebuilt from the corrected tree. That improves the label
+without promoting it: the version is still written by hand, so the discriminator
+probe stays the reading that decides.
 
 **What neither reading proves.** An instruction set fixes the release, not the
 build — a patch inside a handler leaves every discriminator unchanged. The

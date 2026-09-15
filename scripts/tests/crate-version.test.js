@@ -44,9 +44,33 @@
  * the bare form only, and reads release headings as `## [X.Y.Z] - ...`, so neither
  * can be mistaken for the other. A control below plants exactly that shape.
  *
+ * TWO STATES ARE LEGAL, AND A RELEASE CUT IS THE SECOND ONE. Cutting a release in
+ * this repo RENAMES `## [Unreleased]` to `## [X.Y.Z] - <date>`; it does not empty it.
+ * Measured at 84aed504 (the v0.25.0 cut): ZERO bare `## [Unreleased]` headings
+ * survived, and the crate correctly read the freshly cut `0.25.0`. So:
+ *
+ *     mid-cycle   bare [Unreleased] present, with content   crate > newest release
+ *     just cut    no bare [Unreleased] at all               crate == newest release
+ *
+ * An earlier revision of this file asserted the real `[Unreleased]` body was non-empty
+ * as though that were invariant. It is not — it is the mid-cycle state only. That
+ * assertion reddened a CORRECT tree at every release cut (reproduced against
+ * 84aed504: `pass 7, fail 1`), and said "the parser found the wrong heading" while
+ * the parser was working perfectly. The trigger would have been cutting v0.26.0 — the very upgrade window
+ * this change exists to enable. A guard that reddens exactly when you are doing the
+ * thing it was written for is worse than no guard, so the control below no longer
+ * asserts which state the tree is in.
+ *
+ * NOTE THAT ASSERTING THE HEADING MERELY *EXISTS* FIXES NOTHING: at a cut it does not
+ * exist either. What the control actually has to do is prove the parser is WIRED to
+ * the real file without predicting what it will find — so it compares the parser
+ * against a SECOND, INDEPENDENT reading of the same bytes, and asserts capability
+ * separately against a fixture, where a body is guaranteed to exist.
+ *
  * IT CANNOT PASS VACUOUSLY. The predicate is exercised over synthetic CHANGELOGs
- * carrying the historical defect, the clean case, and the just-released case, so the
- * detector is proven to bite without needing the real tree to be broken.
+ * carrying the historical defect, the clean case, the just-released case and the real
+ * release-cut shape, so the detector is proven to bite without needing the real tree
+ * to be broken.
  *
  * Pure Node stdlib (node:test + node:assert), no dependency tree.
  *
@@ -101,6 +125,22 @@ function unreleasedBody(changelog) {
   const rest = lines.slice(start + 1);
   const end = rest.findIndex((l) => /^## /.test(l));
   return (end === -1 ? rest : rest.slice(0, end)).join("\n").trim();
+}
+
+/**
+ * The same section read a DIFFERENT way: split the file on its `## ` headings and pick
+ * the section whose heading line is exactly `[Unreleased]`. Shares no code path with
+ * `unreleasedBody` above, so agreement between the two is real evidence that neither
+ * is silently returning nothing. (It skips the dated historical heading for free: that
+ * heading line is not exactly `[Unreleased]`.)
+ */
+function unreleasedBodyBySplit(changelog) {
+  for (const section of changelog.split(/^## /m)) {
+    const nl = section.indexOf("\n");
+    if (nl === -1) continue;
+    if (section.slice(0, nl).trim() === "[Unreleased]") return section.slice(nl + 1).trim();
+  }
+  return "";
 }
 
 function semverParts(v) {
@@ -162,15 +202,29 @@ test("Cargo.lock's own entry agrees with Cargo.toml", () => {
   assert.equal(locked, version, "Cargo.lock names a different turf_vault version than Cargo.toml");
 });
 
-test("the real CHANGELOG parses to the two facts this guard reads", () => {
-  // A control: if the parsers silently returned nothing useful, every assertion above
-  // would pass vacuously. Pin that they find real structure in the shipped file.
+test("the guard is WIRED to the real file — two independent readings agree", () => {
+  // If `unreleasedBody` silently returned "" forever, `refusal` would always take the
+  // empty branch and the main invariant would never be enforced. This catches that
+  // WITHOUT predicting which lifecycle state the tree is in: mid-cycle both readings
+  // return the same body, and at a release cut both return "". A parser broken in the
+  // way that matters disagrees with the independent reading the moment a section
+  // exists — which is the only moment the disagreement could cost anything.
   const changelog = fs.readFileSync(CHANGELOG, "utf8");
-  assert.match(latestReleased(changelog), /^\d+\.\d+\.\d+$/);
-  assert.ok(
-    unreleasedBody(changelog).length > 0,
-    "the live [Unreleased] section read as empty — the parser found the wrong heading"
+  assert.match(latestReleased(changelog), /^\d+\.\d+\.\d+$/, "no dated release heading in the shipped CHANGELOG");
+  assert.equal(
+    unreleasedBody(changelog),
+    unreleasedBodyBySplit(changelog),
+    "the two readings of the live [Unreleased] section disagree — one of them is broken"
   );
+});
+
+test("both readings CAN find a body — capability, independent of the tree's state", () => {
+  // The half the wiring control above deliberately does not assert. Proven against a
+  // fixture, where a section is guaranteed to exist, so it holds at a release cut too.
+  const fixture = changelogFixture("### Added\n\n- A real entry.");
+  assert.match(unreleasedBody(fixture), /A real entry\./);
+  assert.match(unreleasedBodyBySplit(fixture), /A real entry\./);
+  assert.equal(unreleasedBody(fixture), unreleasedBodyBySplit(fixture));
 });
 
 // ── controls: the detector must bite ─────────────────────────────────────────
@@ -220,11 +274,19 @@ test("a crate version BEHIND the newest release is refused either way", () => {
   assert.match(refusal("0.24.0", changelogFixture("- work")), /not ahead of the newest release/);
 });
 
-test("the DATED historical Unreleased heading is not read as the live section", () => {
-  // Drop the live section entirely; only the dated historical one remains. The parser
-  // must report "nothing unreleased" rather than picking up the historical body —
-  // which would make the empty-section branch unreachable on the real file.
-  const noLiveSection = ["# Changelog", "", RELEASED_SECTIONS].join("\n");
-  assert.equal(unreleasedBody(noLiveSection), "");
-  assert.equal(latestReleased(noLiveSection), "0.25.0");
+test("a RELEASE CUT passes — the heading is renamed away, not emptied", () => {
+  // The shape measured at 84aed504, and the state the earlier control got wrong: the
+  // live section is GONE (renamed to the dated heading) and the crate names the
+  // freshly cut version. This must be a clean pass, through `refusal` and not merely
+  // through the parser, because cutting v0.26.0 is the next thing anyone does here.
+  const cut = ["# Changelog", "", RELEASED_SECTIONS].join("\n");
+  assert.equal(unreleasedBody(cut), "", "a renamed-away section must read as nothing unreleased");
+  assert.equal(unreleasedBodyBySplit(cut), "");
+  assert.equal(latestReleased(cut), "0.25.0");
+  assert.equal(refusal("0.25.0", cut), null, "a correct release cut was REFUSED");
+
+  // The dated historical `## [Unreleased] - 2026-05-18` heading is inside that
+  // fixture, so this doubles as the proof it is never mistaken for the live section —
+  // picking it up would make the empty-section branch unreachable on the real file.
+  assert.match(RELEASED_SECTIONS, /^## \[Unreleased\] - 2026-05-18/m);
 });
