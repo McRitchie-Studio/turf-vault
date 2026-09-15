@@ -232,7 +232,7 @@ control named without them buys confidence it has not earned.
   the two vocabularies inside `squad.json`), and 5 in
   `scripts/tests/release-check-covers-ci.test.js`, which holds `bin/release-check`
   — the local gate the studio's cert now runs for this repo — identical to the
-  lanes this workflow runs. `npm run test:scripts` reported **133 passing** on
+  lanes this workflow runs. `npm run test:scripts` reported **156 passing** on
   2026-09-15; re-derive rather than trust the number.
 - `npm run check:doc-op-refs` fails on a stale 1Password vault reference in this
   repo's prose.

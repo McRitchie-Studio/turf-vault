@@ -12,7 +12,7 @@
     "mason": "CytJS23p1zCM2wvUUngiDePtbMB484ebD7bK4nDqWjrR"
   },
   "devnet": {
-    "_comment": "The devnet cluster's Squads deployment. Read by scripts/lib/squad-clusters.js so `squad-upgrade.js --cluster=devnet` has a target; NOT read by mainnet-config.js, which resolves only the flat mainnet top level. Devnet's Squads vault is a DIFFERENT vault from mainnet's -- never carry one cluster's address to the other. The old devnet program Dx8uGU5w7B9NytDSsW4kseGZuqdVVRq1KY1mGXN2GaCT is orphaned.",
+    "_comment": "The devnet cluster's Squads deployment. Read by scripts/lib/squad-clusters.js so `squad-upgrade.js --cluster=devnet` has a target; NOT read by mainnet-config.js, which resolves only the flat mainnet top level. Devnet's Squads vault is a DIFFERENT vault from mainnet's -- never carry one cluster's address to the other. The old devnet program Dx8uGU5w7B9NytDSsW4kseGZuqdVVRq1KY1mGXN2GaCT is orphaned. PROVENANCE of the devnet SQUADS membership, which this file deliberately no longer lists: config proposal #16 removed CytJS23p and #18 (2026-09-15) removed 9gACbzsC, leaving threshold 3 of 5. The list that used to live in `_devnet_reference` went stale twice in one day, so the live answer is `node scripts/squad-inventory.js` and nothing else. VaultState.signers is a DIFFERENT multisig and on devnet still reads 8K81/7ZDJ/CytJS with slots 4 and 5 empty -- `node scripts/check-signer-slots.js`.",
     "network": "devnet",
     "programId": "EQGFJAcABtDb6VXtiijTjZ6cE2UqdvhnqJvoharJbpMJ",
     "multisigPda": "7nRuVw3VZFC6z85tYVDitPnaUHZCkqLpJRSTBNtPmtZB",
