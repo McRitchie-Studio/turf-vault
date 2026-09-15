@@ -28,7 +28,7 @@ anchor build
 anchor test          # spins its own validator, deploys, runs tests/turf_vault.ts
 ```
 
-Result: **`37 passing`, 0 failing** (was `27` at the 2026-09-06 stamp; +10 for
+Result: **`38 passing`, 0 failing** (was `27` at the 2026-09-06 stamp; +11 for
 the v0.26 governance surface). This is a RUN RESULT, not an `it()` count.
 
 **This stamp is the first one taken AFTER turf-vault PR #18**, which is what the
@@ -63,16 +63,20 @@ compiles cleanly) and confirming the guard failed with `left: 131, right: 99`.
 > for, and self-matched. A call the program ACCEPTED was recorded as a passing
 > refusal, with the blindness exactly one failure mode wide: "the guard did not
 > refuse at all." Accept-path results are unaffected, but no rejection assertion
-> ROUTED THROUGH THE HELPER, before the repair, is evidence of anything — and
-> because no run has followed the repair, no helper-mediated rejection assertion
-> in this suite has yet been OBSERVED to bite. Three refusals escape that,
-> because their evidence never went through the helper.
+> ROUTED THROUGH THE HELPER, before the repair, is evidence of anything. Three
+> refusals escape that, because their evidence never went through the helper.
 > #18 also corrected the **lock-gate** and **post-lock-amend** drift (those tests
 > set a lock one second in the on-chain past against a chain clock running one to
-> two seconds behind wall clock, so the gate they assert was never engaged); the
-> `27 passing` above predates that fix and does not cover it. Which refusals
-> below carry evidence anyway, and which do not, is swept row by row in
-> [What the Suite Evidences](#what-the-suite-evidences).
+> two seconds behind wall clock, so the gate they assert was never engaged).
+>
+> **DISCHARGED 2026-09-15.** This paragraph used to end "because no run has
+> followed the repair, no helper-mediated rejection assertion in this suite has
+> yet been OBSERVED to bite". The `38 passing` run at the top of this file is
+> that run — the first since #18 — so every rejection in the suite has now
+> executed against a helper that bites, and the lock-gate correction is covered
+> too. What remains true is the narrower claim: nothing recorded BEFORE #18 is
+> evidence. Which refusals carry evidence on their own anyway is swept row by
+> row in [What the Suite Evidences](#what-the-suite-evidences).
 
 ## No Lane Runs This Suite
 
@@ -246,8 +250,12 @@ control named without them buys confidence it has not earned.
 - **The stamp ages, and nothing notices.** The local proof records a TREE, not
   `HEAD`. Between stamps no run re-checks it, and this file cannot tell you
   whether the tree it stamped is the tree you are about to upgrade from. The
-  qualification under Baseline Commands is the current example: the `27 passing`
-  count predates PR #18, and no run has followed it.
+  `27 passing` stamp is the worked example: it sat here for nine days across
+  PR #18, which repaired the very helper it was being cited as evidence from,
+  and nothing in this file noticed. It was replaced on 2026-09-15 only because
+  a person ran the suite. **The `cargo test` lane added in v0.26 does not age
+  this way** — it runs on every push and PR — but it reaches only the Rust
+  assertions, never `tests/turf_vault.ts`.
 - **A rotted suite still prints green, measured rather than imagined.**
   `expectRejected` — the suite's only negative-assertion primitive, 45 call
   sites — was inert for the suite's entire life, repaired only in PR #18. While

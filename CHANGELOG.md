@@ -253,9 +253,11 @@ All notable changes to TurfVault are documented here. Format based on [Keep a Ch
 
 ### Tests
 
-- Latest local proof, 2026-09-06: `27 passing` against an isolated local
-  validator on `127.0.0.1:8898` (was 23; +4 for `burn_entry_token` — the
-  tombstone the account survives, a burned voucher refused at entry, the
+- Latest local proof, **2026-09-15**: `38 passing`, 0 failing, via `anchor test`
+  on the v0.26 governance tree. Superseded the 2026-09-06 `27 passing` stamp,
+  which predated turf-vault PR #18 and so predated the repair of the suite's own
+  rejection helper. The earlier run recorded (was 23; +4 for `burn_entry_token`
+  — the tombstone the account survives, a burned voucher refused at entry, the
   double-burn and burn-a-spent-token refusals, and the signer + seed-binding
   auth cases).
 
