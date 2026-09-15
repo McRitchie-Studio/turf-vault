@@ -125,9 +125,11 @@ jobs:
   anchor-suite:
     name: anchor suite
     runs-on: ubuntu-latest
-    # A cold run (no cache, full SBF build) measures ~12-15 minutes; a warm one
-    # ~5. 45 leaves room for a slow runner without letting a hung validator
-    # burn an hour.
+    # MEASURED, run 35035570165 (cold — every cache empty): 26s to a pinned
+    # Agave + anchor-cli on PATH, 17s for `yarn install`, 3m35s for `anchor
+    # build`, ~2s for the validator to answer, and ~1m for the suite itself.
+    # Call it ~6 minutes cold and less warm. 45 leaves room for a slow runner
+    # without letting a hung validator burn an hour.
     timeout-minutes: 45
 
     env:
@@ -247,6 +249,16 @@ jobs:
           set -euo pipefail
           solana-keygen new --no-bip39-passphrase --force --silent -o ci-wallet.json
           WALLET="$(solana-keygen pubkey ci-wallet.json)"
+          # POINT THE CLI AT THE EPHEMERAL WALLET AND THE LOOPBACK. Measured on
+          # run 35035570165: `solana program show` aborts with
+          # `No default signer found, run "solana-keygen new -o
+          # /home/runner/.config/solana/id.json"` on a runner, because the CLI
+          # resolves a default signer from its config before running most
+          # subcommands and a fresh runner has none. It is not a permission
+          # failure and no signature is involved — the command is read-only —
+          # but under `set -e` it takes the whole step down. A developer machine
+          # hides this: it already has ~/.config/solana/id.json.
+          solana config set --url "$RPC_URL" --keypair "$PWD/ci-wallet.json" >/dev/null
           PROGRAM_ID="$(node -e 'process.stdout.write(require("./target/idl/turf_vault.json").address)')"
           echo "program id (from the freshly built IDL): $PROGRAM_ID"
           nohup solana-test-validator \
