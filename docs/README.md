@@ -7,6 +7,7 @@ Use this index before following any operational instruction in this directory.
 | Need | File |
 |------|------|
 | Current program IDs, signer set, upgrade authority, IDL hash | [`CURRENT_DEPLOYMENT.md`](CURRENT_DEPLOYMENT.md) |
+| Rotating the vault signer set (v0.26, five slots) | [`SIGNER_ROTATION.md`](SIGNER_ROTATION.md) |
 | Current instruction proof checklist | [`VERIFICATION_MATRIX.md`](VERIFICATION_MATRIX.md) |
 | What CI verifies, and what no lane verifies | [`VERIFICATION_MATRIX.md`](VERIFICATION_MATRIX.md) |
 
@@ -17,7 +18,7 @@ Use this index before following any operational instruction in this directory.
 | File | Status |
 |------|--------|
 | [`MAINNET_LAUNCH.md`](MAINNET_LAUNCH.md) | Historical first-deploy runbook. Do not use as live deployment identity. |
-| [`KEY_ROTATION.md`](KEY_ROTATION.md) | Historical superseded redeploy/key-rotation plan for the retired Alex Bot key. Do not execute as current signer-rotation procedure. |
+| [`KEY_ROTATION.md`](KEY_ROTATION.md) | Historical superseded redeploy/key-rotation plan for the retired Alex Bot key. Do not execute as current signer-rotation procedure — that is [`SIGNER_ROTATION.md`](SIGNER_ROTATION.md). |
 | [`v0.16-spec.md`](v0.16-spec.md) | Historical architecture/spec baseline for the self-custody rewrite. |
 | [`SECURITY_AUDIT_2026_05_31.md`](SECURITY_AUDIT_2026_05_31.md) | Historical companion audit. Some findings are fixed in current code; verify against source and `CURRENT_DEPLOYMENT.md`. |
 | [`turf-vault-deploy-cost.html`](turf-vault-deploy-cost.html) | Historical generated deployment-cost map. Use for cost intuition, not live instruction names or current authority facts. |

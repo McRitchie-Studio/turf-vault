@@ -20,27 +20,40 @@ If `anchor test` cannot inherit Node/Yarn, use the direct test path from
 [`../RUNBOOK.md`](../RUNBOOK.md). After any source change, regenerate the IDL and
 re-pin Turf Monster from the freshly built file, not from `anchor idl fetch`.
 
-Latest local proof, 2026-09-06 — **stale as of turf-vault PR #18; see the
-qualification below before citing it**:
+Latest local proof, **2026-09-15**, on the v0.26 governance tree:
 
 ```bash
+yarn install
 anchor build
-solana-test-validator --reset --rpc-port 8898 --faucet-port 9901
-anchor deploy --provider.cluster http://127.0.0.1:8898
-ANCHOR_PROVIDER_URL=http://127.0.0.1:8898 \
-  ANCHOR_WALLET=/Users/alex/.config/solana/id.json \
-  yarn run ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.ts
+anchor test          # spins its own validator, deploys, runs tests/turf_vault.ts
 ```
 
-Result of that run: `27 passing` (was `23`; +4 for `burn_entry_token`), against
-an isolated local validator on `127.0.0.1:8898`.
+Result: **`37 passing`, 0 failing** (was `27` at the 2026-09-06 stamp; +10 for
+the v0.26 governance surface). This is a RUN RESULT, not an `it()` count.
 
-**That number stamps the tree BEFORE turf-vault PR #18, and no run has been made
-since.** #18 (merged 2026-09-07) repaired the suite's rejection helper and its
-lock-gate margin and added three cases exercising the helper itself, so this tree
-carries **30** `it()` blocks — a count read from `tests/turf_vault.ts`, not a run
-result. Re-run the command above and re-stamp both numbers before the next Squads
-upgrade.
+**This stamp is the first one taken AFTER turf-vault PR #18**, which is what the
+qualification below was waiting for. #18 (merged 2026-09-07) repaired the suite's
+`expectRejected` helper — inert until then at all 45 of its call sites — and
+corrected the lock-gate margin. Every rejection assertion in this suite has now
+been observed to run against a repaired helper, so the "no helper-mediated
+rejection has yet been OBSERVED to bite" caveat below is discharged as of this
+run. Re-run and re-stamp before the next Squads upgrade.
+
+Two further lanes now certify this repo, and unlike `anchor test` they run in
+CI on every push and PR:
+
+```bash
+bin/release-check          # the four CI lanes plus, new in v0.26, `cargo test`
+```
+
+`cargo test` matters more than its name suggests here. `cargo check` COMPILES
+`#[cfg(test)]` code without running it, so before this lane existed a unit test
+could report green having never executed. What it runs includes
+`programs/turf_vault/src/governance_tests.rs`, which asserts every `VaultState`
+field BYTE OFFSET — the guard against a widen-in-place edit that would compile,
+deploy, and silently misread both live vaults. It was control-checked on
+2026-09-15 by swapping two same-typed neighbouring fields (a mutation that
+compiles cleanly) and confirming the guard failed with `left: 131, right: 99`.
 
 > **A passing count is not evidence for every row below.** Until turf-vault
 > PR #18, the suite's `expectRejected` helper was INERT at all 45 of its call

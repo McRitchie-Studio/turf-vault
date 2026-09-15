@@ -94,6 +94,49 @@ Follow in order. Move to next step only if current fails.
 
 Check balance: `solana balance --url devnet` (uses default keypair) or `solana balance <address> --url devnet`.
 
+## v0.26 Upgrade Ordering (governance account)
+
+**When this matters**: the v0.26 upgrade, once. Get the order wrong and every
+vault-authorized instruction fails until you fix it.
+
+v0.26 moved the per-action signature thresholds into a `GovernanceConfig` PDA at
+`[b"governance"]`, and **every vault-authorized instruction now requires that
+account**. It could not live on `VaultState`: that account's 64 reserved bytes
+were consumed exactly by the two appended signer slots, and growing a zero-copy
+singleton means a realloc plus a migration.
+
+So the account has to be created, and there is a window between the program
+upgrade landing and `init_governance` running in which governance instructions
+return `AccountNotInitialized` (3012) — **including `pause`**. Keep the window to
+minutes by running the two back to back.
+
+```bash
+# 1. Upgrade the program through Squads as usual (see Deploy Failures above).
+node scripts/squad-upgrade.js <BUFFER_ADDR>
+
+# 2. IMMEDIATELY: create the governance table. Two signatures, any two current
+#    vault signers. It takes NO arguments — it can only write the shipped
+#    defaults, which is what makes a 2-signature bootstrap safe — and `init`
+#    collides on a second call, so a later retuned table cannot be reset by
+#    re-running it.
+
+# 3. Confirm the vault is untouched and behaviour-neutral:
+node scripts/check-signer-slots.js --expect unrotated
+```
+
+**The signer set does NOT change at deploy.** The two new slots read as
+`Pubkey::default()` from the previously-zeroed reserve, so a deployed-but-not-
+rotated vault behaves exactly as v0.25 did. Rotation is a separate operator
+ceremony — `docs/SIGNER_ROTATION.md`.
+
+**What DOES change at deploy** is the number of signatures several actions
+require. `settle_contest`, `cancel_contest`, `sweep_operator_revenue`,
+`register_currency`, `deactivate_currency` and `create_season` move to 3, and
+with only three signer slots occupied that means 3-of-3 until the rotation
+widens the set. Plan the rotation for the same maintenance window, and expect
+any unattended 2-signature automation (the QA rehearsal driver among them) to
+fail until it is updated.
+
 ## Schema / Account Layout Changes
 
 **When this matters**: After changing account layout in a way that existing PDAs cannot decode safely.
