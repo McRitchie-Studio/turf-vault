@@ -52,10 +52,11 @@ the v0.26 governance surface). This is a RUN RESULT, not an `it()` count.
 **This stamp is the first one taken AFTER turf-vault PR #18**, which is what the
 qualification below was waiting for. #18 (merged 2026-09-07) repaired the suite's
 `expectRejected` helper — inert until then at all 45 of its call sites — and
-corrected the lock-gate margin. Every rejection assertion in this suite has now
-been observed to run against a repaired helper, so the "no helper-mediated
-rejection has yet been OBSERVED to bite" caveat below is discharged as of this
-run. Re-run and re-stamp before the next Squads upgrade.
+corrected the lock-gate margin. Every rejection assertion THAT EXISTED AT THIS
+STAMP has been observed to run against a repaired helper, so that caveat is
+discharged for those call sites AND ONLY THOSE. The username registry added 13
+more (58 → 71) that no run has reached; the caveat still stands for them.
+Re-run and re-stamp before the next Squads upgrade.
 
 Two further lanes now certify this repo, and unlike `anchor test` they run in
 CI on every push and PR:
@@ -94,10 +95,11 @@ compiles cleanly) and confirming the guard failed with `left: 131, right: 99`.
 > **DISCHARGED 2026-09-15.** This paragraph used to end "because no run has
 > followed the repair, no helper-mediated rejection assertion in this suite has
 > yet been OBSERVED to bite". The `38 passing` run at the top of this file is
-> that run — the first since #18 — so every rejection in the suite has now
-> executed against a helper that bites, and the lock-gate correction is covered
-> too. What remains true is the narrower claim: nothing recorded BEFORE #18 is
-> evidence. Which refusals carry evidence on their own anyway is swept row by
+> that run — the first since #18 — so every rejection the suite held AT THAT
+> STAMP has executed against a helper that bites, and the lock-gate fix with
+> it. It does NOT reach the 13 call sites the username registry added after
+> it. Nothing recorded BEFORE #18 is evidence, and nothing added since this
+> stamp is. Which refusals carry evidence on their own is swept row by
 > row in [What the Suite Evidences](#what-the-suite-evidences).
 
 ## No Lane Runs This Suite
@@ -339,8 +341,9 @@ were, at that stamp, the only refusals in the file it actually evidenced.
 
 **That qualification is now historical.** The 2026-09-15 run at the top of this
 file (`38 passing`) is the first taken AFTER turf-vault PR #18 repaired the
-helper, so every refusal in the suite has now been observed to run against a
-helper that bites. The table below is kept because it records which three
+helper, so every refusal the suite held AT THAT STAMP has been observed to run
+against a helper that bites. The 13 the username registry added since are
+unexercised. The table below is kept because it records which three
 refusals stood on their own evidence even while the helper was inert:
 
 | Refusal | The assertion that follows it | Strength |
