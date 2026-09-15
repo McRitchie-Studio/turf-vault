@@ -290,6 +290,20 @@ describe("turf_vault verification matrix", () => {
       program.programId
     )[0];
 
+  // THE REGISTRY KEY. The username lowercased and zero-padded to 32 bytes —
+  // the same bytes `canonical_username_key` produces on chain, and the same
+  // ones `scripts/lib/username-key.js` produces for Rails. It is an argument
+  // rather than something the program derives because Anchor needs the seed
+  // where `#[derive(Accounts)]` expands; the handler re-derives it and refuses
+  // a mismatch (`UsernameKeyMismatch`).
+  const nameKey = (value: string): number[] => username(value.toLowerCase());
+
+  const deriveUsernameRecord = (value: string): PublicKey =>
+    PublicKey.findProgramAddressSync(
+      [Buffer.from("username"), Buffer.from(nameKey(value))],
+      program.programId
+    )[0];
+
   const deriveUser = (wallet: PublicKey): PublicKey =>
     PublicKey.findProgramAddressSync(
       [Buffer.from("user"), wallet.toBuffer()],
@@ -367,15 +381,38 @@ describe("turf_vault verification matrix", () => {
   ): Promise<PublicKey> => {
     const userPda = deriveUser(wallet);
     await program.methods
-      .createUserAccount(wallet, username(name) as any)
+      .createUserAccount(wallet, username(name) as any, nameKey(name) as any)
       .accountsStrict({
         payer,
         userAccount: userPda,
+        usernameRecord: deriveUsernameRecord(name),
         systemProgram: SystemProgram.programId,
       })
       .rpc();
     return userPda;
   };
+
+  /// `set_username`, with the registry accounts it now carries. Pass the name
+  /// being GIVEN UP as `previous` on a real rename; `null` when the canonical
+  /// key does not change, or when the account predates the registry.
+  const setUsernameFor = (
+    wallet: Keypair,
+    name: string,
+    previous: string | null = null
+  ) =>
+    program.methods
+      .setUsername(username(name) as any, nameKey(name) as any)
+      .accountsStrict({
+        wallet: wallet.publicKey,
+        userAccount: deriveUser(wallet.publicKey),
+        usernameRecord: deriveUsernameRecord(name),
+        previousUsernameRecord: previous
+          ? deriveUsernameRecord(previous)
+          : null,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([wallet])
+      .rpc();
 
   const createSeason = async (
     seasonId: number,
@@ -750,38 +787,45 @@ describe("turf_vault verification matrix", () => {
     it("enforces username owner, charset, length, and reserved-prefix rules", async () => {
       const user1Pda = deriveUser(user1.publicKey);
 
-      await program.methods
-        .setUsername(username("renamed-user") as any)
-        .accountsStrict({ wallet: user1.publicKey, userAccount: user1Pda })
-        .signers([user1])
-        .rpc();
+      // A rename hands back the name it leaves: `previous` is the old name's
+      // record, and the program CLOSES it, refunding the rent to the wallet.
+      await setUsernameFor(user1, "renamed-user", "user-one");
 
       const renamed = await program.account.userAccount.fetch(user1Pda);
       expect(decodeFixedBytes(renamed.username)).to.equal("renamed-user");
+      expect(renamed.usernameRegistered).to.equal(1);
 
       await expectRejected(
         program.methods
-          .setUsername(username("hacked") as any)
-          .accountsStrict({ wallet: user2.publicKey, userAccount: user1Pda })
+          .setUsername(username("hacked") as any, nameKey("hacked") as any)
+          .accountsStrict({
+            wallet: user2.publicKey,
+            userAccount: user1Pda,
+            usernameRecord: deriveUsernameRecord("hacked"),
+            previousUsernameRecord: null,
+            systemProgram: SystemProgram.programId,
+          })
           .signers([user2])
           .rpc(),
         /ConstraintSeeds|Unauthorized|seeds/i
       );
       await expectRejected(
-        program.methods
-          .setUsername(username("admin-tom") as any)
-          .accountsStrict({ wallet: user1.publicKey, userAccount: user1Pda })
-          .signers([user1])
-          .rpc(),
+        setUsernameFor(user1, "admin-tom", "renamed-user"),
         /UsernameReserved/i
       );
       await expectRejected(
-        program.methods
-          .setUsername(username("ab") as any)
-          .accountsStrict({ wallet: user1.publicKey, userAccount: user1Pda })
-          .signers([user1])
-          .rpc(),
+        setUsernameFor(user1, "ab", "renamed-user"),
         /UsernameTooShort/i
+      );
+      // `xan` is the prefix added with the registry: an operator identity is
+      // not claimable, and the rule is a PREFIX rule like every other entry.
+      await expectRejected(
+        setUsernameFor(user1, "xan", "renamed-user"),
+        /UsernameReserved/i
+      );
+      await expectRejected(
+        setUsernameFor(user1, "xanadu", "renamed-user"),
+        /UsernameReserved/i
       );
 
       const invalid = new Array(32).fill(0);
@@ -790,130 +834,397 @@ describe("turf_vault verification matrix", () => {
       invalid[2] = 0x69;
       await expectRejected(
         program.methods
-          .setUsername(invalid as any)
-          .accountsStrict({ wallet: user1.publicKey, userAccount: user1Pda })
+          .setUsername(invalid as any, invalid as any)
+          .accountsStrict({
+            wallet: user1.publicKey,
+            userAccount: user1Pda,
+            usernameRecord: deriveUsernameRecord("ignored"),
+            previousUsernameRecord: null,
+            systemProgram: SystemProgram.programId,
+          })
           .signers([user1])
           .rpc(),
         /UsernameInvalidChars/i
       );
     });
 
-    it("admin username flows waive only reserved prefixes", async () => {
-      const houseWallet = Keypair.generate();
-      await fund(houseWallet.publicKey);
-      const housePda = deriveUser(houseWallet.publicKey);
+    // ──────────────────────────────────────────────────────────────────────
+    // THE REGISTRY. Every assertion below is a REFUSAL, deliberately: the
+    // feature's whole value is the calls it rejects. A suite that only proved
+    // the happy path would be green against a program with the lock removed.
+    // ──────────────────────────────────────────────────────────────────────
 
-      await expectRejected(
-        program.methods
-          .createUserAccount(
-            houseWallet.publicKey,
-            username("turf-monster") as any
-          )
-          .accountsStrict({
-            payer: admin.publicKey,
-            userAccount: housePda,
-            systemProgram: SystemProgram.programId,
-          })
-          .rpc(),
-        /UsernameReserved/i
+    it("REFUSES a second wallet claiming a name another account already holds", async () => {
+      // THE ASSERTION THIS FEATURE EXISTS FOR, in Mr. McRitchie's own framing:
+      // "I have a turf user, another user should be stopped because it's
+      // already taken."
+      const user1Pda = deriveUser(user1.publicKey);
+      const held = decodeFixedBytes(
+        (await program.account.userAccount.fetch(user1Pda)).username
       );
 
       await expectRejected(
+        setUsernameFor(user2, held, "user-two"),
+        /UsernameAlreadyClaimed/i
+      );
+
+      // Case is not a way around it — the key is the lowercased form, so
+      // "RENAMED-USER" is the SAME name.
+      await expectRejected(
+        setUsernameFor(user2, held.toUpperCase(), "user-two"),
+        /UsernameAlreadyClaimed/i
+      );
+
+      // A fresh signup cannot take it either: `create_user_account` claims
+      // the record in the same transaction, so there is no window where an
+      // account displays a name it does not hold.
+      const newcomer = Keypair.generate();
+      await fund(newcomer.publicKey);
+      await expectRejected(
         program.methods
-          .adminCreateUserAccount(
-            houseWallet.publicKey,
-            username("turf-monster") as any
+          .createUserAccount(
+            newcomer.publicKey,
+            username(held) as any,
+            nameKey(held) as any
           )
           .accountsStrict({
             payer: admin.publicKey,
-            admin: stranger.publicKey,
+            userAccount: deriveUser(newcomer.publicKey),
+            usernameRecord: deriveUsernameRecord(held),
+            systemProgram: SystemProgram.programId,
+          })
+          .rpc(),
+        /UsernameAlreadyClaimed/i
+      );
+
+      // CONTROL: the holder is untouched and a DIFFERENT name still works, so
+      // the refusals above are the lock firing rather than the instruction
+      // being broken for everyone.
+      const after = await program.account.userAccount.fetch(user1Pda);
+      expect(decodeFixedBytes(after.username)).to.equal(held);
+      await setUsernameFor(user2, "user-two-b", "user-two");
+    });
+
+    it("REFUSES a rename that tries to keep the name it is leaving", async () => {
+      // Omit the old record and you would hold two names for ~0.0015 SOL,
+      // repeatable. `username_registered` is what makes the omission provable.
+      await expectRejected(
+        setUsernameFor(user2, "user-two-c", null),
+        /UsernameRecordMissing/i
+      );
+      // Handing back a record that is not the CURRENT name's is refused too.
+      await expectRejected(
+        setUsernameFor(user2, "user-two-c", "user-one"),
+        /UsernameRecordNameMismatch|AccountNotInitialized/i
+      );
+
+      // And when it IS handed back, the old name really is released — proved
+      // by another wallet taking it, which is only possible if the record was
+      // closed rather than left behind.
+      await setUsernameFor(user2, "user-two-c", "user-two-b");
+      const spare = Keypair.generate();
+      await fund(spare.publicKey);
+      await createUser(spare.publicKey, "user-two-b");
+    });
+
+    it("REFUSES a name_key that is not the canonical form of the username", async () => {
+      await expectRejected(
+        program.methods
+          .setUsername(username("Mixed-Case") as any, username("Mixed-Case") as any)
+          .accountsStrict({
+            wallet: user1.publicKey,
+            userAccount: deriveUser(user1.publicKey),
+            usernameRecord: deriveUsernameRecord("Mixed-Case"),
+            previousUsernameRecord: null,
+            systemProgram: SystemProgram.programId,
+          })
+          .signers([user1])
+          .rpc(),
+        /UsernameKeyMismatch/i
+      );
+    });
+
+    it("REFUSES anyone claiming a name the vault has reserved", async () => {
+      // THE BLOCKED LIST, and it is the same mechanism as uniqueness: a
+      // reservation is simply a record the vault owns.
+      const blocked = "blocked-name";
+
+      // One signature is not enough — the floor is three, and it holds even on
+      // a governance table written before these actions existed.
+      await expectRejected(
+        program.methods
+          .reserveUsername(nameKey(blocked) as any)
+          .accountsStrict({
+            admin: admin.publicKey,
+            cosigner: null,
             vaultState: vaultStatePda,
             governance: governancePda,
+            usernameRecord: deriveUsernameRecord(blocked),
+            systemProgram: SystemProgram.programId,
+          })
+          .rpc(),
+        /InsufficientSigners/i
+      );
+
+      await program.methods
+        .reserveUsername(nameKey(blocked) as any)
+        .accountsStrict({
+          admin: admin.publicKey,
+          cosigner: signer2.publicKey,
+          vaultState: vaultStatePda,
+          governance: governancePda,
+          usernameRecord: deriveUsernameRecord(blocked),
+          systemProgram: SystemProgram.programId,
+        })
+        .remainingAccounts(cosigners(signer3))
+        .signers([signer2, signer3])
+        .rpc();
+
+      const record = await program.account.usernameRecord.fetch(
+        deriveUsernameRecord(blocked)
+      );
+      // THE DISTINCTION, ON CHAIN: a reservation is owned by the vault PDA,
+      // a player-held name by a wallet. One field, no side table.
+      expect(record.owner.toBase58()).to.equal(vaultStatePda.toBase58());
+
+      // And now nobody can take it — not by rename, not by signup.
+      await expectRejected(
+        setUsernameFor(user1, blocked, "renamed-user"),
+        /UsernameAlreadyClaimed/i
+      );
+      const squatter = Keypair.generate();
+      await fund(squatter.publicKey);
+      await expectRejected(
+        program.methods
+          .createUserAccount(
+            squatter.publicKey,
+            username(blocked) as any,
+            nameKey(blocked) as any
+          )
+          .accountsStrict({
+            payer: admin.publicKey,
+            userAccount: deriveUser(squatter.publicKey),
+            usernameRecord: deriveUsernameRecord(blocked),
+            systemProgram: SystemProgram.programId,
+          })
+          .rpc(),
+        /UsernameAlreadyClaimed/i
+      );
+    });
+
+    it("REFUSES releasing a name the vault does not hold, or paying rent anywhere but the treasury", async () => {
+      // A player's record must never be closable through the reservation path.
+      await expectRejected(
+        program.methods
+          .releaseReservedUsername(nameKey("renamed-user") as any)
+          .accountsStrict({
+            admin: admin.publicKey,
+            cosigner: signer2.publicKey,
+            vaultState: vaultStatePda,
+            governance: governancePda,
+            treasury: treasury.publicKey,
+            usernameRecord: deriveUsernameRecord("renamed-user"),
+          })
+          .remainingAccounts(cosigners(signer3))
+          .signers([signer2, signer3])
+          .rpc(),
+        /UsernameNotReserved/i
+      );
+
+      // Rent goes to the pinned treasury, not to whoever called it.
+      await expectRejected(
+        program.methods
+          .releaseReservedUsername(nameKey("blocked-name") as any)
+          .accountsStrict({
+            admin: admin.publicKey,
+            cosigner: signer2.publicKey,
+            vaultState: vaultStatePda,
+            governance: governancePda,
+            treasury: stranger.publicKey,
+            usernameRecord: deriveUsernameRecord("blocked-name"),
+          })
+          .remainingAccounts(cosigners(signer3))
+          .signers([signer2, signer3])
+          .rpc(),
+        /InvalidRentDestination/i
+      );
+
+      // Released, the name returns to the pool — which is what releasing MEANS.
+      await program.methods
+        .releaseReservedUsername(nameKey("blocked-name") as any)
+        .accountsStrict({
+          admin: admin.publicKey,
+          cosigner: signer2.publicKey,
+          vaultState: vaultStatePda,
+          governance: governancePda,
+          treasury: treasury.publicKey,
+          usernameRecord: deriveUsernameRecord("blocked-name"),
+        })
+        .remainingAccounts(cosigners(signer3))
+        .signers([signer2, signer3])
+        .rpc();
+
+      const claimant = Keypair.generate();
+      await fund(claimant.publicKey);
+      await createUser(claimant.publicKey, "blocked-name");
+    });
+
+    it("overwrite_username renames a user who does NOT sign, at three signatures", async () => {
+      const squatter = Keypair.generate();
+      await fund(squatter.publicKey);
+      const squatterPda = await createUser(squatter.publicKey, "squatted");
+
+      // One signature cannot reach it. This is what makes removing the user's
+      // consent safe: the agent system holds two of five slots and no more.
+      await expectRejected(
+        program.methods
+          .overwriteUsername(username("evicted") as any, nameKey("evicted") as any)
+          .accountsStrict({
+            admin: admin.publicKey,
+            cosigner: null,
+            vaultState: vaultStatePda,
+            governance: governancePda,
+            userWallet: squatter.publicKey,
+            userAccount: squatterPda,
+            usernameRecord: deriveUsernameRecord("evicted"),
+            previousUsernameRecord: deriveUsernameRecord("squatted"),
+            systemProgram: SystemProgram.programId,
+          })
+          .rpc(),
+        /InsufficientSigners/i
+      );
+
+      // A stranger's signature is not a vault signature.
+      await expectRejected(
+        program.methods
+          .overwriteUsername(username("evicted") as any, nameKey("evicted") as any)
+          .accountsStrict({
+            admin: stranger.publicKey,
+            cosigner: signer2.publicKey,
+            vaultState: vaultStatePda,
+            governance: governancePda,
+            userWallet: squatter.publicKey,
+            userAccount: squatterPda,
+            usernameRecord: deriveUsernameRecord("evicted"),
+            previousUsernameRecord: deriveUsernameRecord("squatted"),
+            systemProgram: SystemProgram.programId,
+          })
+          .remainingAccounts(cosigners(signer3))
+          .signers([stranger, signer2, signer3])
+          .rpc(),
+        /Unauthorized/i
+      );
+
+      // THREE, AND THE SQUATTER NEVER SIGNS. `squatter` is absent from
+      // `.signers([...])` entirely — that is the whole point of the
+      // instruction, and what the old `admin_set_username` could not do.
+      await program.methods
+        .overwriteUsername(username("evicted") as any, nameKey("evicted") as any)
+        .accountsStrict({
+          admin: admin.publicKey,
+          cosigner: signer2.publicKey,
+          vaultState: vaultStatePda,
+          governance: governancePda,
+          userWallet: squatter.publicKey,
+          userAccount: squatterPda,
+          usernameRecord: deriveUsernameRecord("evicted"),
+          previousUsernameRecord: deriveUsernameRecord("squatted"),
+          systemProgram: SystemProgram.programId,
+        })
+        .remainingAccounts(cosigners(signer3))
+        .signers([signer2, signer3])
+        .rpc();
+
+      const account = await program.account.userAccount.fetch(squatterPda);
+      expect(decodeFixedBytes(account.username)).to.equal("evicted");
+
+      // The vacated name is FREE again — Mr. McRitchie's accepted behaviour.
+      // Locking it is one more transaction at the same quorum:
+      // `reserve_username`.
+      const nextHolder = Keypair.generate();
+      await fund(nextHolder.publicKey);
+      await createUser(nextHolder.publicKey, "squatted");
+    });
+
+    it("overwrite_username waives the reserved prefix but never the charset bar", async () => {
+      // This is where the deleted `admin_set_username`'s only real job now
+      // lives — at three signatures instead of one.
+      const house = Keypair.generate();
+      await fund(house.publicKey);
+      const housePda = await createUser(house.publicKey, "house-account");
+
+      // A lone wallet still cannot.
+      await expectRejected(
+        setUsernameFor(house, "turf", "house-account"),
+        /UsernameReserved/i
+      );
+
+      const overwrite = (name: string, previous: string) =>
+        program.methods
+          .overwriteUsername(username(name) as any, nameKey(name) as any)
+          .accountsStrict({
+            admin: admin.publicKey,
+            cosigner: signer2.publicKey,
+            vaultState: vaultStatePda,
+            governance: governancePda,
+            userWallet: house.publicKey,
             userAccount: housePda,
+            usernameRecord: deriveUsernameRecord(name),
+            previousUsernameRecord: deriveUsernameRecord(previous),
+            systemProgram: SystemProgram.programId,
+          })
+          .remainingAccounts(cosigners(signer3))
+          .signers([signer2, signer3])
+          .rpc();
+
+      await expectRejected(overwrite("ab", "house-account"), /UsernameTooShort/i);
+      await overwrite("turf", "house-account");
+
+      const account = await program.account.userAccount.fetch(housePda);
+      expect(decodeFixedBytes(account.username)).to.equal("turf");
+    });
+
+    it("backfill_username_record ratifies only what the account already says", async () => {
+      // Permissionless because it has NO DISCRETION: name and owner both come
+      // from the account's own fields. Every account in this suite was created
+      // after the registry, so the reachable case here is the idempotent one.
+      const holder = Keypair.generate();
+      await fund(holder.publicKey);
+      const holderPda = await createUser(holder.publicKey, "backfill-me");
+
+      // A key that is not this account's own name is refused — the caller
+      // cannot point the instruction at a name of their choosing.
+      await expectRejected(
+        program.methods
+          .backfillUsernameRecord(nameKey("something-else") as any)
+          .accountsStrict({
+            payer: stranger.publicKey,
+            userWallet: holder.publicKey,
+            userAccount: holderPda,
+            usernameRecord: deriveUsernameRecord("something-else"),
             systemProgram: SystemProgram.programId,
           })
           .signers([stranger])
           .rpc(),
-        /Unauthorized/i
+        /UsernameKeyMismatch/i
       );
 
-      await expectRejected(
-        program.methods
-          .adminCreateUserAccount(houseWallet.publicKey, username("ab") as any)
-          .accountsStrict({
-            payer: admin.publicKey,
-            admin: admin.publicKey,
-            vaultState: vaultStatePda,
-            governance: governancePda,
-            userAccount: housePda,
-            systemProgram: SystemProgram.programId,
-          })
-          .rpc(),
-        /UsernameTooShort/i
-      );
-
+      // Run by a wallet with no relationship to the user at all, and
+      // idempotent — a retried migration job is safe.
       await program.methods
-        .adminCreateUserAccount(
-          houseWallet.publicKey,
-          username("turf-monster") as any
-        )
+        .backfillUsernameRecord(nameKey("backfill-me") as any)
         .accountsStrict({
-          payer: admin.publicKey,
-          admin: admin.publicKey,
-          vaultState: vaultStatePda,
-          governance: governancePda,
-          userAccount: housePda,
+          payer: stranger.publicKey,
+          userWallet: holder.publicKey,
+          userAccount: holderPda,
+          usernameRecord: deriveUsernameRecord("backfill-me"),
           systemProgram: SystemProgram.programId,
         })
+        .signers([stranger])
         .rpc();
 
-      let account = await program.account.userAccount.fetch(housePda);
-      expect(decodeFixedBytes(account.username)).to.equal("turf-monster");
-
-      await expectRejected(
-        program.methods
-          .adminSetUsername(username("turf") as any)
-          .accountsStrict({
-            wallet: houseWallet.publicKey,
-            admin: stranger.publicKey,
-            vaultState: vaultStatePda,
-            governance: governancePda,
-            userAccount: housePda,
-          })
-          .signers([houseWallet, stranger])
-          .rpc(),
-        /Unauthorized/i
-      );
-
-      await program.methods
-        .adminSetUsername(username("turf") as any)
-        .accountsStrict({
-          wallet: houseWallet.publicKey,
-          admin: admin.publicKey,
-          vaultState: vaultStatePda,
-          governance: governancePda,
-          userAccount: housePda,
-        })
-        .signers([houseWallet])
-        .rpc();
-
-      account = await program.account.userAccount.fetch(housePda);
-      expect(decodeFixedBytes(account.username)).to.equal("turf");
-
-      await expectRejected(
-        program.methods
-          .adminSetUsername(username("turf-x") as any)
-          .accountsStrict({
-            wallet: user1.publicKey,
-            admin: admin.publicKey,
-            vaultState: vaultStatePda,
-            governance: governancePda,
-            userAccount: housePda,
-          })
-          .signers([user1])
-          .rpc(),
-        /ConstraintSeeds|Unauthorized|seeds/i
-      );
+      const account = await program.account.userAccount.fetch(holderPda);
+      expect(account.usernameRegistered).to.equal(1);
     });
   });
 

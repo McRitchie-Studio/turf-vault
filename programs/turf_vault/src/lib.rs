@@ -14,6 +14,9 @@
 //!
 //!   - **GovernanceConfig** holds the per-action signature thresholds.
 //!   - **MintWindow** counts entry-token mints inside one cap window.
+//!   - **UsernameRecord** is the lock on one name. Its EXISTENCE is
+//!     uniqueness; an `owner` of the vault PDA is a RESERVATION, so the
+//!     blocked list and the uniqueness index are one mechanism.
 //!
 //! Auth model (v0.26 — five signers, thresholds stored as DATA):
 //!
@@ -38,7 +41,8 @@
 //! | close_contest                             |    2    |
 //! | set_contest_lock_time / conclusion_time   |    2 (3 to re-open / amend) |
 //! | mint_entry_token — within the cap         |    1    |
-//! | grant_seeds / admin username waiver       |    1    |
+//! | grant_seeds                               |    1    |
+//! | overwrite / reserve / release username    |    3 (floor 3) |
 //! | create_contest / enter_contest            |    1 + the user's own signature |
 //!
 //! THE SHAPE OF THE FIX. The agent system is reachable by two of the five
@@ -62,6 +66,9 @@ pub mod instructions;
 
 #[cfg(test)]
 mod governance_tests;
+
+#[cfg(test)]
+mod username_registry_tests;
 
 use instructions::*;
 use state::MAX_SIGNERS;
@@ -184,41 +191,81 @@ pub mod turf_vault {
 
     // ── User accounts ─────────────────────────────────────────────────────
 
-    /// Create a new per-wallet UserAccount PDA. Permissionless payer.
+    /// Create a new per-wallet UserAccount PDA AND claim its username in the
+    /// registry. Permissionless payer. Fails with `UsernameAlreadyClaimed`
+    /// (6060) if the name is held by another account or reserved by the vault.
     pub fn create_user_account(
         ctx: Context<CreateUserAccount>,
         wallet: Pubkey,
         username: [u8; 32],
+        name_key: [u8; 32],
     ) -> Result<()> {
-        handle_create_user_account(ctx, wallet, username)
+        handle_create_user_account(ctx, wallet, username, name_key)
     }
 
     /// Set / overwrite the username on a UserAccount. Owner signs.
-    pub fn set_username(ctx: Context<SetUsername>, username: [u8; 32]) -> Result<()> {
-        handle_set_username(ctx, username)
+    ///
+    /// Claims `name_key` in the registry, and CLOSES the record for the name
+    /// given up (refunding its rent to the wallet) when the canonical key
+    /// really changes. `name_key` is the username lowercased and zero-padded
+    /// to 32 bytes — it is the `UsernameRecord` PDA seed, so it has to be an
+    /// argument; the handler re-derives it and refuses a mismatch
+    /// (`UsernameKeyMismatch`, 6061), the same shape `mint_entry_token` uses
+    /// for `source_ref_hash`.
+    pub fn set_username(
+        ctx: Context<SetUsername>,
+        username: [u8; 32],
+        name_key: [u8; 32],
+    ) -> Result<()> {
+        handle_set_username(ctx, username, name_key)
     }
 
-    /// `create_user_account` with an admin-authorized reserved-prefix waiver
-    /// (v0.25). Permissionless payer + a required `ADMIN_USERNAME` (1) vault-signer
-    /// co-signature (`Unauthorized` 6000 otherwise). Charset + min-length
-    /// are still enforced — only the reserved-prefix branch is waived.
-    pub fn admin_create_user_account(
-        ctx: Context<AdminCreateUserAccount>,
-        wallet: Pubkey,
+    // ── Username registry ─────────────────────────────────────────────────
+
+    /// Rename any user WITHOUT that user's signature.
+    /// `OVERWRITE_USERNAME` (3, FLOOR 3) and an `UsernameOverwritten` event on
+    /// every use.
+    ///
+    /// Replaces `admin_set_username`, which required the account owner to
+    /// co-sign and was therefore useless against the only two things it was
+    /// ever wanted for — a squatter and a slur, neither of whom will consent.
+    /// Dropping consent is safe at three-of-five because no agent can reach
+    /// three, and the FLOOR is what keeps that true against a retune.
+    pub fn overwrite_username(
+        ctx: Context<OverwriteUsername>,
         username: [u8; 32],
+        name_key: [u8; 32],
     ) -> Result<()> {
-        handle_admin_create_user_account(ctx, wallet, username)
+        handle_overwrite_username(ctx, username, name_key)
     }
 
-    /// `set_username` with an admin-authorized reserved-prefix waiver
-    /// (v0.25). Owner signs (consenting) + a required `ADMIN_USERNAME` (1) vault-signer
-    /// co-signature (`Unauthorized` 6000 otherwise). Charset + min-length
-    /// are still enforced — only the reserved-prefix branch is waived.
-    pub fn admin_set_username(
-        ctx: Context<AdminSetUsername>,
-        username: [u8; 32],
+    /// Take a free name off the market — the blocked list, as a claim the
+    /// vault makes rather than a list anyone walks. `RESERVE_USERNAME`
+    /// (3, FLOOR 3). Idempotent; refuses a name a player already holds.
+    pub fn reserve_username(ctx: Context<ReserveUsername>, name_key: [u8; 32]) -> Result<()> {
+        handle_reserve_username(ctx, name_key)
+    }
+
+    /// Put a reserved name back in the pool. `RELEASE_USERNAME` (3, FLOOR 3) —
+    /// a reservation is a brake, and nothing an agent reaches alone lifts a
+    /// brake. Rent goes to the pinned treasury, not to the caller.
+    pub fn release_reserved_username(
+        ctx: Context<ReleaseReservedUsername>,
+        name_key: [u8; 32],
     ) -> Result<()> {
-        handle_admin_set_username(ctx, username)
+        handle_release_reserved_username(ctx, name_key)
+    }
+
+    /// MIGRATION ONLY: lock the name a `UserAccount` already displays.
+    /// Permissionless — it has no discretion, taking both the name and the
+    /// owner from the account's own fields, so it can only assert what the
+    /// chain already says. 47 production users, zero case-insensitive
+    /// duplicates (measured 2026-09-15), so this reconciles nothing.
+    pub fn backfill_username_record(
+        ctx: Context<BackfillUsernameRecord>,
+        name_key: [u8; 32],
+    ) -> Result<()> {
+        handle_backfill_username_record(ctx, name_key)
     }
 
     // ── Seasons ───────────────────────────────────────────────────────────

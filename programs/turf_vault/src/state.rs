@@ -304,8 +304,33 @@ pub struct UserAccount {
     pub total_won: u64,           //  8
     /// PDA bump.
     pub bump: u8,                 //  1
+    /// 1 once this account's `username` is locked by a `UsernameRecord`.
+    ///
+    /// ── WHY A FLAG, AND WHY IT COSTS NO BYTES ─────────────────────────────
+    ///
+    /// A rename must CLOSE the record for the old name, or a user simply keeps
+    /// it: claim "alice", rename to "bob" while omitting the old record from
+    /// the account list, and now hold both — at about 0.0015 SOL a name, which
+    /// is not a deterrent. The old record is therefore a required account on
+    /// the rename path. But a program cannot prove an account was OMITTED
+    /// rather than absent, so "the user has no record yet" had to become a fact
+    /// stored on chain rather than a claim made by the caller.
+    ///
+    /// It is carved from the FIRST BYTE of `_reserved`, which drops to 31. For
+    /// a Borsh `#[account]` what matters is field ORDER and total size, and
+    /// both are unchanged: `INIT_SPACE` stays 125 and every live account
+    /// deserializes exactly as before. Appending after `_reserved` would have
+    /// grown the account by one byte and made every existing one too small to
+    /// load — the mistake `VaultState`'s layout test exists to catch, in the
+    /// one place the reserve was still there to spend.
+    ///
+    /// Reads 0 on all 47 production accounts (created at v0.16+, which zeroes
+    /// the reserve). And if it somehow read 1 on an account with no record, the
+    /// failure is a REFUSED RENAME pointing at `backfill_username_record`, not
+    /// a lost name — the flag fails closed.
+    pub username_registered: u8,  //  1
     /// Reserved padding for forward-compat (referral, kyc tier, etc.).
-    pub _reserved: [u8; 32],      // 32
+    pub _reserved: [u8; 31],      // 31
 }
 
 /// Lifecycle of a Contest.
@@ -578,7 +603,13 @@ pub mod gov_action {
     pub const GRANT_SEEDS: u8 = 15;
     /// Retuning the table itself, and the mint-window policy.
     pub const SET_GOVERNANCE: u8 = 16;
-    /// The admin reserved-prefix waiver on the two username instructions.
+    /// RETIRED in the username-registry change: both instructions that read
+    /// this id (`admin_create_user_account`, `admin_set_username`) were
+    /// DELETED. The id itself can never be reused — it indexes a stored
+    /// threshold table, and re-pointing it at a new action would silently
+    /// hand that action whatever number a live account happens to hold here.
+    /// It stays declared, at its shipped default, exactly like the retired
+    /// error codes in `errors.rs`.
     pub const ADMIN_USERNAME: u8 = 17;
     /// Creating a contest (the vault-signer half; the creator signs too).
     pub const CREATE_CONTEST: u8 = 18;
@@ -594,8 +625,21 @@ pub mod gov_action {
     /// re-arms the re-open above.
     pub const SET_CONTEST_CONCLUSION_TIME_AMEND: u8 = 21;
 
+    // ── The username registry ─────────────────────────────────────────────
+    /// Rename any user WITHOUT that user's consent. The consent requirement is
+    /// what made the old `admin_set_username` useless against the two cases it
+    /// was wanted for — a squatter and a slur — because both are held by
+    /// someone with no reason to co-sign their own eviction. Removing consent
+    /// is safe only because the number is high enough that no agent can reach
+    /// it alone, which is why this one carries a FLOOR (see `THRESHOLD_FLOORS`).
+    pub const OVERWRITE_USERNAME: u8 = 22;
+    /// The vault claims a free name for itself — "add to the blocked list".
+    pub const RESERVE_USERNAME: u8 = 23;
+    /// The vault gives a name it holds back to the pool — "lift a block".
+    pub const RELEASE_USERNAME: u8 = 24;
+
     /// One past the highest live action id.
-    pub const COUNT: usize = 22;
+    pub const COUNT: usize = 25;
 }
 
 /// Stored width of the threshold table. Wider than `gov_action::COUNT` so new
@@ -653,6 +697,14 @@ pub const DEFAULT_THRESHOLDS: [u8; GOV_TABLE_LEN] = {
     // be un-graded.
     t[gov_action::SET_CONTEST_LOCK_TIME_REOPEN as usize] = 3;
     t[gov_action::SET_CONTEST_CONCLUSION_TIME_AMEND as usize] = 3;
+    // The username registry. All three are three, and all three are FLOORED at
+    // three — which is unusual enough to state the reason rather than leave it
+    // to be inferred. See `THRESHOLD_FLOORS` below: a `GovernanceConfig`
+    // bootstrapped by the PREVIOUS binary already stores a literal `1` at these
+    // indices, so a default alone would never be read.
+    t[gov_action::OVERWRITE_USERNAME as usize] = 3;
+    t[gov_action::RESERVE_USERNAME as usize] = 3;
+    t[gov_action::RELEASE_USERNAME as usize] = 3;
     t
 };
 
@@ -673,6 +725,45 @@ pub const THRESHOLD_FLOORS: [u8; GOV_TABLE_LEN] = {
     f[gov_action::UPDATE_SIGNERS as usize] = 3;
     f[gov_action::UNPAUSE as usize] = 3;
     f[gov_action::SET_GOVERNANCE as usize] = 3;
+
+    // ── THE USERNAME REGISTRY, AND WHY ALL THREE ARE FLOORED ──────────────
+    //
+    // THE MIGRATION HAZARD FIRST, because it is the reason a DEFAULT would not
+    // have been enough. `DEFAULT_THRESHOLDS` starts life as `[1u8; 32]` and
+    // then overwrites the ids it knows about, so a table written by a binary
+    // that predates these three actions stores a literal `1` at 22, 23 and 24
+    // — not a zero. `threshold_for` treats zero as "unset" and falls back to
+    // the shipped default; it has no way to treat a ONE as unset, and must
+    // not, because one is a legitimate retune. So on a `GovernanceConfig`
+    // bootstrapped by the sibling governance binary, the defaults above are
+    // simply never read, and these actions would authorize on ONE signature.
+    //
+    // The floor is applied on READ, which makes it the only mechanism here
+    // that cannot be forgotten: no post-upgrade `set_action_threshold` call, no
+    // runbook step, nothing an operator has to remember at 2am.
+    //
+    // AND THE FLOOR IS RIGHT ON ITS OWN MERITS, per action:
+    //
+    //   OVERWRITE_USERNAME — it renames a user who does not sign. Consent was
+    //     removed precisely because three signatures replace it; a quorum able
+    //     to retune this to one would be handing a single agent-reachable key
+    //     the power to rename anybody on the platform.
+    //
+    //   RELEASE_USERNAME — a reservation is a BRAKE on a name, and this
+    //     program's stated asymmetry is that nothing an agent reaches alone may
+    //     lift a brake (see `PAUSE`/`UNPAUSE` above). Releasing "slur" back
+    //     into the pool is exactly that lift.
+    //
+    //   RESERVE_USERNAME — the brake side, and the one where a lower number
+    //     would be defensible on its own: blocking a slur fast is a good thing
+    //     to be able to do cheaply. It is floored anyway, because the migration
+    //     hazard above applies to it identically and a stored `1` here is
+    //     indistinguishable from a deliberate retune to one. Lowering it is a
+    //     one-line change to this table plus a program upgrade — deliberately
+    //     the same cost as any other floor, and flagged as Mr. McRitchie's call.
+    f[gov_action::OVERWRITE_USERNAME as usize] = 3;
+    f[gov_action::RESERVE_USERNAME as usize] = 3;
+    f[gov_action::RELEASE_USERNAME as usize] = 3;
     f
 };
 
@@ -825,4 +916,88 @@ pub struct MintWindow {
 impl MintWindow {
     /// 8 discriminator + 8 + 4 + 1 + 16.
     pub const LEN: usize = 8 + 8 + 4 + 1 + 16;
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// The username registry
+// ──────────────────────────────────────────────────────────────────────────
+
+/// One account per claimed name. Its EXISTENCE is the lock, and its `owner`
+/// says who holds it.
+///
+/// PDA seeds: `[b"username", canonical_username_key(name)]`
+///
+/// ── THE WHOLE MECHANISM, IN THREE STATES ──────────────────────────────────
+///
+///   absent                 the name is free
+///   owner == some wallet   that player holds it
+///   owner == the vault PDA the name is RESERVED — nobody can take it
+///
+/// Uniqueness and the blocked list are therefore ONE mechanism rather than
+/// two. Blocking a name is the vault claiming it first; lifting a block is
+/// closing the account. There is no list to walk, nothing to resize, and
+/// growth is unbounded because each name pays its own rent.
+///
+/// ── IT IS AN EXISTING TECHNIQUE, NOT A NEW ONE ────────────────────────────
+///
+/// `mint_entry_token` keys its voucher PDA on `sha256(source_ref)` and
+/// `grant_seeds` guards on `[b"seed_grant", ...]`; both use init-as-a-lock for
+/// idempotency, and both have been in this program since v0.19. This applies
+/// the same trick to names.
+///
+/// ── WHY THE VAULT PDA AND NOT A SENTINEL ──────────────────────────────────
+///
+/// `owner` is the vault's own `[b"vault"]` PDA for a reservation. That address
+/// is off-curve, so no keypair can produce it — a player-held record is
+/// written from a `Signer`'s key and can therefore never collide with it. An
+/// off-chain reader needs no side table: derive `[b"vault"]` once and the
+/// owner field answers "taken or reserved?" by itself.
+///
+/// `Pubkey::default()` is NOT a reservation sentinel, but `is_reserved` treats
+/// it as one anyway — see that method.
+#[account]
+#[derive(InitSpace)]
+pub struct UsernameRecord {
+    /// Holder: a wallet for a player-held name, the `[b"vault"]` PDA for a
+    /// reservation. Never `Pubkey::default()` on any account this program
+    /// writes — which is what lets `init_if_needed` callers tell a
+    /// freshly-created record from one that already existed.
+    pub owner: Pubkey,        // 32
+    /// The canonical (lowercased, zero-padded) name — the same 32 bytes that
+    /// seed this PDA. Stored so the account is self-describing to an
+    /// off-chain reader and so a caller naming the wrong record fails a field
+    /// check rather than acting on it.
+    pub name: [u8; 32],       // 32
+    /// Chain time the record was created.
+    pub claimed_at: i64,      //  8
+    /// PDA bump.
+    pub bump: u8,             //  1
+    /// Reserved padding for forward-compat.
+    pub _reserved: [u8; 16],  // 16
+}
+
+impl UsernameRecord {
+    /// 8 discriminator + 32 + 32 + 8 + 1 + 16 = 97 bytes.
+    pub const LEN: usize = 8 + UsernameRecord::INIT_SPACE;
+
+    /// True when NO WALLET can act on this record.
+    ///
+    /// Two cases, and the second is the defensive one:
+    ///   - the vault holds it (a real reservation), or
+    ///   - `owner` is unset, which no write path in this program produces. A
+    ///     zeroed or partially-written record must read as UNCLAIMABLE rather
+    ///     than fall open to whoever asks first, so the unreachable case is
+    ///     folded in here deliberately rather than left to chance.
+    ///
+    /// `release_reserved_username` deliberately does NOT use this — it demands
+    /// an exact match on the vault key, so the release path can never be
+    /// pointed at a record the vault does not actually hold.
+    pub fn is_reserved(&self, vault: &Pubkey) -> bool {
+        self.owner == *vault || self.owner == Pubkey::default()
+    }
+
+    /// True when `wallet` is the player holding this name.
+    pub fn is_held_by(&self, wallet: &Pubkey) -> bool {
+        *wallet != Pubkey::default() && self.owner == *wallet
+    }
 }

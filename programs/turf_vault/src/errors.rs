@@ -15,10 +15,12 @@ use anchor_lang::prelude::*;
 ///
 /// v0.16 new codes start at 6023.
 ///
-/// v0.26 claims 6046-6059 for governance and RESERVES 6060+ for the
-/// username registry landing in the same upgrade window — see the block
-/// comment at the tail of the enum for why the reservation is variants and
-/// not a comment.
+/// v0.26 claims 6046-6059 for governance; the username registry, landing in
+/// the same upgrade window, has now CLAIMED 6060-6066. See the block comment
+/// in the middle of the enum for why that reservation was three unreachable
+/// variants rather than a comment — a comment cannot stop Anchor, which
+/// assigns codes by POSITION and would otherwise have shifted every governance
+/// code under Rails' integer decoding.
 #[error_code]
 pub enum VaultError {
     // ── 6000-6022: stable from v0.15.1 ────────────────────────────────────
@@ -169,5 +171,26 @@ pub enum VaultError {
     ReservedGovernance6058,                      // 6058 — reserved, see note above
     #[msg("Reserved — do not emit")]
     ReservedGovernance6059,                      // 6059 — reserved, see note above
-    // ── 6060+: reserved for `username-registry-on-chain` ──────────────────
+
+    // ── 6060+: the username registry ──────────────────────────────────────
+    //
+    // Claiming the range the governance block reserved, from the top of the
+    // three placeholders as that block's note instructs: 6057/6058/6059 are
+    // still `ReservedGovernance*`, and these variants sit after them, so the
+    // first one lands on 6060 exactly as `username_registry_error_codes_*`
+    // asserts. Nothing above this line moved.
+    #[msg("Username is already held by another account, or reserved by the vault")]
+    UsernameAlreadyClaimed,                      // 6060
+    #[msg("name_key is not the canonical lowercased form of the username")]
+    UsernameKeyMismatch,                         // 6061
+    #[msg("This account's current username is registered — its UsernameRecord must be passed so the rename can close it")]
+    UsernameRecordMissing,                       // 6062
+    #[msg("The supplied UsernameRecord is not held by this wallet")]
+    UsernameRecordOwnerMismatch,                 // 6063
+    #[msg("The supplied UsernameRecord does not hold this account's current username")]
+    UsernameRecordNameMismatch,                  // 6064
+    #[msg("A previous UsernameRecord was supplied where none is due")]
+    UsernameRecordNotExpected,                   // 6065
+    #[msg("The vault does not hold this username — it is not a reservation")]
+    UsernameNotReserved,                         // 6066
 }
