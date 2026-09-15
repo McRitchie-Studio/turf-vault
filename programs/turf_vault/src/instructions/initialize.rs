@@ -24,8 +24,14 @@ use crate::errors::VaultError;
 /// `paused` is set to 0 (vault starts unpaused) in all builds.
 ///
 /// One-time event: after this succeeds, the hardening constants are never
-/// re-checked in any other instruction. The vault is then governed by
-/// VaultState's signer/threshold configuration.
+/// re-checked in any other instruction. The vault is then governed by the
+/// signer set here plus the per-action thresholds in `GovernanceConfig`.
+///
+/// `initialize` does NOT create `GovernanceConfig` — `init_governance` does,
+/// as a separate call. They are separate because the live vaults on devnet and
+/// mainnet were initialized long ago and will never call this instruction
+/// again; the governance account has to be reachable for a vault that already
+/// exists, which means its own instruction.
 ///
 /// VaultState is zero-copy (v0.16) — too large for borsh's stack-based
 /// deserialization. Use `load_init()?` rather than `load_mut()?` to write
@@ -108,7 +114,11 @@ pub fn handle_initialize(
         );
     }
 
-    // Threshold must be 1, 2, or 3.
+    // `initialize` seeds THREE slots, so its threshold argument is bounded by
+    // three regardless of MAX_SIGNERS. It is also the LEGACY field: since
+    // v0.26 authorization reads the per-action table in `GovernanceConfig`,
+    // and this value is retained only because moving it would shift every
+    // field below it in a zero-copy account. See `VaultState`'s layout note.
     require!(threshold >= 1 && threshold <= 3, VaultError::InvalidThreshold);
 
     // No duplicate signers in the multisig set.
@@ -167,7 +177,11 @@ pub fn handle_initialize(
         active: 1,
         _pad: [0; 14],
     };
-    vault._reserved = [0; 64];
+    // The two appended signer slots start EMPTY. A fresh vault is a 3-slot
+    // vault, exactly like every vault deployed before v0.26 — the widening is
+    // a deliberate later act (`update_signers`), never an implicit one.
+    vault.signers_ext = [Pubkey::default(); 2];
+    vault._reserved = [0u8; 0];
 
     msg!(
         "Vault initialized. Signers: [{}, {}, {}], Threshold: {}, Payout mint: {}, Treasury: {}",

@@ -1,6 +1,7 @@
 use anchor_lang::prelude::*;
-use crate::state::{VaultState, Contest, ContestStatus};
+use crate::state::{VaultState, Contest, ContestStatus, GovernanceConfig, gov_action};
 use crate::errors::VaultError;
+use crate::instructions::governance::authorize;
 
 /// `set_contest_lock_time` — set (or clear) a contest's derived lock timestamp.
 ///
@@ -9,13 +10,19 @@ use crate::errors::VaultError;
 /// ONLY lock mechanism. "Lock now" is expressed by passing the current chain
 /// time; `new_lock_timestamp == 0` clears the lock (enterable indefinitely).
 ///
-/// Auth (v0.19, audit #5):
-///   - BEFORE the lock has passed: 1-of-3 vault signer (routine reschedule).
+/// Auth (v0.19 audit #5, re-expressed as data in v0.26):
+///   - BEFORE the lock has passed: `gov_action::SET_CONTEST_LOCK_TIME`
+///     (default 2) — a routine reschedule.
 ///   - AFTER the lock has passed (lock_timestamp != 0 && now >= it): amending
-///     it re-opens a contest whose entry window already closed — the
-///     results-known late-entry vector — so it requires 2-of-3 (admin + a
-///     distinct `cosigner`). Pass `cosigner` only for that case.
+///     it RE-OPENS a contest whose entry window already closed, which is the
+///     results-known late-entry vector, so it escalates to
+///     `gov_action::SET_CONTEST_LOCK_TIME_REOPEN` (default 3).
 ///   - Always rejected once the contest is settled/cancelled or has concluded.
+///
+/// Both numbers are stored, so the escalation can be retuned without a
+/// redeploy — but the ESCALATION ITSELF is structural: the branch below picks
+/// which action id to look up, and no threshold value can collapse the two
+/// paths into one.
 ///
 /// Timestamps must be non-negative; a set lock must precede a set conclusion.
 ///
@@ -25,16 +32,22 @@ pub struct SetContestLockTime<'info> {
     #[account(mut)]
     pub admin: Signer<'info>,
 
-    /// Optional second vault signer. Required (2-of-3) ONLY to amend a lock
-    /// that has already passed; omitted for a routine pre-lock set (1-of-3).
+    /// Second vault signer, named for wire compatibility with v0.25 callers.
+    /// Since v0.26 it simply counts toward whichever threshold applies — pass
+    /// it and it is one of the required signatures; omit it and the same
+    /// signature must arrive through `remaining_accounts` instead.
     pub cosigner: Option<Signer<'info>>,
 
     #[account(
         seeds = [b"vault"],
         bump = vault_state.load()?.bump,
-        constraint = vault_state.load()?.is_signer(&admin.key()) @ VaultError::Unauthorized,
     )]
     pub vault_state: AccountLoader<'info, VaultState>,
+
+    /// Per-action threshold table. Required by every vault-authorized
+    /// instruction since v0.26 — see `instructions::governance::authorize`.
+    #[account(seeds = [b"governance"], bump = governance.bump)]
+    pub governance: Account<'info, GovernanceConfig>,
 
     #[account(
         mut,
@@ -68,26 +81,37 @@ pub fn handle_set_contest_lock_time(
         require!(new_lock_timestamp < conclusion, VaultError::InvalidTimestamp);
     }
 
-    // Audit #5 (re-open protection): once the lock has PASSED, amending it
-    // re-opens a closed entry window — require 2-of-3 (admin + distinct cosigner).
+    // AUTHORIZATION (v0.26). Audit #5's re-open protection survives as a
+    // choice of ACTION ID rather than a hand-rolled second check: once the
+    // lock has PASSED, amending it re-opens a closed entry window, so the
+    // lookup escalates. Everything above this point only READS the contest —
+    // the write is below — so running the check here rather than in a
+    // constraint changes nothing about what is protected.
     let current_lock = ctx.accounts.contest.lock_timestamp;
     let lock_engaged = current_lock != 0 && now >= current_lock;
-    if lock_engaged {
+    let action = if lock_engaged {
+        gov_action::SET_CONTEST_LOCK_TIME_REOPEN
+    } else {
+        gov_action::SET_CONTEST_LOCK_TIME
+    };
+    {
         let vault_state = ctx.accounts.vault_state.load()?;
-        let cosigner = ctx
-            .accounts
-            .cosigner
-            .as_ref()
-            .ok_or(VaultError::Unauthorized)?;
-        require!(
-            vault_state.validate_multisig(&ctx.accounts.admin.key(), &cosigner.key()),
-            VaultError::Unauthorized
-        );
+        let mut named: Vec<Pubkey> = vec![ctx.accounts.admin.key()];
+        if let Some(cosigner) = ctx.accounts.cosigner.as_ref() {
+            named.push(cosigner.key());
+        }
+        authorize(
+            &vault_state,
+            &ctx.accounts.governance,
+            action,
+            &named,
+            ctx.remaining_accounts,
+        )?;
     }
 
     ctx.accounts.contest.lock_timestamp = new_lock_timestamp;
     msg!(
-        "Contest lock_timestamp set to {} for contest_id={:?} (post-lock 2-of-3 amend: {})",
+        "Contest lock_timestamp set to {} for contest_id={:?} (post-lock re-open: {})",
         new_lock_timestamp,
         ctx.accounts.contest.contest_id,
         lock_engaged

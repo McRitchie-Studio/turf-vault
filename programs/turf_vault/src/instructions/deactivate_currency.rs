@@ -1,6 +1,7 @@
 use anchor_lang::prelude::*;
-use crate::state::{VaultState, MAX_CURRENCIES};
+use crate::state::{VaultState, MAX_CURRENCIES, GovernanceConfig, gov_action};
 use crate::errors::VaultError;
+use crate::instructions::governance::authorize;
 
 /// `deactivate_currency` — flip a slot's `active` flag to 0.
 ///
@@ -30,15 +31,33 @@ pub struct DeactivateCurrency<'info> {
         mut,
         seeds = [b"vault"],
         bump = vault_state.load()?.bump,
-        constraint = vault_state.load()?.validate_multisig(&admin.key(), &cosigner.key()) @ VaultError::Unauthorized,
     )]
     pub vault_state: AccountLoader<'info, VaultState>,
+
+    /// Per-action threshold table. Required by every vault-authorized
+    /// instruction since v0.26 — see `instructions::governance::authorize`.
+    #[account(seeds = [b"governance"], bump = governance.bump)]
+    pub governance: Account<'info, GovernanceConfig>,
 }
 
 pub fn handle_deactivate_currency(
     ctx: Context<DeactivateCurrency>,
     currency_idx: u8,
 ) -> Result<()> {
+    // AUTHORIZATION — the single path (v0.26). `admin` + `cosigner` are the
+    // instruction's NAMED signers; any further signatures the stored threshold
+    // demands are taken from the leading `remaining_accounts`.
+    {
+        let vault = ctx.accounts.vault_state.load()?;
+        authorize(
+            &vault,
+            &ctx.accounts.governance,
+            gov_action::DEACTIVATE_CURRENCY,
+            &[ctx.accounts.admin.key(), ctx.accounts.cosigner.key()],
+            ctx.remaining_accounts,
+        )?;
+    }
+
     let idx = currency_idx as usize;
     require!(idx < MAX_CURRENCIES, VaultError::InvalidCurrencyIndex);
 

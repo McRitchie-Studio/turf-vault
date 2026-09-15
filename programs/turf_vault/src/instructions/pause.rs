@@ -1,6 +1,6 @@
 use anchor_lang::prelude::*;
-use crate::state::VaultState;
-use crate::errors::VaultError;
+use crate::state::{VaultState, GovernanceConfig, gov_action};
+use crate::instructions::governance::authorize;
 
 /// `pause` — emergency stop for user-facing funds operations.
 ///
@@ -38,13 +38,30 @@ pub struct PauseVault<'info> {
         mut,
         seeds = [b"vault"],
         bump = vault_state.load()?.bump,
-        constraint = vault_state.load()?.validate_multisig(&admin.key(), &cosigner.key())
-            @ VaultError::Unauthorized,
     )]
     pub vault_state: AccountLoader<'info, VaultState>,
+
+    /// Per-action threshold table. Required by every vault-authorized
+    /// instruction since v0.26 — see `instructions::governance::authorize`.
+    #[account(seeds = [b"governance"], bump = governance.bump)]
+    pub governance: Account<'info, GovernanceConfig>,
 }
 
 pub fn handle_pause(ctx: Context<PauseVault>, reason: [u8; 64]) -> Result<()> {
+    // AUTHORIZATION — the single path (v0.26). `admin` + `cosigner` are the
+    // instruction's NAMED signers; any further signatures the stored threshold
+    // demands are taken from the leading `remaining_accounts`.
+    {
+        let vault = ctx.accounts.vault_state.load()?;
+        authorize(
+            &vault,
+            &ctx.accounts.governance,
+            gov_action::PAUSE,
+            &[ctx.accounts.admin.key(), ctx.accounts.cosigner.key()],
+            ctx.remaining_accounts,
+        )?;
+    }
+
     let admin_key = ctx.accounts.admin.key();
     let cosigner_key = ctx.accounts.cosigner.key();
 

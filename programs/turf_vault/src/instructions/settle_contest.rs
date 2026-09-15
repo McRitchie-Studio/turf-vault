@@ -1,8 +1,9 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Mint, Token, TokenAccount, Transfer};
 use anchor_spl::associated_token::get_associated_token_address;
-use crate::state::{VaultState, UserAccount, Contest, ContestEntry, ContestStatus, EntryStatus};
+use crate::state::{VaultState, UserAccount, Contest, ContestEntry, ContestStatus, EntryStatus, GovernanceConfig, gov_action};
 use crate::errors::VaultError;
+use crate::instructions::governance::authorize;
 
 /// `settle_contest` — grade a contest, disburse USDC payouts.
 ///
@@ -10,17 +11,18 @@ use crate::errors::VaultError;
 /// from the contest's prize_pool PDA → the winner's USDC ATA (signed by
 /// vault_state PDA), then updates the ContestEntry and UserAccount stats.
 ///
-/// remaining_accounts pattern: per settlement, 3 accounts in order:
-///   [user_account_pda, contest_entry_pda, winner_usdc_ata]
+/// remaining_accounts pattern: the extra cosigners the stored threshold needs
+/// (`threshold - 2`, since admin + cosigner are named), THEN per settlement 3
+/// accounts in order: [user_account_pda, contest_entry_pda, winner_usdc_ata]
 ///
 /// Validation:
-///   - 2-of-3 multisig (constraint).
+///   - `gov_action::SETTLE_CONTEST` signatures (default 3), via `authorize`.
 ///   - contest.status is Open or Locked.
 ///   - payout_mint == vault_state.payout_mint (USDC pin).
 ///   - sum(payouts) <= contest.prize_pool. Entry fees are NOT included
 ///     anymore — they sit in op_rev ATAs, separate from the prize pool.
 ///   - No duplicate (wallet, entry_num) in the vec.
-///   - remaining_accounts.len() == settlements.len() * 3.
+///   - remaining_accounts.len() == extra cosigners + settlements.len() * 3.
 ///
 /// Per winner:
 ///   - SPL Transfer (PDA-signed): prize_pool → winner_usdc_ata.
@@ -35,7 +37,9 @@ use crate::errors::VaultError;
 /// on every settle TX (decided §11 Q7).
 ///
 /// VaultState is zero-copy (v0.16). Vault is read via `load()?` for
-/// signer-seed derivation; the multisig check stays in the constraint.
+/// signer-seed derivation; the threshold check runs at the top of the handler
+/// (it needs `remaining_accounts`, which an `#[account(constraint = …)]`
+/// attribute cannot see).
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
 pub struct Settlement {
     pub wallet: Pubkey,
@@ -54,9 +58,13 @@ pub struct SettleContest<'info> {
     #[account(
         seeds = [b"vault"],
         bump = vault_state.load()?.bump,
-        constraint = vault_state.load()?.validate_multisig(&admin.key(), &cosigner.key()) @ VaultError::Unauthorized,
     )]
     pub vault_state: AccountLoader<'info, VaultState>,
+
+    /// Per-action threshold table. Required by every vault-authorized
+    /// instruction since v0.26 — see `instructions::governance::authorize`.
+    #[account(seeds = [b"governance"], bump = governance.bump)]
+    pub governance: Account<'info, GovernanceConfig>,
 
     #[account(
         mut,
@@ -84,14 +92,39 @@ pub struct SettleContest<'info> {
 
     pub token_program: Program<'info, Token>,
 
-    // remaining_accounts: triples per winner.
-    //   [user_account, contest_entry, winner_usdc_ata]
+    // remaining_accounts, in two parts and IN THIS ORDER:
+    //   1. EXTRA COSIGNERS — `threshold(SETTLE_CONTEST) - 2` of them, since
+    //      `admin` and `cosigner` are already named above. Zero of them when
+    //      the threshold is 2, which is why this split is invisible to a
+    //      caller at the old threshold.
+    //   2. TRIPLES PER WINNER — [user_account, contest_entry, winner_usdc_ata]
+    //
+    // This is the ONE instruction where the authorization accounts share
+    // `remaining_accounts` with a payload, so the boundary has to be derivable
+    // rather than guessed: it is exactly `authorize`'s return value, computed
+    // from the stored threshold both sides can read. Cosigners lead because a
+    // trailing split would have to be computed from the payload length, which
+    // is caller-supplied — and an attacker-chosen boundary in an authorization
+    // check is not a boundary.
 }
 
 pub fn handle_settle_contest<'info>(
     ctx: Context<'_, '_, '_, 'info, SettleContest<'info>>,
     settlements: Vec<Settlement>,
 ) -> Result<()> {
+    // AUTHORIZATION — must run before anything reads `remaining_accounts`,
+    // because it is what tells us where the payload starts.
+    let cosigners_consumed = {
+        let vault = ctx.accounts.vault_state.load()?;
+        authorize(
+            &vault,
+            &ctx.accounts.governance,
+            gov_action::SETTLE_CONTEST,
+            &[ctx.accounts.admin.key(), ctx.accounts.cosigner.key()],
+            ctx.remaining_accounts,
+        )?
+    };
+
     let contest = &mut ctx.accounts.contest;
 
     // Audit #6: grading requires a provably-closed entry window. Settle only
@@ -124,7 +157,8 @@ pub fn handle_settle_contest<'info>(
         seen.push(key);
     }
 
-    let remaining = &ctx.remaining_accounts;
+    // Drop the leading cosigners; what is left is the winner payload.
+    let remaining = &ctx.remaining_accounts[cosigners_consumed..];
     require!(
         remaining.len() == settlements.len() * 3,
         VaultError::Unauthorized
