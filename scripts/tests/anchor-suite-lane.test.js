@@ -621,12 +621,19 @@ test("no workflow contacts a real cluster or reads a secret", () => {
 
   for (const workflow of workflowFiles()) {
     const lines = stripComments(workflow.source);
-    for (const step of executableSteps(lines)) {
+    // EVERY line, not just `run:` steps. The suite lane's cluster target lives in
+    // `env: RPC_URL` and no step spells it out — every step says "$RPC_URL" — so a
+    // step-only scan stays GREEN on the one-line edit that repoints this validator
+    // lane at devnet, which is the single most likely way this property breaks.
+    // The secrets scan below already reads `lines` for exactly that reason; the two
+    // halves of this test now agree on their surface. Comments are stripped first,
+    // so the workflows' long prose about devnet and mainnet cannot false-positive.
+    for (const line of lines) {
       const matched = REAL_CLUSTER_PATTERNS.find((pattern) =>
-        pattern.test(step.text)
+        pattern.test(line.text)
       );
       if (matched) {
-        offenders.push(`  ${workflow.rel}:${step.number}  ${step.text}`);
+        offenders.push(`  ${workflow.rel}:${line.number}  ${line.text.trim()}`);
       }
     }
     for (const line of lines) {
@@ -641,7 +648,7 @@ test("no workflow contacts a real cluster or reads a secret", () => {
     [],
     [
       "",
-      "A workflow step reaches a REAL Solana cluster:",
+      "A workflow names a REAL Solana cluster:",
       "",
       offenders.join("\n"),
       "",
