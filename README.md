@@ -26,7 +26,7 @@ Solana escrow program for contest entry fees and prize distribution. Built with 
 > |-----------|-------|----------------|
 > | `VaultState` signer set, as DEPLOYED (v0.25) | 2-of-3 / 1-of-3 | the chain — [`docs/CURRENT_DEPLOYMENT.md`](docs/CURRENT_DEPLOYMENT.md) |
 > | `GovernanceConfig` per-action thresholds (v0.26, this tree) | 1, 2 or 3 signatures per action, of up to five slots | `DEFAULT_THRESHOLDS` in [`state.rs`](programs/turf_vault/src/state.rs) |
-> | Squads V4 **upgrade authority** — who may deploy a new binary | **3-of-5** on both clusters since 2026-09-15 | [`scripts/squad.json`](scripts/squad.json), [`docs/CURRENT_DEPLOYMENT.md`](docs/CURRENT_DEPLOYMENT.md) |
+> | Squads V4 **upgrade authority** — who may deploy a new binary | **3-of-5** on both clusters since 2026-09-15 | the chain — `node scripts/squad-inventory.js`; [`docs/CURRENT_DEPLOYMENT.md`](docs/CURRENT_DEPLOYMENT.md) records a reading. [`scripts/squad.json`](scripts/squad.json) holds the addresses only, never the membership or threshold |
 >
 > So a "2-of-3" elsewhere in this repo is usually CORRECT — it describes the
 > deployed `VaultState`, not the Squad and not this tree.
