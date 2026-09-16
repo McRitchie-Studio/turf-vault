@@ -19,6 +19,10 @@ use crate::instructions::governance::authorize;
 /// For operator-funded contests, admin acts as BOTH payer and creator (Solana
 /// dedupes signers by pubkey so a single signature covers both slots).
 ///
+/// Auth: `gov_action::CREATE_CONTEST` (default 1) — the vault-signer half only.
+/// `creator` signs the USDC transfer on its own account, so the two signatures
+/// answer different questions and neither substitutes for the other.
+///
 /// Validations:
 ///   1. `payer` is a vault signer (constraint above).
 ///   2. checked sum of `payout_amounts == prize_pool`.

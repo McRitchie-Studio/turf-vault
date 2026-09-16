@@ -8,7 +8,7 @@ use crate::instructions::governance::{authorize, named_signers};
 /// the pinned treasury wallet's ATA. Per-currency (one mint per call) to
 /// keep the instruction small and avoid variable-length-account headaches.
 ///
-/// Auth: 2-of-3 multisig.
+/// Auth: `gov_action::SWEEP_OPERATOR_REVENUE` (default 3).
 ///
 /// Validations:
 ///   - multisig (constraint).

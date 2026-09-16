@@ -68,10 +68,12 @@ pub fn handle_set_contest_conclusion_time(
     }
 
     // Timestamp validity (audit #5): non-negative; and if set, must be in the
-    // FUTURE and follow a set lock. The future check matters even on a 1-of-3
-    // first set: a past conclusion would immediately conclude the contest —
-    // enabling settle (the #6 gate) and bricking set_contest_lock_time
-    // (ContestConcluded) — a single-key bypass of the finality guarantee.
+    // FUTURE and follow a set lock. The future check matters even on a FIRST
+    // set — the cheaper branch, at two signatures (`SET_CONTEST_CONCLUSION_TIME`;
+    // amending an already-set conclusion costs three): a past conclusion would
+    // immediately conclude the contest — enabling settle (the #6 gate) and
+    // bricking set_contest_lock_time (ContestConcluded) — a two-signature
+    // bypass of the finality guarantee.
     require!(new_conclusion_timestamp >= 0, VaultError::InvalidTimestamp);
     if new_conclusion_timestamp != 0 {
         require!(new_conclusion_timestamp > now, VaultError::InvalidTimestamp);

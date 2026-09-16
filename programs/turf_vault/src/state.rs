@@ -783,8 +783,11 @@ pub const DEFAULT_MINT_WINDOW_CAP: u32 = 250;
 ///
 /// Every number in here was a judgment call made in one evening, and a
 /// judgment call baked into a `const` can only be revised by a program
-/// upgrade — which for this program means assembling the Squads 2-of-3 vault,
-/// rebuilding, re-pinning the IDL hash and a devnet rehearsal. That cost is
+/// upgrade — which for this program means assembling the Squads multisig that
+/// holds this program's upgrade authority (`scripts/squad-upgrade.js`; its
+/// membership and threshold are read from the CHAIN on every run, never from a
+/// comment like this one), rebuilding, re-pinning the IDL hash and a devnet
+/// rehearsal. That cost is
 /// what turns "is three the right number for settle?" into a question worth
 /// stalling on. Stored as data, it is one transaction, so the safe default is
 /// always the cheap choice and no number here is a one-way door.
