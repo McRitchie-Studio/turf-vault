@@ -5,18 +5,23 @@
 > The LIVE signer-rotation runbook is [`SIGNER_ROTATION.md`](SIGNER_ROTATION.md),
 > which covers the v0.26 five-slot set and its two-step ceremony. The signer
 > set, threshold model and continuity rule described below were all superseded
-> by v0.26 — in particular, this document's 2-of-3 is no longer how the program
-> authorizes anything.
+> by v0.26 — in particular, this document's `VaultState` 2-of-3 is not how the
+> v0.26 SOURCE authorizes anything. v0.26 is unreleased, though, and the
+> DEPLOYED v0.25 program on both clusters still authorizes exactly this way
+> ([`CURRENT_DEPLOYMENT.md`](CURRENT_DEPLOYMENT.md)).
 
 > **HISTORICAL SUPERSEDED PLAN. DO NOT EXECUTE AS CURRENT PROCEDURE.**
-> The retired Alex Bot key `F6f8...KzhZ` has zero devnet authority in the
-> current deployment record. Current live signer facts live in
+> The retired Alex Bot key `F6f8...KzhZ` holds no authority over either LIVE
+> program or either LIVE Squad. It is NOT gone from the chain: it keeps a signer
+> slot in the orphaned devnet `Dx8u…` vault, and on mainnet it is still seated on
+> the first Squad `9dCLMZct…` and in the first program's `VaultState` — see the
+> status box below and [`CURRENT_DEPLOYMENT.md`](CURRENT_DEPLOYMENT.md). Current live signer facts live in
 > [`CURRENT_DEPLOYMENT.md`](CURRENT_DEPLOYMENT.md). `update_signers` is not
 > merely in current source — it is **on both deployed programs** (§0), so a
 > signer rotation is planned from current source, `CURRENT_DEPLOYMENT.md`, and
 > the Squads state, never by replaying this redeploy plan.
 >
-> **STATUS OF §1–§8: DRAFT / PLAN ONLY. DO NOT EXECUTE.**
+> **STATUS OF §1–§8: A RECORD, NOT A PROCEDURE. DO NOT EXECUTE.**
 > Those sections are the redeploy runbook for rotating a leaked **Alex Bot**
 > signer key off the v0.19 program. They were written before v0.20 existed, and
 > they still read as though it were unreleased. **It shipped**: v0.20 restored
@@ -27,7 +32,26 @@
 > 1. an adversarial mini-review of v0.20 (`update_signers` + this plan), and
 > 2. an explicit operator GO.
 >
-> Nothing in them has been run. The agent op token is **read-only** — every
+> **Most of it WAS run — on mainnet, on 2026-06-02.** This box used to say
+> nothing in §1–§8 had run. The chain says otherwise. Decoded at `finalized` on
+> 2026-09-16 from each account's own transaction history (times UTC):
+>
+> | Step | On chain |
+> |------|----------|
+> | §1 new Alex Bot key | `8K81w4e6…`, seated on the new Squad at 17:50:58Z |
+> | §4a new Squad, 2-of-3, new bot + Alex + Mason | multisig `4H3fP3ot…` created 17:50:58Z with exactly those three members at threshold 2 |
+> | §3 deploy to a NEW program ID | `DaFv83yo…` deployed 19:13:53Z by `8K81w4e6…` |
+> | §4b upgrade authority to the new Squad's vault | `SetAuthority` → `Bk9sS7ii…` at 19:14:10Z, 17 seconds later |
+> | §5 re-init from Alex's Phantom | `initialize` at 19:23:59Z, signed by `7ZDJp7FU…`: signers `8K81…` / `7ZDJ…` / `CytJ…`, threshold 2 |
+> | §6 re-point `turf-monster-mainnet` | its `SOLANA_PROGRAM_ID` is `DaFv83yo…`, with the IDL pinned (Heroku config, read 2026-09-16) |
+> | §7 evict the old key from `9dCLM…` | **NOT RUN.** `9dCLM…` has never had a transaction; `F6f8…` is still seated |
+> | §8 close the old program `mnzow…` | **NOT RUN.** Still open, still holding its 3.50 SOL of ProgramData rent |
+>
+> §2 was not checked. Devnet took the in-place route instead: `update_signers`
+> on 2026-06-02 and a Squads config transaction on 2026-06-06
+> ([`CURRENT_DEPLOYMENT.md`](CURRENT_DEPLOYMENT.md) § Devnet).
+>
+> The agent op token is **read-only** — every
 > step that writes a key, signs, or broadcasts is an **operator action**. **This
 > gate covers the redeploy, NOT the containment below** — the containment is one
 > already-shipped instruction, and an incident does not wait on a review of a
@@ -72,7 +96,7 @@ Two separate things contain this key:
 
 | Where | Mutable in place? | How |
 |-------|-------------------|-----|
-| Squads multisig **membership** (upgrade authority) | **YES** | Squads config tx (2-of-3) — members ARE mutable. |
+| Squads multisig **membership** (upgrade authority) | **YES** | Squads config tx, approved at THAT multisig's own threshold — 2 on both incident-era Squads (the old mainnet `9dCLM…` still reads 2), 3 on both live Squads since 2026-09-15 (`node scripts/squad-inventory.js`). Members ARE mutable. |
 | The deployed program's **VaultState.signers** | **YES on every program deployed today**; **NO** on the v0.19 program this plan was written against | v0.20 restored `update_signers` (2-of-3), and it has shipped in every release since. On v0.19 the set was immutable, because v0.16 had removed the instruction. |
 
 Because the **v0.19** program could not rotate its own `VaultState.signers`,
@@ -200,7 +224,8 @@ reduction.**
    it. This is hygiene, not containment: it constrains **your own server**
    across every on-chain-gated op, and constrains the attacker in none of them.
 4. **Rotate the Squads membership** (procedure in §7, against the live Squads in
-   `scripts/squad.json` — §7's `9dCLM…` is the historical multisig). Step 2
+   `scripts/squad.json` — §7's `9dCLM…` is the historical multisig, historical
+   but never retired: the old key is still seated on it). Step 2
    moves the vault signer set only; the leaked key remains a Squads member, and
    so a partial route to the program's **upgrade** authority, until this runs.
    Two authorities, two transactions. Treat this and any old-program close (§8)
@@ -487,6 +512,8 @@ new program at a tainted authority.
 ```bash
 # 4a. (Recommended) Create the new Squads 2-of-3 via https://app.squads.so
 #     (mainnet). Members: NEW alex_bot, alex 7ZDJ, mason Cyt. Threshold 2.
+#     EXECUTED 2026-06-02 17:50:58Z as multisig 4H3fP3ot…, created exactly so.
+#     That same Squad has read 3-of-5, with different members, since 2026-09-15.
 #     Record the new multisigPda + vaultPda at scripts/squad.json's TOP LEVEL
 #     (that file has no `mainnet` block — see the Identities note above).
 
@@ -590,24 +617,29 @@ heroku run 'bin/rails runner "puts Solana::Vault.new.read_vault_state.inspect"' 
 > `Bk9sS7iiSRL18vuo2KVzkeGw7EekKqxMCjrdoyGGdJm` (`scripts/squad.json`, the live
 > top-level block). `BW13kgfiG2koFn3WRkte21NW9TFygsD1ge2fNJdjH6kC` is the
 > **devnet** vault PDA (`CURRENT_DEPLOYMENT.md` § Devnet, and squad.json's
-> `_devnet_reference`); the `Identities` section above already lists it as the
+> `devnet` block); the `Identities` section above already lists it as the
 > devnet substitution. The vault's **signer set** is a different authority
 > entirely, changed by a different transaction: `update_signers` against
 > `VaultState`, never a Squads proposal.
 >
-> **But it is the same three keys — verify that before you rely on it.** The
-> Squads membership is `8K81…` (Alex Bot), `7ZDJ…` (Alex), `Cyt…` (Mason)
-> (`scripts/squad.json` `members`). The mainnet **VaultState** signer set is
-> **not recorded in this repo**: `CURRENT_DEPLOYMENT.md`'s only signer rows sit
-> under `## Devnet`, and its `## Mainnet` table has none. Read it with §0's
-> **Verifying this yourself** B before composing the rotation — chain-direct, so
-> it stays available when the consumer app is exactly what you are rotating
-> away from. Two authorities, two transactions, **one overlapping membership**:
-> a compromised key sits in BOTH,
+> **It WAS the same three keys. It is not any more — verify before you rely on
+> either set.** When this note was written, the live Squads seated `8K81…`
+> (Alex Bot), `7ZDJ…` (Alex) and `Cyt…` (Mason), the same three as `VaultState`.
+> The 2026-09-15 rotation changed the Squads and left `VaultState` alone: both
+> live Squads now read 3-of-5 with different members, `Cyt…` sits on neither, and
+> `8K81…` sits on devnet's only. Read Squads membership with
+> `node scripts/squad-inventory.js` — never from `scripts/squad.json`'s
+> `members`, which is the `VaultState` signer set `initialize-mainnet.js` writes.
+> Read the `VaultState` signer set with §0's **Verifying this yourself** B before
+> composing the rotation (`CURRENT_DEPLOYMENT.md`'s signer rows record a reading
+> of it, not the set) — chain-direct, so it stays available when the consumer
+> app is exactly what you are rotating away from. Two authorities, two
+> transactions, and a membership that overlapped at the time: a compromised key
+> sat in BOTH,
 > which is why §0 calls Alex Bot "a 1-of-3 vault signer **and** a member of the
 > Squads upgrade-authority multisig," and why **§7 exists**. Rotating the vault
-> signer set does **not** evict that key from Squads. A real compromise needs
-> both moves.
+> signer set does **not** evict a key from Squads, and the reverse holds too. A
+> real compromise needs one move per authority the key holds.
 >
 > **So a rotation today needs a script that does not exist yet.** The only
 > chain-operation scripts in `scripts/` are `initialize-mainnet.js` and
@@ -709,7 +741,8 @@ heroku run 'bin/rails runner "puts Solana::Vault.new.read_vault_state.inspect"' 
 > **It no longer names a fixed pair of people at all.** Until 2026-09-15 it read
 > `ALEX_BOT_KEY` (Xan) and `MASON_KEY` (Mason) and assumed both could drive an
 > upgrade unattended; the rotation that morning removed both from both Squads
-> multisigs and the script could not run on either cluster. It now takes a ROSTER
+> multisigs (Xan was re-seated on devnet that evening) and the script could not
+> run on either cluster. It now takes a ROSTER
 > of candidate seats per cluster, intersects it with live membership, and branches
 > on the count — so a future rotation drops a seat out of the plan instead of
 > breaking the tool. Read the roster in `scripts/lib/squad-clusters.js`. For the
@@ -719,9 +752,9 @@ heroku run 'bin/rails runner "puts Solana::Vault.new.read_vault_state.inspect"' 
 > (`7ZDJp7FU…59Tcr`) and Mason (`CytJS23p…qWjrR`)**, the two human signers in the
 > `Identities` table above, and the bot MUST NOT sign. **Confirm both against
 > the live `VaultState.signers` with §0's Verifying this yourself B BEFORE you
-> compose the transaction.** That table names the humans, not the on-chain set:
-> the mainnet vault signer set is not recorded in this repo, as "But it is the same three
-> keys — verify that before you rely on it" says above. If either key is absent
+> compose the transaction.** That table names the humans, not the on-chain set,
+> and a signer row in any document is a record of a reading, as "It WAS the same
+> three keys" says above. If either key is absent
 > from the live set, `validate_multisig` rejects the transaction with
 > `Unauthorized` (**6000**) — loud and harmless, but paid for out of the
 > rotation window, and 6000 will not tell you which of the two keys was the
@@ -779,6 +812,13 @@ Also confirm:
 
 ## §7. Rotate OLD Alex Bot out of the Squads membership  *(operator, 2-of-3)*
 
+> **Which multisig the 2-of-3 describes, and whether this ran — read on chain
+> 2026-09-16.** The heading's 2-of-3 is the OLD mainnet Squad `9dCLMZct…`, and it
+> is still correct: that multisig reads threshold 2 of `7ZDJ…`, `F6f8…` and
+> `Cyt…` today. It is not the live Squads, which read 3-of-5. **This step has not
+> run:** `9dCLM…` has never had a transaction, so the leaked key is still a
+> member.
+
 Squads members ARE mutable. The leaked key must be evicted from **every**
 Squads it's still a member of — at minimum the OLD Squads (`9dCLM…`), which
 still governs the OLD program (needed live for the §8 close vote).
@@ -802,6 +842,11 @@ Via https://app.squads.so (mainnet) on the OLD multisig 9dCLM…:
 ---
 
 ## §8. Close the OLD program to reclaim rent  *(operator, Squads 2-of-3)*
+
+> **Read on chain 2026-09-16:** "Squads 2-of-3" is the same OLD Squad
+> `9dCLMZct…`, still 2-of-3. **This step has not run:** `mnzowM2F…` is still
+> open, still upgradeable by that Squad's vault `83BXrVFB…`, and its ProgramData
+> still holds 3.50 SOL of rent.
 
 The OLD program (`mnzow…`) is now dead — nothing points at it. Close it to
 reclaim its ~3.5 SOL ProgramData rent. The close authority is the OLD program's
@@ -871,7 +916,9 @@ Prioritize a clean upgrade-authority + Squads state so §8 can execute.
       deploy. **Never run, and now moot**: v0.20 and every release since are
       deployed on both clusters. The box stays unchecked because it records
       that the review did not happen, not that it is owed.
-- [ ] Operator GO. **Never given, and it should not be — see §0.**
+- [ ] Operator GO. **Not recorded here — but the redeploy it gated landed on
+      mainnet on 2026-06-02 (the status box at the top). Do not give one for a
+      future compromise; see §0.**
 - [ ] Rehearse the full §1–§8 on **devnet** first (substitute devnet program /
       Squads / a devnet Alex Bot).
 - [ ] Hand the production rollout to **Steffon** (QA + Infra) per the standard
