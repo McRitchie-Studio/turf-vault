@@ -4,6 +4,43 @@ All notable changes to TurfVault are documented here. Format based on [Keep a Ch
 
 ## [Unreleased]
 
+### The Anchor suite runs in CI
+
+`tests/turf_vault.ts` — the only tests in this repo that EXECUTE the program —
+ran nowhere but on a developer's machine until now. The 45 cases include
+`THE EVICTION: three personal wallets remove the agent-reachable slots`, which
+proves by negative assertion that the two agent-reachable keys cannot pause the
+vault after a five-signer rotation: the doomsday property the governance rewrite
+exists for, and nothing automatic would have noticed it breaking.
+
+`.github/workflows/anchor-suite.yml` (workflow name **Anchor Suite**) now builds
+the program, starts `solana-test-validator` with the `.so` loaded at the DECLARED
+program ID, and runs the suite — on path-filtered pull requests and pushes to
+`accepted`/`release`/`main`, daily on `main`, and on demand. It is a SEPARATE
+workflow from `CI` because the studio's release guard resolves this repo's suite
+workflow by the literal name `CI` and refuses a path filter on it: a flaky
+validator lane in there would block the release sweep for every repo.
+
+**It holds no keypair.** `target/deploy/turf_vault-keypair.json` is a secret and a
+fresh checkout does not have it, so `anchor build` mints a random one and every
+test fails `DeclaredProgramIdMismatch`. The lane never deploys — genesis-loads the
+`.so` at the declared address with `--upgradeable-program` and generates an
+ephemeral wallet as the genesis mint.
+
+**Two username-registry tests were repaired, and the repair is the argument for
+the lane.** The first automated run found them refusing at `ConstraintSeeds`
+rather than at the guard they named: each passed a bad `name_key` alongside a
+`username_record` derived from the GOOD one, and Anchor validates account
+constraints before the handler body. They now derive the record from the key under
+test, so `UsernameInvalidChars` (6021) and `UsernameKeyMismatch` (6061) are what
+actually refuses. Suite result on this tree: **45 passing, 0 failing**.
+
+`scripts/tests/anchor-suite-lane.test.js` — which used to pin "no lane runs this
+suite" — is INVERTED rather than deleted: it now fails if no lane runs the suite,
+if the `CI` workflow starts running it, if the eviction case leaves the file, if a
+trigger or path filter is dropped, if the pinned `anchor-cli` stops matching
+`anchor-lang`, or if any workflow reaches a real cluster or reads a secret.
+
 **This section ships as v0.26.0, and the crate finally says so.**
 `programs/turf_vault/Cargo.toml` declared `0.25.0` until 2026-09-15 — the version
 both clusters run on chain — while this tree already carried the five-signer
