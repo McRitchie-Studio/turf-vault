@@ -34,9 +34,10 @@ rather than at the guard they named: each passed a bad `name_key` alongside a
 `username_record` derived from the GOOD one, and Anchor validates account
 constraints before the handler body. They now derive the record from the key under
 test, so `UsernameInvalidChars` (6021) and `UsernameKeyMismatch` (6061) are what
-actually refuses. Suite result when this lane landed: **45 passing, 0
-failing**; the tree now carries **46** cases. Re-derive with `grep -c 'it('` on
-`tests/turf_vault.ts` rather than quoting either figure.
+actually refuses. Suite result when this lane landed: **45 passing, 0 failing**.
+The tree now carries **46** cases and the lane reported **46 passing, 0 failing**
+on 2026-09-16. Re-derive with `grep -c 'it('` on `tests/turf_vault.ts`, and read
+the lane's own run for the result, rather than quoting either figure.
 
 `scripts/tests/anchor-suite-lane.test.js` — which used to pin "no lane runs this
 suite" — is INVERTED rather than deleted: it now fails if no lane runs the suite,

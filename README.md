@@ -399,9 +399,12 @@ RUNS THE PROGRAM. It installs a pinned Agave CLI and a pinned prebuilt
 `.so` loaded at the DECLARED program ID, and executes `tests/turf_vault.ts` —
 **46** `it()` blocks, the suite
 [`docs/VERIFICATION_MATRIX.md`](docs/VERIFICATION_MATRIX.md) is organised
-around. Last stamped there at **46 passing** on 2026-09-15; the 46th arrived
-with the `VaultPdaNotAWallet` guard the same day. Re-derive the count rather
-than quoting it — `grep -c 'it('` on that file is the measurement.
+around. **46 passing, 0 failing** — observed on 2026-09-16 by this lane itself,
+on a branch of `accepted`; the 46th case arrived with the `VaultPdaNotAWallet`
+guard. This README said 45 until then, while
+[`docs/VERIFICATION_MATRIX.md`](docs/VERIFICATION_MATRIX.md) already said 46. Two
+authorities disagreeing is worse than one being stale, so re-derive rather than
+quote: `grep -c 'it('` on the suite file, and the lane's own run for the result.
 
 | Trigger | Why |
 |---------|-----|
