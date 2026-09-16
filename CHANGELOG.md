@@ -4,6 +4,81 @@ All notable changes to TurfVault are documented here. Format based on [Keep a Ch
 
 ## [Unreleased]
 
+### Source comments stated an authority the program does not enforce
+
+PR 47 corrected `README.md`'s Auth column. It did not correct the SOURCE, so for
+one day `README.md` and `burn_entry_token.rs` disagreed and **the wrong authority
+sat closer to the code** — the header read `Auth: 1-of-3 vault signer` for an
+action `DEFAULT_THRESHOLDS` ships at **3**.
+
+Ten comments are corrected, every number re-derived from `DEFAULT_THRESHOLDS`
+rather than from the README or the previous list:
+
+| Comment | Said | Ships at |
+|---|---|---|
+| `burn_entry_token.rs` header | 1-of-3 vault signer | `BURN_ENTRY_TOKEN` 3 |
+| `burn_entry_token.rs` "Matches `mint_entry_token`" | implies 1 | mint is 1, burn is 3 |
+| `burn_entry_token.rs` seed-binding note | "a 1-of-3 vault signer can" | 3 |
+| `cancel_contest.rs` header | 2-of-3 multisig | `CANCEL_CONTEST` 3 |
+| `create_season.rs` header | 1-of-3 vault signer | `CREATE_SEASON` 3 |
+| `register_currency.rs` header | 2-of-3 multisig | `REGISTER_CURRENCY` 3 |
+| `deactivate_currency.rs` header | 2-of-3 multisig | `DEACTIVATE_CURRENCY` 3 |
+| `sweep_operator_revenue.rs` header | 2-of-3 multisig | `SWEEP_OPERATOR_REVENUE` 3 |
+| `unpause.rs` header | "Same 2-of-3 auth as `pause`" | `UNPAUSE` 3, `PAUSE` 2 |
+| `set_contest_conclusion_time.rs` | "even on a 1-of-3 first set" | first set is 2 |
+
+`unpause.rs` was the worst of them: it asserted SAMENESS with `pause`, and
+`DEFAULT_THRESHOLDS` calls that very difference "the whole asymmetry". Separately
+`state.rs` called the upgrade authority "the Squads 2-of-3 vault"; both Squads
+have been **3-of-5** since 2026-09-15, and the comment now points at
+`scripts/squad-upgrade.js`, which reads membership from the chain, instead of
+naming an arity that rots at every rotation.
+
+Headers now state an action name and a signature COUNT. `M` is per-vault and
+moves (three today, five after `docs/SIGNER_ROTATION.md`), so an `N-of-M` header
+has two independent ways to go stale and no way to announce either.
+
+**Roughly 180 other `N-of-M` mentions were deliberately left alone.** They
+describe the DEPLOYED v0.25 `VaultState` or the Squads upgrade authority, neither
+of which is this table — `governance.rs:45`, `update_signers.rs:14`/`:154` and
+`state.rs:251` are explicitly historical, and "correcting" them would replace true
+statements with false ones.
+
+### A guard pins comment authority to the threshold table
+
+`programs/turf_vault/src/auth_header_tests.rs` — 10 cases in `cargo test`
+(lane 5 of `CI` and of `bin/release-check`). `DEFAULT_THRESHOLDS` and
+`THRESHOLD_FLOORS` are linked in as the COMPILED CONSTANTS, so only the prose
+side is parsed; the table has no second transcription to drift from.
+
+It asserts that every threshold a comment states matches the table, that no
+`Auth` header expresses authority as `N-of-M`, that claimed floors match
+`THRESHOLD_FLOORS`, that `ACTION_NAMES` stays complete against
+`gov_action::COUNT`, and — the one that matters most — that **every handler
+states the authority it enforces**, read from the `gov_action::*` constants it
+passes to `authorize` in CODE.
+
+That last assertion exists because the first four did not catch the headline
+defect. A mutation run restoring `unpause`'s shipped line passed 8/8 green: it
+names no action, so the pin had nothing to compare, and it says "auth as" rather
+than "Auth:", so the ban never treated it as a header. Widening either would
+start flagging the ~180 correct mentions above, so the requirement was inverted
+to ask what a file OMITS. `the_sameness_claim_is_invisible_to_the_pin_and_the_ban`
+keeps that finding from being simplified away.
+
+`create_contest.rs` gained the one Auth header the tree was missing
+(`CREATE_CONTEST`, default 1); `settle_contest.rs` and `update_signers.rs`
+already stated theirs in prose the scanner reads.
+
+**IDL HASH MOVES, WIRE FORMAT DOES NOT.** Measured with `anchor idl build` on
+both trees: discriminators, types, errors and account layouts are byte-identical
+with `docs` stripped, but two `docs` strings change
+(`burn_entry_token.accounts[entry_token]` and `types[GovernanceConfig]`), so the
+built IDL's SHA256 moves `985ed3d7…` → `d82c40b5…`. Nothing to do now — no deploy
+is in flight and the pinned hash still matches the deployed binary — but the next
+Squad upgrade must re-pin `EXPECTED_IDL_HASH` in turf-monster from the
+freshly-built IDL, which it owes anyway.
+
 ### The Anchor suite runs in CI
 
 `tests/turf_vault.ts` — the only tests in this repo that EXECUTE the program —

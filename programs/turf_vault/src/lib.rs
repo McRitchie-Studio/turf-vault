@@ -70,6 +70,9 @@ mod governance_tests;
 #[cfg(test)]
 mod username_registry_tests;
 
+#[cfg(test)]
+mod auth_header_tests;
+
 use instructions::*;
 use state::MAX_SIGNERS;
 

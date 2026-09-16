@@ -15,7 +15,8 @@ use crate::instructions::governance::{authorize, named_signers};
 ///     preserve currency_idx stability.
 ///   - Registry full (all 16 slots occupied).
 ///
-/// Auth: 2-of-3 multisig. Adding a currency is a treasury-level operation
+/// Auth: `gov_action::REGISTER_CURRENCY` (default 3). Adding a currency is a
+/// treasury-level operation
 /// since it expands the surface that operator revenue can flow through.
 ///
 /// VaultState is zero-copy (v0.16). load_mut() for the write.

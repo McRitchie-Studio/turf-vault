@@ -4,10 +4,15 @@ use crate::instructions::governance::authorize;
 
 /// `unpause` — lift the emergency stop.
 ///
-/// Restores enter_contest{,_with_token} operations. Same 2-of-3 auth as
-/// `pause` — flipping the switch off needs the same authority as flipping
-/// it on. No time-based auto-unpause (deliberately — an attacker who can
-/// pause should not be able to wait it out).
+/// Restores enter_contest{,_with_token} operations. No time-based auto-unpause
+/// (deliberately — an attacker who can pause should not be able to wait it out).
+///
+/// Auth: `gov_action::UNPAUSE` (default 3, IMMOVABLE FLOOR 3). Deliberately NOT
+/// the same authority as `pause`, which is 2: lifting the brake costs strictly
+/// more than pulling it, so an agent able to halt the platform cannot also
+/// un-halt it. `DEFAULT_THRESHOLDS` calls that difference "the whole
+/// asymmetry", and `THRESHOLD_FLOORS` is what stops three signatures from
+/// retuning it away.
 ///
 /// VaultState is zero-copy (v0.16). load_mut() for the write.
 #[derive(Accounts)]

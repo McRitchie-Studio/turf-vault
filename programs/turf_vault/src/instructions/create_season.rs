@@ -15,7 +15,9 @@ use crate::instructions::governance::authorize;
 /// The schedule is IMMUTABLE after create — re-creating with the same
 /// `season_id` is rejected by Anchor's `init` constraint.
 ///
-/// Auth: 1-of-3 vault signer.
+/// Auth: `gov_action::CREATE_SEASON` (default 3). A season fixes the seed
+/// schedule that every entry in it is paid from, and the schedule is
+/// IMMUTABLE after create — so this is a write nobody should make alone.
 ///
 /// VaultState is zero-copy (v0.16) — load()? for the signer check.
 #[derive(Accounts)]

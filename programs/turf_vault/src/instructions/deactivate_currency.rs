@@ -17,7 +17,7 @@ use crate::instructions::governance::{authorize, named_signers};
 ///   - The operator-revenue ATA for the deactivated currency stays
 ///     drainable via `sweep_operator_revenue`.
 ///
-/// Auth: 2-of-3 multisig.
+/// Auth: `gov_action::DEACTIVATE_CURRENCY` (default 3).
 ///
 /// VaultState is zero-copy (v0.16). load_mut() for the write.
 #[derive(Accounts)]

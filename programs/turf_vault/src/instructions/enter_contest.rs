@@ -17,8 +17,8 @@ use crate::instructions::governance::authorize;
 /// with the user's encrypted keypair) — what matters is that the user's
 /// keypair signs the transaction.
 ///
-/// Auth: user signs (controls source ATA). 1-of-3 vault signer pays rent
-/// (OPSEC-024 — gates the routine op).
+/// Auth: user signs (controls source ATA), and a vault signer pays rent —
+/// `gov_action::ENTER_CONTEST` (default 1; OPSEC-024 gates the routine op).
 ///
 /// Paused: rejected with VaultPaused while the vault is paused.
 ///
