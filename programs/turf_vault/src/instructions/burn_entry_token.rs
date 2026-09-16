@@ -56,9 +56,14 @@ use crate::instructions::governance::authorize;
 /// A reader wanting provenance masks with `SOURCE_MASK`; a reader asking "burned
 /// or spent?" tests `BURNED_FLAG`.
 ///
-/// ── Auth: 1-of-3 vault signer; the owner does NOT sign ────────────────────
+/// ── Auth: `gov_action::BURN_ENTRY_TOKEN` (default 3); owner does NOT sign ──
 ///
-/// Matches `mint_entry_token`. This is deliberately the OPPOSITE of OPSEC-004's
+/// The owner-does-not-sign SHAPE matches `mint_entry_token`; the COUNT does not
+/// — minting inside the window cap takes one signature, burning takes three.
+/// `DEFAULT_THRESHOLDS` states why: a burn destroys user property, the holder
+/// never signs, and `pause` does not stop it.
+///
+/// Not signing is deliberately the OPPOSITE of OPSEC-004's
 /// ruling on `enter_contest_with_token`, and the asymmetry is sound: there, an
 /// admin-only consume could SPEND a user's token on a contest of the admin's
 /// choosing, silently converting the user's property into an entry they never
@@ -103,8 +108,9 @@ pub struct BurnEntryToken<'info> {
     /// outright: pass `(some other token, that token's own hash)` and the seeds
     /// check derives exactly that account and passes. The hash costs nothing to
     /// obtain — `source_ref` is public account data, so `sha256` of it is
-    /// computable for every voucher on chain. A 1-of-3 vault signer can
-    /// therefore burn ANY unspent voucher on the platform; `docs/KEY_ROTATION.md`
+    /// computable for every voucher on chain. Any quorum that reaches
+    /// `BURN_ENTRY_TOKEN` (three signatures) can therefore burn ANY unspent
+    /// voucher on the platform; `docs/KEY_ROTATION.md`
     /// R1b treats that as a live risk and plans the response.
     ///
     /// (The hash is an instruction arg rather than a `hash()` call inside the

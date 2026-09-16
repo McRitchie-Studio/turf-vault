@@ -11,7 +11,7 @@ use crate::instructions::governance::{authorize, named_signers};
 /// platform revenue per §11 Q1). Operator handles entrant compensation
 /// off-chain via `mint_entry_token` goodwill credits.
 ///
-/// Auth: 2-of-3 multisig.
+/// Auth: `gov_action::CANCEL_CONTEST` (default 3).
 ///
 /// Validations:
 ///   - multisig (constraint).

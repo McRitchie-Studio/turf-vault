@@ -12,8 +12,8 @@ use crate::instructions::governance::authorize;
 /// increment. Awards seeds, bumps user counters, marks the entry as
 /// token-funded via `currency_idx = u8::MAX` (sentinel — see §11 Q2).
 ///
-/// Auth: user signs (consents to token consumption — OPSEC-004).
-/// 1-of-3 vault signer pays rent (OPSEC-024).
+/// Auth: user signs (consents to token consumption — OPSEC-004), and a vault
+/// signer pays rent — `gov_action::ENTER_CONTEST` (default 1; OPSEC-024).
 ///
 /// Paused: rejected with VaultPaused while the vault is paused.
 ///
