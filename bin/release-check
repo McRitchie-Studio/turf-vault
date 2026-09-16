@@ -5,13 +5,15 @@ set -euo pipefail
 #
 # It runs, in one command, exactly the gate lanes .github/workflows/ci.yml runs:
 # the two pure-Node guards and the three Rust lanes — `cargo test` joined them on
-# 2026-09-15. The PASS line counts `${#LANES[@]}`, so the TABLE below is the
-# authority for how many there are; this sentence is a description of it. A builder
-# runs the script directly; the
-# hub's cert writers (bin/fast-check / bin/full-suite-check) run it because
-# mcritchie-studio's config/release_repos.yml names THIS SCRIPT on the turf-vault
-# row — `release_check: bin/release-check`, the same shape studio-engine and
-# solana-studio already use.
+# 2026-09-15, and this sentence went on saying "two" until 2026-09-16. THE LANES
+# TABLE BELOW IS THE AUTHORITY for how many there are: the PASS line counts
+# `${#LANES[@]}`, so the output was right the whole time and only the prose drifted.
+# Re-read the table rather than this sentence.
+#
+# A builder runs the script directly; the hub's cert writers (bin/fast-check /
+# bin/full-suite-check) run it because mcritchie-studio's config/release_repos.yml
+# names THIS SCRIPT on the turf-vault row — `release_check: bin/release-check`, the
+# same shape studio-engine and solana-studio already use.
 #
 # WHY THE SCRIPT EXISTS AT ALL (2026-09-14). Until this file landed, that registry
 # row spelled the four lanes out as a hub-side `&&` chain — a COPY of this repo's
