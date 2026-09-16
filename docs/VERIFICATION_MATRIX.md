@@ -87,17 +87,18 @@ be asserting the wrong error (above). The caveat is discharged for the whole
 file — and, unlike every previous discharge, it stays discharged without anyone
 remembering to re-run, because the lane runs on its own.
 
-Two further lanes certify this repo in the `CI` workflow, and they are the fast,
-always-run ones — they never start a validator, so they run on every push and PR
-without a path filter:
+Two further JOBS certify this repo in the `CI` workflow — `program` and
+`guards` — and they are the fast, always-run ones: they never start a
+validator, so they run on every push and PR without a path filter. Between
+them they carry five lanes:
 
 ```bash
 bin/release-check          # the five `CI` lanes, cheapest first
 ```
 
-Both Node lanes and both Rust lanes were run green on the username-registry
-tree on **2026-09-15** (`cargo test`: 48 passed; `npm run test:scripts`: 79
-passed).
+Both Node lanes and all three Rust lanes were run green on the
+username-registry tree on **2026-09-15** (`cargo test`: 48 passed;
+`npm run test:scripts`: 170 passed).
 
 `cargo test` matters more than its name suggests here. `cargo check` COMPILES
 `#[cfg(test)]` code without running it, so before this lane existed a unit test
