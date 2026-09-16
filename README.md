@@ -6,23 +6,30 @@ Solana escrow program for contest entry fees and prize distribution. Built with 
 
 **Docs index**: see [`docs/README.md`](docs/README.md) before following historical specs, audits, or generated reports.
 
-> **THE `Auth` COLUMN BELOW, THE `Architecture` BLOCK AND THE `Security`
-> SECTION STILL DESCRIBE v0.25 — THE DEPLOYED PROGRAM, NOT THIS TREE.**
-> v0.26 (Unreleased) replaces the fixed 2-of-3 / 1-of-3 model with five signer
-> slots and a per-action threshold table stored in the `governance` PDA, so
-> most thresholds written below are now wrong for the source in this repo —
-> `burn_entry_token` and `update_signers` are 3, not the 1-of-3 / 2-of-3 shown.
-> Authoritative for this tree: `DEFAULT_THRESHOLDS` in
-> [`programs/turf_vault/src/state.rs`](programs/turf_vault/src/state.rs) and the
-> instruction matrix in
-> [`docs/VERIFICATION_MATRIX.md`](docs/VERIFICATION_MATRIX.md). Authoritative
-> for the chain: [`docs/CURRENT_DEPLOYMENT.md`](docs/CURRENT_DEPLOYMENT.md).
+> **THIS PAGE DESCRIBES THE SOURCE IN THIS TREE — v0.26, UNRELEASED.** Swept
+> row by row on 2026-09-16, replacing the banner that deferred the sweep.
 >
-> **The instruction LIST is v0.25's too.** Unreleased v0.26 DELETES
-> `admin_create_user_account` and `admin_set_username` and adds four username
-> registry instructions; the rows below still show the deployed pair. The
-> "v0.26 — the username registry" subsection under
-> [Instructions](#instructions) is authoritative for the difference.
+> **The chain runs v0.25, which is a DIFFERENT PROGRAM**: a fixed
+> 2-of-3 / 1-of-3 model with no `governance` account at all. Neither authority
+> substitutes for the other — `DEFAULT_THRESHOLDS` in
+> [`programs/turf_vault/src/state.rs`](programs/turf_vault/src/state.rs) is
+> authoritative for this tree;
+> [`docs/CURRENT_DEPLOYMENT.md`](docs/CURRENT_DEPLOYMENT.md) is authoritative
+> for the chain, and
+> [`docs/VERIFICATION_MATRIX.md`](docs/VERIFICATION_MATRIX.md) is the proof
+> checklist an upgrade is read against.
+>
+> **THREE MECHANISMS SHARE THE WORD "MULTISIG" HERE, AND THEY CARRY THREE
+> DIFFERENT NUMBERS.** Read which one a sentence means before correcting it:
+>
+> | Mechanism | Arity | Where it lives |
+> |-----------|-------|----------------|
+> | `VaultState` signer set, as DEPLOYED (v0.25) | 2-of-3 / 1-of-3 | the chain — [`docs/CURRENT_DEPLOYMENT.md`](docs/CURRENT_DEPLOYMENT.md) |
+> | `GovernanceConfig` per-action thresholds (v0.26, this tree) | 1, 2 or 3 signatures per action, of up to five slots | `DEFAULT_THRESHOLDS` in [`state.rs`](programs/turf_vault/src/state.rs) |
+> | Squads V4 **upgrade authority** — who may deploy a new binary | **3-of-5** on both clusters since 2026-09-15 | [`scripts/squad.json`](scripts/squad.json), [`docs/CURRENT_DEPLOYMENT.md`](docs/CURRENT_DEPLOYMENT.md) |
+>
+> So a "2-of-3" elsewhere in this repo is usually CORRECT — it describes the
+> deployed `VaultState`, not the Squad and not this tree.
 
 ![Anchor 0.32.1](https://img.shields.io/badge/Anchor-0.32.1-blue)
 ![Solana](https://img.shields.io/badge/Solana-Devnet-purple)
@@ -40,11 +47,20 @@ TurfVault uses a server-facilitated self-custody model. User funds live in each 
 
 ```
 VaultState (PDA: "vault")
-├── signers ([Pubkey; 3]) / threshold (u8)
+├── signers ([Pubkey; 3]) + signers_ext ([Pubkey; 2])   [v0.26: FIVE slots]
+│   └── one set, read only through all_signers(); left-packed, empty = default
+├── threshold (u8)  — LEGACY. Written by initialize, read by nothing
 ├── payout_mint (USDC)
 ├── treasury_authority (Squads vault PDA)
 ├── accepted_currencies[16] (mint, op_rev_ata, kind, active)
 ├── paused
+│
+├── GovernanceConfig (PDA: "governance")                [v0.26, unreleased]
+│   ├── thresholds ([u8; 32]) — signatures required, PER ACTION
+│   └── mint_window_seconds, mint_window_cap
+│
+├── MintWindow (PDA: "mint_window" + window_index)      [v0.26, unreleased]
+│   └── minted — entry tokens minted in this window
 │
 ├── UserAccount (PDA: "user" + wallet)
 │   ├── username ([u8; 32]), seeds
@@ -89,35 +105,67 @@ VaultState (PDA: "vault")
 
 ## Instructions
 
+**How to read the `Auth` column.** A bold number is the count of DISTINCT vault
+signatures the action requires — `gov_action` thresholds from
+[`DEFAULT_THRESHOLDS`](programs/turf_vault/src/state.rs), looked up at runtime in
+the `governance` PDA by `instructions::governance::authorize`, which every
+vault-authorized instruction in the program routes through and nothing else.
+
+It is a count, not an `N-of-M`, because **M is per vault and it moves**: the
+signer set holds up to five slots (`MAX_SIGNERS`), and a vault that has not run
+the rotation ceremony still holds three — so the same `3` reads as 3-of-3 today
+and 3-of-5 after the rotation. `(floor N)` marks an IMMOVABLE floor from
+`THRESHOLD_FLOORS`, shown only where it is above 1: `set_action_threshold`
+refuses to store below it, and `threshold_for` raises a stored value up to it on
+READ, so the floor holds even against a table some future path writes without
+checking. Every other action floors at 1 and is retunable all the way down.
+
+Signatures beyond the named `admin` / `cosigner` accounts ride as LEADING
+`remaining_accounts`, exactly `required - named.len()` of them. A caller that
+does not know a threshold rose fails CLOSED — its first leading account is read
+as a cosigner, is not a signer, and the transaction is refused.
+
 | Instruction | Params | Auth | Description |
 |-------------|--------|------|-------------|
 | `initialize` | `signers, threshold, treasury_authority` | `INIT_AUTHORITY` on mainnet | Create vault, pin payout mint + treasury authority, register USDC/USDT slots |
-| `update_signers` | `new_signers` | 2-of-3 | Rotate signer pubkeys; threshold remains pinned at 2 |
-| `register_currency` | `kind` | 2-of-3 | Add a mint to the currency registry and initialize its operator-revenue ATA |
-| `deactivate_currency` | `currency_idx` | 2-of-3 | Disable a currency slot without reclaiming it |
-| `pause` | `reason: [u8; 64]` | 2-of-3 | Block `enter_contest` and `enter_contest_with_token` |
-| `unpause` | — | 2-of-3 | Clear the pause flag |
-| `create_user_account` | `wallet, username` | Permissionless payer | Create per-wallet stat/username account |
-| `set_username` | `username` | User signer | Update the wallet owner's username |
-| `admin_create_user_account` | `wallet, username` | Payer + 1-of-3 | Create a user account with reserved-prefix waiver |
-| `admin_set_username` | `username` | User signer + 1-of-3 | Set a reserved-prefix username with admin authorization |
-| `create_season` | `season_id, name, seed_schedule, quest_seeds, start_at` | 1-of-3 | Create immutable seed schedule for a season |
-| `create_contest` | `contest_id, season_id, entry_fee_by_currency, max_entries, payout_amounts, prize_pool, lock_timestamp` | 1-of-3 payer + creator | Initialize contest and fund its prize-pool ATA |
-| `set_contest_lock_time` | `new_lock_timestamp` | 1-of-3 | Set or clear the derived entry lock time |
-| `set_contest_conclusion_time` | `new_conclusion_timestamp` | 1-of-3 | Set or clear the contest conclusion timestamp |
-| `enter_contest` | `entry_num, currency_idx` | User signer + 1-of-3 payer | Paid entry: transfer user ATA funds to operator-revenue ATA |
-| `enter_contest_with_token` | `entry_num` | User signer + 1-of-3 payer | Entry funded by consuming an `EntryTokenAccount` |
-| `mint_entry_token` | `source, source_ref, source_ref_hash` | 1-of-3 | Mint an idempotent pre-purchased entry voucher |
-| `burn_entry_token` | `source_ref_hash` | 1-of-3 | Void an unspent entry voucher (operator claw-back); tombstones the account rather than closing it |
-| `grant_seeds` | `amount, kind, invitee` | 1-of-3 | Grant quest/referral seeds outside the normal entry flow |
-| `settle_contest` | `settlements: Vec<Settlement>` | 2-of-3 | Pay winners from the contest prize-pool ATA and update stats |
-| `cancel_contest` | — | 2-of-3 | Refund the live prize-pool balance to the creator |
-| `close_contest` | — | 1-of-3 | Close settled/cancelled contest accounts and reclaim rent |
-| `sweep_operator_revenue` | `amount` | 2-of-3 | Move operator-revenue funds to the pinned treasury ATA |
+| `update_signers` | `new_signers` | **3** (floor 3) | Rotate the signer set IN PLACE, up to five left-packed slots. Refuses a gap (`SignerSetTooSmall`), a duplicate (`DuplicateSigner`), and a rotation that fewer than `threshold` of the AUTHORIZING keys survive (`SignerContinuityRequired`) |
+| `init_governance` | — | **2** (`BOOTSTRAP_THRESHOLD`) | Create the `governance` PDA holding `DEFAULT_THRESHOLDS`. Takes NO arguments, which is what makes two safe — it can install only the shipped numbers. **Must run immediately after the v0.26 upgrade**: every vault-authorized instruction reads this account |
+| `set_action_threshold` | `action, value` | **3** (floor 3, via `SET_GOVERNANCE`) | Retune one action's required signature count. Refuses an unknown action, a value below that action's floor, zero or above `MAX_SIGNERS`, and a value above the vault's ACTIVE signer count |
+| `set_mint_window_policy` | `window_seconds, cap` | **3** (floor 3, via `SET_GOVERNANCE`) | Retune the entry-token mint cap: window length and per-window ceiling |
+| `register_currency` | `kind` | **3** | Add a mint to the currency registry and initialize its operator-revenue ATA |
+| `deactivate_currency` | `currency_idx` | **3** | Disable a currency slot without reclaiming it |
+| `pause` | `reason: [u8; 64]` | **2** | Block `enter_contest` and `enter_contest_with_token`. Two, not one: a brake must be easier to pull than the attack, but one leaked key must not be able to halt entries at will |
+| `unpause` | — | **3** (floor 3) | Clear the pause flag. Deliberately HARDER than pausing — nothing an agent reaches alone may lift a brake its own capture would have triggered |
+| `create_user_account` | `wallet, username, name_key` | Permissionless payer | Create per-wallet stat/username account AND claim the name. Fails `UsernameAlreadyClaimed` (6060) on a taken or reserved name, and REFUSES a `wallet` equal to the `["vault"]` PDA (`VaultPdaNotAWallet`, 6067) — otherwise an unsigned argument could mint a record that reads as a vault reservation without `reserve_username`'s three signatures |
+| `set_username` | `username, name_key` | User signer | Rename the wallet owner: claims the new record and CLOSES the one given up, refunding its rent to the wallet |
+| `overwrite_username` | `username, name_key` | **3** (floor 3) | Rename any user, **without that user's signature**. Emits `UsernameOverwritten`. Waives the reserved-prefix branch; never the charset or length bar |
+| `reserve_username` | `name_key` | **3** (floor 3) | Vault claims a free name — "add to the blocked list" |
+| `release_reserved_username` | `name_key` | **3** (floor 3) | Vault returns a name to the pool — "lift a block". Rent goes to the pinned treasury |
+| `backfill_username_record` | `name_key` | Permissionless payer | Migration only: lock the name a `UserAccount` already displays. No discretion — name and owner both come from the account's own fields |
+| `create_season` | `season_id, name, seed_schedule, quest_seeds, start_at` | **3** | Create immutable seed schedule for a season. Three because it sets the per-entry seed award with no upper bound checked |
+| `create_contest` | `contest_id, season_id, entry_fee_by_currency, max_entries, payout_amounts, prize_pool, lock_timestamp` | **1** payer + creator | Initialize contest and fund its prize-pool ATA. Dual-signer: the payer is a vault signer, the creator signs the prize-pool USDC transfer |
+| `set_contest_lock_time` | `new_lock_timestamp` | **2** — or **3** to RE-OPEN a lock that has already passed | Set or clear the derived entry lock time. The escalation is the results-known late-entry vector: once a lock has engaged, outcomes may be knowable |
+| `set_contest_conclusion_time` | `new_conclusion_timestamp` | **2** — or **3** to AMEND one already set | Set or clear the contest conclusion timestamp. Amending re-arms the re-open above, so it carries the same number |
+| `enter_contest` | `entry_num, currency_idx` | User signer + **1** | Paid entry: transfer user ATA funds to operator-revenue ATA |
+| `enter_contest_with_token` | `entry_num` | User signer + **1** | Entry funded by consuming an `EntryTokenAccount` |
+| `mint_entry_token` | `source, source_ref, source_ref_hash, window_index` | **1** within the window cap, **3** above it | Mint an idempotent pre-purchased entry voucher. The cap raises the BAR, it does not close the door — v0.26 closed the uncapped one-signature value-creation hole |
+| `burn_entry_token` | `source_ref_hash` | **3** | Void an unspent entry voucher (operator claw-back); tombstones the account rather than closing it. Three because it destroys user property, the holder never signs, and `pause` does not stop it |
+| `grant_seeds` | `amount, kind, invitee` | **1** | Grant quest/referral seeds outside the normal entry flow. An `INVITE_FRIEND` grant must also name the invitee's own `UserAccount`, which must have entered a contest |
+| `settle_contest` | `settlements: Vec<Settlement>` | **3** | Pay winners from the contest prize-pool ATA and update stats. Extra cosigners LEAD `remaining_accounts`, ahead of the winner triples |
+| `cancel_contest` | — | **3** | Refund the live prize-pool balance to the creator |
+| `close_contest` | — | **2** | Close settled/cancelled contest accounts and reclaim rent. v0.26: rent is paid to the pinned TREASURY, not to whichever signer called it |
+| `sweep_operator_revenue` | `amount` | **3** | Move operator-revenue funds to the pinned treasury ATA |
+
+`ADMIN_USERNAME` (action id 17) is RETIRED — both instructions that read it,
+`admin_create_user_account` and `admin_set_username`, were deleted in v0.26. The
+id itself can never be reused: it indexes a stored threshold table, so
+re-pointing it would hand a new action whatever number a live account happens to
+hold there.
 
 ### v0.26 (Unreleased) — the username registry
 
-Not in the table above, which describes the deployed v0.25 program.
+The four registry instructions are IN the table above; this section is the
+mechanism behind them. The DEPLOYED v0.25 program has none of it.
 
 **One mechanism, not two.** A small PDA per name, keyed on the lowercased form,
 holding the owner: absent means the name is free, a wallet owner means that
@@ -126,13 +174,6 @@ So the blocked list is simply the set of names the vault claimed first — no
 list to walk, nothing to resize, and each name pays its own rent. It is the
 same init-as-a-lock technique `mint_entry_token` and `grant_seeds` have used
 since v0.19, applied to names.
-
-| Instruction | Params | Auth | Description |
-|-------------|--------|------|-------------|
-| `overwrite_username` | `username, name_key` | **3** (floor 3) | Rename any user, **without that user's signature**. Emits `UsernameOverwritten`. Waives the reserved-prefix branch; never the charset or length bar |
-| `reserve_username` | `name_key` | **3** (floor 3) | Vault claims a free name — "add to the blocked list" |
-| `release_reserved_username` | `name_key` | **3** (floor 3) | Vault returns a name to the pool — "lift a block". Rent goes to the pinned treasury |
-| `backfill_username_record` | `name_key` | Permissionless payer | Migration only: lock the name a `UserAccount` already displays. No discretion — name and owner both come from the account's own fields |
 
 **Changed:** `create_user_account` and `set_username` each take a `name_key`
 (the username lowercased and zero-padded to 32 bytes — the record's PDA seed,
@@ -174,13 +215,42 @@ Settlement accounts are passed as `remaining_accounts` — triples of `[user_acc
 ### VaultState
 | Field | Type | Description |
 |-------|------|-------------|
-| `signers` | [Pubkey; 3] | The three multisig signers |
-| `threshold` | u8 | Required sigs for treasury ops (2) |
+| `signers` | [Pubkey; 3] | Signer slots 1-3. Historically the WHOLE set; since v0.26 it is the first half of one set. **Offset 0 — never move, never widen** |
+| `threshold` | u8 | **LEGACY.** Written once by `initialize` and read by NOTHING. It was decorative for the program's entire life: the v0.16 `validate_multisig(s1, s2)` it was meant to feed was structurally exactly two signatures and never looked at this field. Retained only because moving it would shift every field below it |
 | `payout_mint` | Pubkey | Pinned USDC payout mint |
 | `treasury_authority` | Pubkey | Squads vault PDA that owns treasury sweep destination |
 | `accepted_currencies` | [AcceptedCurrency; 16] | Registry of accepted entry currencies and operator-revenue ATAs |
+| `signers_ext` | [Pubkey; 2] | *(v0.26, unreleased)* Signer slots 4-5, appended into what was `_reserved`, so every offset above is untouched and the account size is unchanged. `Pubkey::default()` means EMPTY — which is how a vault deployed but not yet rotated reads |
 | `bump` | u8 | PDA bump seed |
-| `paused` | bool | Circuit breaker — when true, user-facing ops are blocked. Set via `pause` / cleared via `unpause` (both 2-of-3) |
+| `paused` | u8 | Circuit breaker — when non-zero, user-facing ops are blocked. `u8` rather than `bool` for Pod safety (the account is `zero_copy`). Set via `pause` (2 signatures) and cleared via `unpause` (3, floored) — deliberately asymmetric |
+
+**The signer set is `signers` ++ `signers_ext`, and only `all_signers()` knows
+that.** Slots are LEFT-PACKED — `update_signers` refuses a set with a gap — so
+"empty" can only ever be a suffix and no live key can be silently skipped.
+`MAX_SIGNERS` is **5**, and it is a hard ceiling set by the ACCOUNT, not a
+policy choice: `VaultState` had exactly 64 reserved bytes and a `Pubkey` is 32,
+so the two appended slots consume the reserve precisely. `_reserved` is now
+`[u8; 0]` — there is nothing left to carve, and a new field needs its own PDA.
+
+### GovernanceConfig *(v0.26, unreleased)*
+| Field | Type | Description |
+|-------|------|-------------|
+| `thresholds` | [u8; 32] | Required signature count per `gov_action`. A ZERO means "never set" and reads back as `DEFAULT_THRESHOLDS`; `threshold_for` also raises a stored value up to that action's `THRESHOLD_FLOORS` entry on READ |
+| `mint_window_seconds` | i64 | Length of a mint-cap window. Default 86,400 (one day) |
+| `mint_window_cap` | u32 | Entry tokens mintable per window before `mint_entry_token` escalates from 1 signature to 3. Default 250 |
+| `bump` | u8 | PDA bump seed |
+
+The table is 32 wide against `gov_action::COUNT` of **25**, so a program upgrade
+can add actions without resizing the account. Action ids are PERMANENT — they
+index a stored table, so renumbering one silently re-points a live threshold at a
+different action. Append at the end; never renumber.
+
+### MintWindow *(v0.26, unreleased)*
+| Field | Type | Description |
+|-------|------|-------------|
+| `window_index` | i64 | `unix_timestamp.div_euclid(mint_window_seconds)` — also the PDA seed, stored so the account is self-describing off-chain |
+| `minted` | u32 | Entry tokens minted in this window |
+| `bump` | u8 | PDA bump seed |
 
 ### UserAccount
 | Field | Type | Description |
@@ -239,7 +309,7 @@ Settlement accounts are passed as `remaining_accounts` — triples of `[user_acc
 ```
 Create → Enter → Settle → Close
   │        │        │        │
-  │        │        │        └─ Reclaim rent (admin)
+  │        │        │        └─ Reclaim rent (to the pinned treasury)
   │        │        └─ Assign ranks, credit winners (admin)
   │        └─ Transfer entry fee to operator revenue (user)
   └─ Set fee, max entries, payout tiers, pre-fund prize pool (admin/creator)
@@ -248,7 +318,7 @@ Create → Enter → Settle → Close
 1. **Create**: Admin creates a contest with per-currency entry fees, max entries, payout amounts, the bound season, and a pre-funded USDC `prize_pool`
 2. **Enter**: Users pay from their own ATA into operator revenue, or redeem an entry token. There is no vault balance debit
 3. **Settle**: Admin submits a settlement array with rank + payout per entry. Winners receive direct USDC transfers from the prize-pool ATA. Total payouts are capped by `prize_pool`
-4. **Close**: Admin closes the settled contest account, reclaiming rent to the admin wallet
+4. **Close**: A vault signer closes the settled contest account. Residual prize-pool dust sweeps to operator revenue first; the reclaimed rent goes to the pinned treasury authority (v0.26 — before that, to whichever signer called it)
 
 ## Token Support
 
@@ -312,7 +382,7 @@ and on every push to `main`, `release` and `accepted`:
 | `program` | `cargo clippy -- -D clippy::correctness` | code clippy classes as outright wrong |
 | `program` | `cargo test --workspace --locked` | a `VaultState` field offset moved, a governance threshold or floor changed, or the reserved error block stopped ending at 6059. Added 2026-09-15 — `cargo check` above COMPILES `#[cfg(test)]` code without running it, so these assertions could have reported green having never executed |
 | `guards` | `npm run check:doc-op-refs` | a 1Password vault reference in this repo's prose has gone stale |
-| `guards` | `npm run test:scripts` | a shape regression in the deploy scripts, the Anchor suite lane being removed or moved into this workflow, or the eviction test leaving the suite — `npm run test:scripts` reports **170 passing**, measured 2026-09-15 (155 top-level `test()` cases across 12 files; the rest are subtests). Re-derive rather than quote it. 26 cover `scripts/lib/mainnet-config.js` and `scripts/initialize-mainnet.js`; 5 of those 26 drive the real checked-in `scripts/squad.json` and the other 21 are fixture mutations or a source read — the split is measured in [What it covers](docs/VERIFICATION_MATRIX.md#what-it-covers). One case self-skips here, where no `node_modules` is installed. 24 more grade the Squads upgrade path (the signer planner, the script's text, and the script executed end to end against stubs), 10 are the Anchor-suite lane guard below, and 6 hold `bin/release-check` identical to this table and refuse a validator lane in it |
+| `guards` | `npm run test:scripts` | a shape regression in the deploy scripts, the Anchor suite lane being removed or moved into this workflow, or the eviction test leaving the suite — `npm run test:scripts` reports **170 passing**, measured 2026-09-15 (155 top-level `test()` cases across 12 files; the rest are subtests). Re-derive rather than quote it. 26 cover `scripts/lib/mainnet-config.js` and `scripts/initialize-mainnet.js`; 5 of those 26 drive the real checked-in `scripts/squad.json` and the other 21 are fixture mutations or a source read — the split is measured in [What it covers](docs/VERIFICATION_MATRIX.md#what-it-covers). Three cases self-skip here, where no `node_modules` is installed — each guarded by its own `t.skip` on an absent dependency tree, in `mainnet-config.test.js`, `vault-console.test.js` and `squad-clusters.test.js`. 24 more grade the Squads upgrade path (the signer planner, the script's text, and the script executed end to end against stubs), 10 are the Anchor-suite lane guard below, and 6 hold `bin/release-check` identical to this table and refuse a validator lane in it |
 
 The `CI` workflow is **build-and-check only** — it never starts a validator,
 holds a keypair, or spends SOL. The Anchor Suite lane below does start a
@@ -327,9 +397,14 @@ workflow in this repo.
 RUNS THE PROGRAM. It installs a pinned Agave CLI and a pinned prebuilt
 `anchor-cli`, runs `anchor build`, starts `solana-test-validator` with the built
 `.so` loaded at the DECLARED program ID, and executes `tests/turf_vault.ts` —
-45 `it()` blocks, the suite
+**46** `it()` blocks, the suite
 [`docs/VERIFICATION_MATRIX.md`](docs/VERIFICATION_MATRIX.md) is organised
-around. Measured 2026-09-15: **45 passing, 0 failing**.
+around. **46 passing, 0 failing** — observed on 2026-09-16 by this lane itself,
+on a branch of `accepted`; the 46th case arrived with the `VaultPdaNotAWallet`
+guard. This README said 45 until then, while
+[`docs/VERIFICATION_MATRIX.md`](docs/VERIFICATION_MATRIX.md) already said 46. Two
+authorities disagreeing is worse than one being stale, so re-derive rather than
+quote: `grep -c 'it('` on the suite file, and the lane's own run for the result.
 
 | Trigger | Why |
 |---------|-----|
@@ -372,13 +447,15 @@ or the deploy scripts rather than adding a workflow:
 - **`cargo clippy -D warnings`** — 4 pre-existing `style`/`complexity` findings,
   two of which need real logic changes. They still print as warnings in the
   `program` job, so the debt stays visible.
-- **`npm run lint`** (Prettier) — **22 files are unformatted** (measured
-  2026-09-15; 20 of them on `accepted` before that day's upgrade-path work), so
-  wiring this lane is a whole-tree reformat, not a tidy-up. The figure recorded
-  here until 2026-09-15 said "two scripts", which had been wrong for long enough
-  that nobody re-measured; the accompanying 219→326-line claim about
-  `scripts/squad-upgrade.js` described a file the rewrite replaced. Re-measure
-  with `npm run lint` rather than quoting either. Its glob covers
+- **`npm run lint`** (Prettier) — **25 files are unformatted**, which is what
+  `npm run lint`'s own summary line says (measured 2026-09-16; 22 on
+  2026-09-15, 20 on `accepted` before that day's upgrade-path work), so wiring
+  this lane is a whole-tree reformat, not a tidy-up. This figure has now been
+  wrong twice: it read "two scripts" until 2026-09-15, having been stale long
+  enough that nobody re-measured, and the accompanying 219→326-line claim about
+  `scripts/squad-upgrade.js` described a file the rewrite replaced. It drifts
+  because it counts FILES in a growing tree, so **re-measure rather than quote
+  it** — `npm run lint` prints the count itself. Its glob covers
   `tests/turf_vault.ts`, which the Anchor Suite lane already type-checks on the
   way to running it — so wiring Prettier would buy formatting, not coverage.
 
@@ -432,8 +509,11 @@ Each deploy is tagged (e.g. `v0.1.0`) and documented in the changelog. See `Carg
 
 ## Security
 
-- **2-of-3 multisig**: Treasury/governance ops (`settle_contest`, `cancel_contest`, `sweep_operator_revenue`, currency registry changes, pause/unpause, signer rotation) require two distinct signers; routine ops require any 1-of-3
-- **Squads upgrade authority**: Program upgrades require a Squads V4 cosign (OPSEC-002) — no single-key code deployment. Both clusters are 3-of-5 since 2026-09-15; on mainnet the agent holds only two seats, so a mainnet upgrade cannot complete without Mr. McRitchie
+- **Five signer slots, per-action thresholds** *(v0.26, this tree)*: the vault holds up to five signer slots (`MAX_SIGNERS`), and each action's required signature count is DATA in the `governance` PDA, not a shape baked into the code. Anything that MOVES MONEY or CHANGES WHO GOVERNS needs **3** — `settle_contest`, `cancel_contest`, `sweep_operator_revenue`, the currency registry, `create_season`, `burn_entry_token`, an over-cap `mint_entry_token`, and the three discretionary username-registry actions (`overwrite_username`, `reserve_username`, `release_reserved_username` — `backfill_username_record` is permissionless because it has no discretion). Routine facilitation (`create_contest`, `enter_contest`, an in-cap `mint_entry_token`, `grant_seeds`) needs **1**. Every number is retunable by transaction rather than by redeploy, which is what made picking the safe default cheap
+- **The brake is asymmetric**: `pause` needs **2** and `unpause` needs **3**. A captured system can pull the brake but never release it, and a single leaked key cannot grief the business by halting entries at will
+- **Immovable floors**: the `UPDATE_SIGNERS`, `UNPAUSE` and `SET_GOVERNANCE` actions, plus those same three username-registry actions, are floored at **3** by `THRESHOLD_FLOORS` (`SET_GOVERNANCE` is what `set_action_threshold` and `set_mint_window_policy` authorize against, so the floors cannot be lowered by lowering the thing that guards them). Without a floor, three signatures could lower `update_signers` to two and the next day two agent-reachable keys rotate the operator out of his own vault — the precise attack the governance change exists to close, reintroduced through the retuning mechanism. The floor is applied on READ, so it holds even against a table written by a path that forgot to check
+- **What the chain runs today is NOT this**: the deployed v0.25 program is a fixed **2-of-3** for treasury ops and **1-of-3** for routine ones, and its `threshold` field is never read — `validate_multisig` was structurally exactly two signatures. See [`docs/CURRENT_DEPLOYMENT.md`](docs/CURRENT_DEPLOYMENT.md)
+- **Squads upgrade authority** — a THIRD mechanism, and a different arity: program upgrades require a Squads V4 cosign (OPSEC-002), no single-key code deployment. Both clusters are **3-of-5** since 2026-09-15, with different membership; on mainnet the agent holds only two seats, so a mainnet upgrade cannot complete without Mr. McRitchie
 - **PDA verification**: Settlement uses manual PDA derivation to verify all remaining accounts
 - **Checked arithmetic**: All math uses `checked_add`/`checked_sub` with overflow errors
 - **Payout cap**: Settlement validates total payouts ≤ `prize_pool`

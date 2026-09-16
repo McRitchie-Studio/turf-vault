@@ -36,7 +36,7 @@
 # The split is deliberate in both directions: `CI` stays the fast, always-runs,
 # never-filtered gate the release guard reads; this lane is the slow, filtered,
 # deep one. bin/release-check (the local cert the studio's bin/fast-check runs for
-# this repo) runs `CI`'s four lanes and NOT this one — see the carve-out test in
+# this repo) runs `CI`'s five lanes and NOT this one — see the carve-out test in
 # scripts/tests/release-check-covers-ci.test.js. A local cert that demanded a
 # validator would fail COULD NOT RUN on every machine that has no Solana
 # toolchain, which is most of them.
@@ -73,7 +73,7 @@
 # WHAT WE TRADED AWAY, stated plainly: a PR that touches only scripts/**,
 # docs/**, migrations/** or prose never executes the program. We accept that,
 # because those paths cannot change what the suite asserts — and `CI` (which is
-# never filtered) still runs its four lanes over every one of them.
+# never filtered) still runs its five lanes over every one of them.
 #
 # NO `concurrency:` BLOCK, for the reason ci.yml records: a cancelled run carries
 # the conclusion `cancelled`, every CI reader in this ecosystem folds `cancelled`

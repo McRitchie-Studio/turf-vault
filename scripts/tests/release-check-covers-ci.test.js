@@ -14,7 +14,7 @@
  * THE DUPLICATION IS DELIBERATE AND THIS FILE IS ITS PRICE. CI runs `guards` and
  * `program` as two parallel jobs with separate runners and a Rust-only cache; a
  * single job calling the script would serialise the sub-second Node lanes behind a
- * cold Rust compile and collapse four named steps into one log. So the two stay
+ * cold Rust compile and collapse five named steps into one log. So the two stay
  * separate and this test makes them agree — and, unlike the hub-side tripwire it
  * replaces, it needs no particular checkout on disk: it is pure `node:test`, so it
  * runs in CI's own `guards` lane (`npm run test:scripts`) on every push and PR, and
