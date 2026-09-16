@@ -444,13 +444,15 @@ or the deploy scripts rather than adding a workflow:
 - **`cargo clippy -D warnings`** — 4 pre-existing `style`/`complexity` findings,
   two of which need real logic changes. They still print as warnings in the
   `program` job, so the debt stays visible.
-- **`npm run lint`** (Prettier) — **22 files are unformatted** (measured
-  2026-09-15; 20 of them on `accepted` before that day's upgrade-path work), so
-  wiring this lane is a whole-tree reformat, not a tidy-up. The figure recorded
-  here until 2026-09-15 said "two scripts", which had been wrong for long enough
-  that nobody re-measured; the accompanying 219→326-line claim about
-  `scripts/squad-upgrade.js` described a file the rewrite replaced. Re-measure
-  with `npm run lint` rather than quoting either. Its glob covers
+- **`npm run lint`** (Prettier) — **25 files are unformatted**, which is what
+  `npm run lint`'s own summary line says (measured 2026-09-16; 22 on
+  2026-09-15, 20 on `accepted` before that day's upgrade-path work), so wiring
+  this lane is a whole-tree reformat, not a tidy-up. This figure has now been
+  wrong twice: it read "two scripts" until 2026-09-15, having been stale long
+  enough that nobody re-measured, and the accompanying 219→326-line claim about
+  `scripts/squad-upgrade.js` described a file the rewrite replaced. It drifts
+  because it counts FILES in a growing tree, so **re-measure rather than quote
+  it** — `npm run lint` prints the count itself. Its glob covers
   `tests/turf_vault.ts`, which the Anchor Suite lane already type-checks on the
   way to running it — so wiring Prettier would buy formatting, not coverage.
 

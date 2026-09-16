@@ -330,7 +330,9 @@ not earned, so the gaps below are kept even where they shrank.
   to executing it, so a syntax error in that file now reddens the Anchor Suite
   lane instead of reaching `accepted` green — but only on the paths that trigger
   the lane. `npm run lint` (Prettier) is still not wired, for the reason
-  [`../README.md`](../README.md) records: 22 files are unformatted.
+  [`../README.md`](../README.md) records: 25 files are unformatted as of
+  2026-09-16, a count that drifts with the tree — re-measure with
+  `npm run lint`, which prints it.
 - **A Rust test lane exists as of v0.26, and it was needed.** This bullet
   previously read "a Rust test lane would add nothing today — `programs/`
   carries zero `#[test]` functions", which was true when written and stopped
