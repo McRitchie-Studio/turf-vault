@@ -29,6 +29,18 @@
  *     script is what a builder runs before a PR; CI is what the PR is judged by.
  *     A lane only one of them has is a lane nobody can trust.
  *
+ * IT COMPARES AGAINST ci.yml ALONE, AND THAT IS NOW A DELIBERATE SCOPE. Since
+ * 2026-09-15 this repo has a SECOND workflow — .github/workflows/anchor-suite.yml,
+ * name "Anchor Suite" — which boots a validator and runs tests/turf_vault.ts. Its
+ * lane is deliberately NOT in bin/release-check and must not be added: a local
+ * cert that demanded solana-test-validator, anchor-cli and an SBF build would
+ * fail COULD NOT RUN on every machine without the Solana toolchain, which is most
+ * of them, and would turn a ~1s cert into a ~10-minute one. "bin/release-check
+ * runs exactly what CI runs" therefore means the `CI` workflow — the fast,
+ * unfiltered, always-run gate the studio's release guard resolves by that literal
+ * name. The carve-out is asserted below rather than left as an omission, because
+ * an omission is indistinguishable from an oversight.
+ *
  * IT READS COMMANDS, NOT PROSE. The workflow is comment-stripped and its `run:`
  * values (including block scalars) are extracted before anything is compared, so
  * rewording ci.yml's commentary — which argues at length about lanes it deliberately
@@ -224,6 +236,37 @@ test("bin/release-check runs no gate lane CI does not", () => {
       "A lane only the script has is a gate `accepted` is never held to: a builder",
       "pays for it locally and nothing enforces it on the branch that ships. Either",
       "wire it into ci.yml's `guards` or `program` job, or take it out of the table.",
+      "",
+    ].join("\n")
+  );
+});
+
+test("bin/release-check does not adopt the validator lane", () => {
+  // The carve-out, asserted. A lane that needs a validator belongs in
+  // .github/workflows/anchor-suite.yml and nowhere else: this script is what the
+  // hub's bin/fast-check runs as the WHOLE gate for this repo, on whatever
+  // machine a builder happens to be on.
+  const heavy = scriptLanes().filter((lane) =>
+    /\banchor\s+(?:run\s+)?test\b|\bts-mocha\b|\bsolana-test-validator\b|\banchor\s+build\b/i.test(
+      lane
+    )
+  );
+
+  assert.deepEqual(
+    heavy,
+    [],
+    [
+      "",
+      `${SCRIPT_REL} now declares a validator-backed lane:`,
+      "",
+      heavy.map((lane) => `  ${lane}`).join("\n"),
+      "",
+      "That makes every local cert for this repo depend on solana-test-validator,",
+      "anchor-cli and an SBF build — so it fails COULD NOT RUN on any machine",
+      "without the Solana toolchain, and takes ~10 minutes where it took ~1s on",
+      "the ones where it works. The Anchor suite runs in",
+      ".github/workflows/anchor-suite.yml, which is judged by GitHub on the PR and",
+      "on `accepted`, not by a builder's laptop.",
       "",
     ].join("\n")
   );

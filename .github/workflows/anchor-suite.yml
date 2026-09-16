@@ -1,0 +1,301 @@
+# THE ANCHOR SUITE LANE — the only automated thing in this repo that RUNS THE
+# PROGRAM. Every other lane compiles it, lints it, or reads prose about it;
+# this one boots a validator, loads the built `.so` at the declared program ID,
+# and executes tests/turf_vault.ts against a real chain.
+#
+# WHAT IT IS ACTUALLY GUARDING. The suite's crown jewel is
+# `THE EVICTION: three personal wallets remove the agent-reachable slots`
+# (tests/turf_vault.ts). It rotates the vault to a five-signer set, reads
+# VaultState back OFF CHAIN, and then proves with a NEGATIVE assertion that the
+# two agent-reachable keys can no longer pause the vault. That is the doomsday
+# property the whole five-signer design exists for — "say an attacker gets my
+# system and admin wallets; I need to ice them" — and until this file existed
+# nothing but a person typing `anchor test` would ever have noticed it break.
+# scripts/tests/anchor-suite-lane.test.js pins that this lane exists AND that
+# the eviction test is still in the file this lane runs.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# WHY THIS IS A SEPARATE WORKFLOW AND NOT A THIRD JOB IN ci.yml
+#
+# Two hard reasons, neither of them taste:
+#
+#   1. THE NAME `CI` IS LOAD-BEARING. Release::AcceptedCertification resolves an
+#      app repo's suite workflow to the literal workflow NAME "CI" and refuses to
+#      promote `accepted` when that workflow is not green. A validator lane is the
+#      flakiest thing in this repo by a wide margin (network installs, a local
+#      validator, ~10 minutes of wall clock). Put it in "CI" and one bad runner
+#      re-blocks `bin/release prepare` for the whole ecosystem — the exact failure
+#      ci.yml's header spends three paragraphs refusing to introduce.
+#   2. A PATHS FILTER IS ILLEGAL IN `CI` AND CORRECT HERE.
+#      Release::AcceptedCertification::PATH_FILTER_KEYS REFUSES a suite workflow
+#      carrying `paths:`/`paths-ignore:`, because a filtered workflow does not run
+#      at all and "no run" reads like "nothing to fail". This workflow certifies
+#      nothing on the release path, so it is free to filter — and it must, because
+#      a docs PR has no business paying ten minutes of validator time.
+#
+# The split is deliberate in both directions: `CI` stays the fast, always-runs,
+# never-filtered gate the release guard reads; this lane is the slow, filtered,
+# deep one. bin/release-check (the local cert the studio's bin/fast-check runs for
+# this repo) runs `CI`'s four lanes and NOT this one — see the carve-out test in
+# scripts/tests/release-check-covers-ci.test.js. A local cert that demanded a
+# validator would fail COULD NOT RUN on every machine that has no Solana
+# toolchain, which is most of them.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# THE TRIGGER, AND WHAT IT BUYS AND COSTS
+#
+# Four triggers, chosen against one constraint: A LANE THAT FLAKES GETS IGNORED,
+# and an ignored lane is worse than no lane because it also launders confidence.
+#
+#   * pull_request, PATH-FILTERED — the coverage that matters. The suite observes
+#     program behaviour, so the only changes it can catch are changes to the
+#     program, to the suite, to the toolchain that builds them, or to the client
+#     libraries the suite drives. Those paths are listed below and nothing else
+#     is. A docs/scripts/RUNBOOK PR gets NO run here (not a skipped one — a
+#     filtered workflow never starts), which is correct: there is nothing for it
+#     to prove, and this workflow is not the one any gate reads for certification.
+#   * push to accepted/release/main, same filter — review merges PRs onto
+#     `accepted`, producing a COMBINATION no PR run ever executed. That rung is
+#     what `bin/release prepare` promotes. Same argument ci.yml makes for its own
+#     push trigger, and it applies with more force here: a merge conflict resolved
+#     in a constraint is exactly the kind of break only an executing chain sees.
+#   * schedule, daily — THE BELT. Every trigger above is change-driven, so in a
+#     week where nobody touches programs/** the eviction test would not run at
+#     all, and the repo would drift back to "proved by a stamp somebody took once".
+#     A cron run holds `main` — the tip closest to what mainnet is upgraded from —
+#     to the suite unconditionally. (GitHub runs scheduled workflows on the
+#     DEFAULT branch only; that is `main`, which is the branch we want watched.)
+#   * workflow_dispatch — the rollout gate's hand. docs/VERIFICATION_MATRIX.md
+#     makes a hand-run suite leg 3 of the compensating control before a Squads
+#     upgrade. This button is that run, on a clean machine, with a log that is
+#     kept.
+#
+# WHAT WE TRADED AWAY, stated plainly: a PR that touches only scripts/**,
+# docs/**, migrations/** or prose never executes the program. We accept that,
+# because those paths cannot change what the suite asserts — and `CI` (which is
+# never filtered) still runs its four lanes over every one of them.
+#
+# NO `concurrency:` BLOCK, for the reason ci.yml records: a cancelled run carries
+# the conclusion `cancelled`, every CI reader in this ecosystem folds `cancelled`
+# as RED, and a superseded run then looks identical to a genuine failure. Runner
+# minutes are cheaper than a gate that cries wolf.
+name: Anchor Suite
+
+# THE PATH LIST IS WRITTEN TWICE ON PURPOSE. GitHub Actions' workflow parser
+# REJECTS YAML anchors/aliases ("Anchors are not currently supported"), so the
+# obvious `&suite_paths` / `*suite_paths` dedup does not parse at all. Keep the
+# two lists identical by hand; scripts/tests/anchor-suite-lane.test.js asserts
+# they match, so a path added to one and not the other reddens the guards lane.
+on:
+  pull_request:
+    paths:
+      - "programs/**"
+      - "tests/**"
+      - "Anchor.toml"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - "package.json"
+      - "yarn.lock"
+      - "tsconfig.json"
+      - ".github/workflows/anchor-suite.yml"
+  push:
+    branches: [main, release, accepted]
+    paths:
+      - "programs/**"
+      - "tests/**"
+      - "Anchor.toml"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - "package.json"
+      - "yarn.lock"
+      - "tsconfig.json"
+      - ".github/workflows/anchor-suite.yml"
+  schedule:
+    # 11:23 UTC daily — an odd minute, because GitHub drops scheduled runs that
+    # pile up on the hour.
+    - cron: "23 11 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  anchor-suite:
+    name: anchor suite
+    runs-on: ubuntu-latest
+    # MEASURED, run 35035570165 (cold — every cache empty): 26s to a pinned
+    # Agave + anchor-cli on PATH, 17s for `yarn install`, 3m35s for `anchor
+    # build`, ~2s for the validator to answer, and ~1m for the suite itself.
+    # Call it ~6 minutes cold and less warm. 45 leaves room for a slow runner
+    # without letting a hung validator burn an hour.
+    timeout-minutes: 45
+
+    env:
+      # PINNED, NEVER FLOATING. `stable` would let an upstream release redden
+      # this lane on a tree nobody touched — the definition of the flake that
+      # gets a lane ignored.
+      #
+      # ANCHOR_VERSION MUST EQUAL the `anchor-lang` version in
+      # programs/turf_vault/Cargo.toml. A CLI from a different minor emits a
+      # different IDL and can disagree about discriminators, so the suite would
+      # be driving something other than what `anchor build` produced here.
+      # scripts/tests/anchor-suite-lane.test.js asserts the two agree.
+      ANCHOR_VERSION: "0.32.1"
+      # The Agave line the local proof in docs/VERIFICATION_MATRIX.md was taken
+      # on (3.1.x). v3.1.15 itself is not published at release.anza.xyz; .14 is
+      # the highest that is.
+      AGAVE_VERSION: "v3.1.14"
+      RPC_URL: "http://127.0.0.1:8899"
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # Same cache SHAPE as ci.yml's `program` job but a DIFFERENT key prefix:
+      # this lane builds the SBF target, that one builds the host target, and
+      # sharing a key would let each evict the other's artifacts every run.
+      - name: Cache cargo and target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-sbf-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: ${{ runner.os }}-sbf-
+
+      # THE PLATFORM-TOOLS BLOB — the single largest download in this lane
+      # (~400MB, fetched by cargo-build-sbf on first use). Caching it is what
+      # turns a 15-minute cold run into a 5-minute warm one.
+      - name: Cache Solana platform-tools
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/solana
+          key: ${{ runner.os }}-platform-tools-${{ env.AGAVE_VERSION }}
+
+      - name: Install Agave (Solana) CLI
+        run: |
+          sh -c "$(curl -sSfL https://release.anza.xyz/${AGAVE_VERSION}/install)"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
+
+      # A PREBUILT BINARY, NOT `avm`. ci.yml's header assumed installing
+      # anchor-cli means avm compiling it from source — the dominant cost and the
+      # fragile part, and the reason it declined to wire this lane. That premise
+      # is out of date: coral-xyz/anchor publishes a linux binary on every
+      # release, so this step is one curl.
+      - name: Install Anchor CLI
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          curl -sSfL --retry 3 -o "$HOME/.local/bin/anchor" \
+            "https://github.com/coral-xyz/anchor/releases/download/v${ANCHOR_VERSION}/anchor-${ANCHOR_VERSION}-x86_64-unknown-linux-gnu"
+          chmod +x "$HOME/.local/bin/anchor"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      # A VERSION THAT IS NOT THE PINNED ONE IS A RED LANE, NOT A SHRUG. If the
+      # release asset ever moves or a runner ships its own anchor earlier on
+      # PATH, the suite would run against a toolchain nobody chose.
+      - name: Show and verify toolchain
+        run: |
+          rustup show active-toolchain
+          cargo --version
+          solana --version
+          anchor --version
+          test "$(anchor --version)" = "anchor-cli ${ANCHOR_VERSION}" || {
+            echo "::error::anchor CLI is $(anchor --version), expected anchor-cli ${ANCHOR_VERSION}"
+            exit 1
+          }
+
+      - name: Install node dependencies
+        run: yarn install --frozen-lockfile
+
+      # The SBF build. Produces target/deploy/turf_vault.so AND
+      # target/types/turf_vault.ts, which tests/turf_vault.ts imports — so this
+      # lane is also the only one that proves the IDL/type generation still works.
+      - name: anchor build
+        run: anchor build
+
+      # ─────────────────────────────────────────────────────────────────────
+      # THE PROGRAM KEYPAIR PROBLEM, AND WHY THIS LANE DOES NOT HAVE ONE.
+      #
+      # `anchor test` normally DEPLOYS the program using
+      # target/deploy/turf_vault-keypair.json. That file is a SECRET — it is the
+      # identity key of the live devnet program EQGFJAc… — and it is gitignored,
+      # so a runner does not have it and MUST NOT BE GIVEN IT. `anchor build` on
+      # a fresh checkout silently generates a RANDOM one instead, which does not
+      # match `declare_id!`, and every single test then fails
+      # DeclaredProgramIdMismatch.
+      #
+      # So this lane never deploys. It hands the built `.so` to the validator at
+      # GENESIS, AT THE DECLARED ADDRESS, with `--upgradeable-program` (the same
+      # BPFUpgradeableLoader shape devnet and mainnet run, rather than the frozen
+      # shape `--bpf-program` would give). No program keypair exists anywhere in
+      # this job, and none is needed: the address is a literal, and the IDL that
+      # `anchor build` just wrote carries the same one, so
+      # `anchor.workspace.TurfVault` resolves straight onto it.
+      #
+      # The wallet is EPHEMERAL, generated here, and is the genesis mint — which
+      # is how the suite's accounts get funded, since tests/turf_vault.ts contains
+      # zero airdrops and expects a provider wallet that already has SOL. It
+      # exists for the lifetime of one job on one localhost validator and holds
+      # nothing anywhere else.
+      # ─────────────────────────────────────────────────────────────────────
+      - name: Start local validator with the program at its declared address
+        run: |
+          set -euo pipefail
+          solana-keygen new --no-bip39-passphrase --force --silent -o ci-wallet.json
+          WALLET="$(solana-keygen pubkey ci-wallet.json)"
+          # POINT THE CLI AT THE EPHEMERAL WALLET AND THE LOOPBACK. Measured on
+          # run 35035570165: `solana program show` aborts with
+          # `No default signer found, run "solana-keygen new -o
+          # /home/runner/.config/solana/id.json"` on a runner, because the CLI
+          # resolves a default signer from its config before running most
+          # subcommands and a fresh runner has none. It is not a permission
+          # failure and no signature is involved — the command is read-only —
+          # but under `set -e` it takes the whole step down. A developer machine
+          # hides this: it already has ~/.config/solana/id.json.
+          solana config set --url "$RPC_URL" --keypair "$PWD/ci-wallet.json" >/dev/null
+          PROGRAM_ID="$(node -e 'process.stdout.write(require("./target/idl/turf_vault.json").address)')"
+          echo "program id (from the freshly built IDL): $PROGRAM_ID"
+          nohup solana-test-validator \
+            --reset --quiet \
+            --ledger .ci-test-ledger \
+            --mint "$WALLET" \
+            --upgradeable-program "$PROGRAM_ID" target/deploy/turf_vault.so "$WALLET" \
+            > validator.log 2>&1 &
+          for _ in $(seq 1 60); do
+            if solana cluster-version --url "$RPC_URL" >/dev/null 2>&1; then
+              solana program show "$PROGRAM_ID" --url "$RPC_URL"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::solana-test-validator never answered on $RPC_URL"
+          tail -50 validator.log
+          exit 1
+
+      # THE LANE ITSELF. `--skip-build` (done above, and cached), `--skip-deploy`
+      # (the program is already at its declared address — see the block above),
+      # `--skip-local-validator` (ours is already running). What remains is
+      # Anchor.toml's [scripts] test, ts-mocha over tests/**/*.ts, which keeps
+      # Anchor.toml the single declaration of what the suite IS.
+      - name: anchor test (tests/turf_vault.ts against the running validator)
+        run: |
+          anchor test --skip-build --skip-deploy --skip-local-validator \
+            --provider.cluster "$RPC_URL" \
+            --provider.wallet "$PWD/ci-wallet.json"
+
+      # The validator log is the only place a program-side panic or a failed
+      # deploy explains itself; mocha's output shows the client's view alone.
+      - name: Upload validator log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: validator-log
+          path: validator.log
+          if-no-files-found: warn
+          retention-days: 7

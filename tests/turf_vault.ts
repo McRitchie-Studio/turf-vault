@@ -298,11 +298,28 @@ describe("turf_vault verification matrix", () => {
   // a mismatch (`UsernameKeyMismatch`).
   const nameKey = (value: string): number[] => username(value.toLowerCase());
 
-  const deriveUsernameRecord = (value: string): PublicKey =>
+  // THE RAW-KEY DERIVATION, and it is what a NEGATIVE test about `name_key`
+  // has to use. `username_record` is declared
+  // `seeds = [b"username", name_key.as_ref()]`, and Anchor checks account
+  // constraints BEFORE the handler body runs — so a test that passes a bad
+  // `name_key` alongside a record derived from the GOOD one never reaches the
+  // guard it is trying to assert: `ConstraintSeeds` fires first, and the only
+  // thing proved is that Anchor validates seeds.
+  //
+  // Derive from the key ACTUALLY BEING PASSED and the seeds constraint is
+  // satisfied, so the refusal comes from `handle_set_username` itself —
+  // `validate_username` then `require_canonical_key`. Measured 2026-09-15 on
+  // the first automated run of these cases: both were asserting
+  // `UsernameInvalidChars` / `UsernameKeyMismatch` against an error that read
+  // `AnchorError caused by account: username_record`.
+  const deriveUsernameRecordForKey = (key: number[]): PublicKey =>
     PublicKey.findProgramAddressSync(
-      [Buffer.from("username"), Buffer.from(nameKey(value))],
+      [Buffer.from("username"), Buffer.from(key)],
       program.programId
     )[0];
+
+  const deriveUsernameRecord = (value: string): PublicKey =>
+    deriveUsernameRecordForKey(nameKey(value));
 
   const deriveUser = (wallet: PublicKey): PublicKey =>
     PublicKey.findProgramAddressSync(
@@ -838,7 +855,11 @@ describe("turf_vault verification matrix", () => {
           .accountsStrict({
             wallet: user1.publicKey,
             userAccount: user1Pda,
-            usernameRecord: deriveUsernameRecord("ignored"),
+            // Derived from the INVALID key itself, not from an unrelated name.
+            // See `deriveUsernameRecordForKey`: a record derived from anything
+            // else fails `ConstraintSeeds` first and the charset guard below
+            // never runs.
+            usernameRecord: deriveUsernameRecordForKey(invalid),
             previousUsernameRecord: null,
             systemProgram: SystemProgram.programId,
           })
@@ -928,13 +949,19 @@ describe("turf_vault verification matrix", () => {
     });
 
     it("REFUSES a name_key that is not the canonical form of the username", async () => {
+      // The key under test is the UNCANONICALIZED one — `username()` keeps the
+      // capitals, where `nameKey()` would fold them — so the record has to be
+      // derived from those same bytes. Derived from the canonical key instead
+      // (what `deriveUsernameRecord("Mixed-Case")` returns) the seeds
+      // constraint refuses first and `require_canonical_key` is never reached.
+      const nonCanonicalKey = username("Mixed-Case");
       await expectRejected(
         program.methods
-          .setUsername(username("Mixed-Case") as any, username("Mixed-Case") as any)
+          .setUsername(username("Mixed-Case") as any, nonCanonicalKey as any)
           .accountsStrict({
             wallet: user1.publicKey,
             userAccount: deriveUser(user1.publicKey),
-            usernameRecord: deriveUsernameRecord("Mixed-Case"),
+            usernameRecord: deriveUsernameRecordForKey(nonCanonicalKey),
             previousUsernameRecord: null,
             systemProgram: SystemProgram.programId,
           })

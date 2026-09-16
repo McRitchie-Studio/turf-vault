@@ -263,10 +263,14 @@ See [`docs/CURRENT_DEPLOYMENT.md`](docs/CURRENT_DEPLOYMENT.md) for live deployme
 
 ### Prerequisites
 
-- [Rust](https://rustup.rs/) 1.89+
-- [Solana CLI](https://docs.solanalabs.com/cli/install) 2.x
-- [Anchor CLI](https://www.anchor-lang.com/docs/installation) 0.32.1
-- [Node.js](https://nodejs.org/) + Yarn
+- [Rust](https://rustup.rs/) 1.89 (pinned by `rust-toolchain.toml`)
+- [Agave (Solana) CLI](https://docs.anza.xyz/cli/install) 3.1.x — the Anchor
+  Suite lane pins `v3.1.14`, the highest 3.1 published at release.anza.xyz
+- [Anchor CLI](https://www.anchor-lang.com/docs/installation) 0.32.1 — must match
+  `anchor-lang` in `programs/turf_vault/Cargo.toml`, which
+  `scripts/tests/anchor-suite-lane.test.js` asserts against the version the lane
+  installs
+- [Node.js](https://nodejs.org/) 20 + Yarn
 
 ### Build
 
@@ -288,10 +292,14 @@ Use [`docs/VERIFICATION_MATRIX.md`](docs/VERIFICATION_MATRIX.md) as the coverage
 map and latest local proof record. If the default validator port is occupied,
 use the alternate-port direct path in [`RUNBOOK.md`](RUNBOOK.md).
 
-**You have to run this yourself.** No lane runs the Anchor suite — see
-[Continuous integration](#continuous-integration) below — so the stamp in the
-verification matrix is this repo's only record that the program has ever been
-executed. Re-run it and re-stamp it before a Squads upgrade.
+**CI runs this too, since 2026-09-15** — see
+[The Anchor suite lane](#the-anchor-suite-lane) below. A plain `anchor test`
+works only on a machine that already holds `target/deploy/turf_vault-keypair.json`
+(gitignored, and a secret): without it `anchor build` mints a RANDOM program
+keypair and every test fails `DeclaredProgramIdMismatch`. The keypair-free recipe
+CI uses — load the built `.so` at the declared address at genesis — is in
+[`docs/VERIFICATION_MATRIX.md`](docs/VERIFICATION_MATRIX.md) under
+**Keeping it armed**, and is the one to use on a fresh checkout.
 
 ### Continuous integration
 
@@ -304,40 +312,60 @@ and on every push to `main`, `release` and `accepted`:
 | `program` | `cargo clippy -- -D clippy::correctness` | code clippy classes as outright wrong |
 | `program` | `cargo test --workspace --locked` | a `VaultState` field offset moved, a governance threshold or floor changed, or the reserved error block stopped ending at 6059. Added 2026-09-15 — `cargo check` above COMPILES `#[cfg(test)]` code without running it, so these assertions could have reported green having never executed |
 | `guards` | `npm run check:doc-op-refs` | a 1Password vault reference in this repo's prose has gone stale |
-| `guards` | `npm run test:scripts` | a shape regression in the deploy scripts, or a lane wired to the Anchor suite — 68 `node:test` cases, counted 2026-09-15 (was 61; +7 for the vault-layout parity guard). 26 cover `scripts/lib/mainnet-config.js` and `scripts/initialize-mainnet.js`; 5 of those 26 drive the real checked-in `scripts/squad.json` and the other 21 are fixture mutations or a source read — the split is measured in [What it covers](docs/VERIFICATION_MATRIX.md#what-it-covers). One case self-skips here, where no `node_modules` is installed. 24 more grade the Squads upgrade path (the signer planner, the script's text, and the script executed end to end against stubs), 6 are the lane guard below, and 5 hold `bin/release-check` identical to this table |
+| `guards` | `npm run test:scripts` | a shape regression in the deploy scripts, the Anchor suite lane being removed or moved into this workflow, or the eviction test leaving the suite — `npm run test:scripts` reports **170 passing**, measured 2026-09-15 (155 top-level `test()` cases across 12 files; the rest are subtests). Re-derive rather than quote it. 26 cover `scripts/lib/mainnet-config.js` and `scripts/initialize-mainnet.js`; 5 of those 26 drive the real checked-in `scripts/squad.json` and the other 21 are fixture mutations or a source read — the split is measured in [What it covers](docs/VERIFICATION_MATRIX.md#what-it-covers). One case self-skips here, where no `node_modules` is installed. 24 more grade the Squads upgrade path (the signer planner, the script's text, and the script executed end to end against stubs), 10 are the Anchor-suite lane guard below, and 6 hold `bin/release-check` identical to this table and refuse a validator lane in it |
 
-CI is **build-and-check only** — it never contacts a Solana cluster, holds a
-keypair, or spends SOL.
+The `CI` workflow is **build-and-check only** — it never starts a validator,
+holds a keypair, or spends SOL. The Anchor Suite lane below does start a
+validator, on the loopback interface, and still holds no keypair and reaches no
+real cluster; `scripts/tests/anchor-suite-lane.test.js` asserts that of every
+workflow in this repo.
 
-**And no lane runs the Anchor suite — nor even reads it.** `tests/turf_vault.ts`
-— 30 `it()` blocks, the suite
-[`docs/VERIFICATION_MATRIX.md`](docs/VERIFICATION_MATRIX.md) is organised around
-— is executed by nothing automatic: not the jobs above, and not the studio
-certification path, which runs the table above and nothing else (see
-[Running the gate locally](#running-the-gate-locally)). Nothing parses it
-either, so a syntax error in it reaches `accepted` green. Both facts are pinned
-by [`scripts/tests/anchor-suite-lane.test.js`](scripts/tests/anchor-suite-lane.test.js),
-which runs in the `guards` lane and fails — naming the workflow line and the doc
-sections to rewrite — the day either stops being true. What stands in for the
-suite, precisely what that does NOT cover, and the receipt the certification
-path records instead are written down under
+### The Anchor suite lane
+
+[`.github/workflows/anchor-suite.yml`](.github/workflows/anchor-suite.yml)
+(workflow name **Anchor Suite**) is the only automated thing in this repo that
+RUNS THE PROGRAM. It installs a pinned Agave CLI and a pinned prebuilt
+`anchor-cli`, runs `anchor build`, starts `solana-test-validator` with the built
+`.so` loaded at the DECLARED program ID, and executes `tests/turf_vault.ts` —
+45 `it()` blocks, the suite
+[`docs/VERIFICATION_MATRIX.md`](docs/VERIFICATION_MATRIX.md) is organised
+around. Measured 2026-09-15: **45 passing, 0 failing**.
+
+| Trigger | Why |
+|---------|-----|
+| `pull_request`, path-filtered to `programs/**`, `tests/**`, `Anchor.toml`, `Cargo.*`, `rust-toolchain.toml`, `package.json`, `yarn.lock`, `tsconfig.json`, and the workflow itself | Those are the only paths whose change the suite can catch. A docs or scripts PR pays no validator time. |
+| `push` to `main`, `release`, `accepted`, same filter | `accepted` carries a combination of individually-green changes no PR run ever executed. |
+| `schedule`, daily | The belt: every other trigger is change-driven, so a quiet week would leave the suite unrun on `main`. |
+| `workflow_dispatch` | The clean-machine run before a Squads upgrade. |
+
+**It is a separate workflow from `CI` on purpose.** McRitchie Studio's release
+guard resolves this repo's suite workflow by the literal name `CI` and refuses to
+promote `accepted` when it is not green, and it also refuses a `CI` workflow that
+carries a `paths:` filter. A validator lane inside `CI` would therefore block the
+release sweep on a flaky runner, and could not be filtered. So `CI` stays fast,
+unfiltered and always-run; **Anchor Suite** is slow, filtered and deep. The local
+cert (`bin/release-check`, below) runs `CI`'s five lanes and NOT the suite — a
+cert that demanded a validator would fail `COULD NOT RUN` on any machine without
+the Solana toolchain.
+
+**No keypair, no real cluster.** `target/deploy/turf_vault-keypair.json` is a
+secret and is never given to a runner; on a fresh checkout `anchor build` mints a
+random one, which would fail every test with `DeclaredProgramIdMismatch`. The
+lane never deploys — it loads the `.so` at the declared address at genesis with
+`--upgradeable-program`, and generates an ephemeral wallet that is the genesis
+mint. Both facts, plus the trigger list and the eviction test's presence, are
+pinned by
+[`scripts/tests/anchor-suite-lane.test.js`](scripts/tests/anchor-suite-lane.test.js),
+which runs in the fast `guards` lane so it reports even when the suite lane is
+filtered out.
+
+What the lane does NOT cover — the mainnet-featured binary, the paths outside the
+filter, and anything about the live vaults — is written down under
 [The Compensating Control](docs/VERIFICATION_MATRIX.md#the-compensating-control-and-what-it-does-not-cover).
-Read it before treating a matrix row as machine-verified: every row rests on
-source review, or on a dated hand-run stamp that may predate the tree — and the
-current stamp does predate it.
 
-Deliberately NOT in CI yet, each because making it green means changing the
-program or the deploy scripts rather than adding a workflow:
+Deliberately NOT in CI, each because making it green means changing the program
+or the deploy scripts rather than adding a workflow:
 
-- **`anchor build`** — an SBF build needs the Solana platform-tools and
-  `anchor-cli` installed on the runner, which is the dominant cost and the
-  fragile part. `cargo check` type-checks the same source. The SBF artifact is
-  verified by hand at rollout instead, via
-  [`docs/VERIFICATION_MATRIX.md`](docs/VERIFICATION_MATRIX.md).
-- **`anchor test`** — spins a local validator; too heavy for a per-push lane. It
-  is run by hand instead, and that stamp is the ONLY execution evidence this repo
-  has. The cost of the trade is stated in full under **The Compensating Control**
-  in [`docs/VERIFICATION_MATRIX.md`](docs/VERIFICATION_MATRIX.md).
 - **`cargo fmt --check`** — the tree is not rustfmt-clean; making it so rewrites
   ~947 lines across all 25 program files and destroys `git blame` on a program
   that custodies real assets.
@@ -350,15 +378,14 @@ program or the deploy scripts rather than adding a workflow:
   here until 2026-09-15 said "two scripts", which had been wrong for long enough
   that nobody re-measured; the accompanying 219→326-line claim about
   `scripts/squad-upgrade.js` described a file the rewrite replaced. Re-measure
-  with `npm run lint` rather than quoting either. Note that its glob also covers `tests/turf_vault.ts`, so
-  wiring this lane makes the suite READ for the first time: expect
-  `scripts/tests/anchor-suite-lane.test.js` to go red, and update the sections it
-  names in the same change.
+  with `npm run lint` rather than quoting either. Its glob covers
+  `tests/turf_vault.ts`, which the Anchor Suite lane already type-checks on the
+  way to running it — so wiring Prettier would buy formatting, not coverage.
 
 ### Running the gate locally
 
 ```bash
-bin/release-check          # the four lanes above, cheapest first, ~1s warm
+bin/release-check          # the five lanes above, cheapest first, ~2s warm
 bin/release-check --list   # print the lane table without running it
 ```
 
