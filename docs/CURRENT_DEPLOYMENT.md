@@ -10,15 +10,22 @@ This is the live operator reference for TurfVault deployment identity. Keep hist
 | Version | v0.25.0 |
 | Deployed | 2026-06-11, slot `468716417` |
 | Upgrade authority | Squads V4 vault PDA `BW13kgfiG2koFn3WRkte21NW9TFygsD1ge2fNJdjH6kC` |
-| Threshold | 2-of-3 for treasury and governance ops |
+| `VaultState` threshold | 2-of-3 for treasury and governance ops — the program's own signer set below, NOT the Squads multisig that holds the upgrade authority (3-of-5; see **Squads Governance**) |
 | Alex Bot signer | `8K81w4e6UcB7TiANhM9N8sAgijJvTxxybRi8AENRaRYd` |
 | Alex signer | `7ZDJp7FUHhuceAqcW9CHe81hCiaMTjgWAXfprBM59Tcr` |
 | Mason signer | `CytJS23p1zCM2wvUUngiDePtbMB484ebD7bK4nDqWjrR` |
 | Program SHA256 | `a0611d29b8ddb001e0c5e1b87425745f079b965e1ed1fb87b1990170cd5f5341` (544,632 bytes) |
 
-The old devnet program `Dx8uGU5w7B9NytDSsW4kseGZuqdVVRq1KY1mGXN2GaCT` is orphaned. Do not use it for live verification.
+The old devnet program `Dx8uGU5w7B9NytDSsW4kseGZuqdVVRq1KY1mGXN2GaCT` is orphaned. Do not use it for live verification. **Orphaned is not closed.** Read at `finalized` on 2026-09-16, it is still upgradeable by the same Squads vault `BW13kgfi…` (last deployed 2026-05-25, slot `464879124`), and its old-layout `VaultState` still lists the retired `F6f8...KzhZ` as a signer beside `7ZDJp7FU…` and `CytJS23p…`. It holds only the devnet test mint.
 
-The retired Alex Bot signer `F6f8...KzhZ` has zero devnet authority after the 2026-06-06 rotation. Agent key material should be referenced through 1Password item names, not pasted into docs.
+The retired Alex Bot signer `F6f8...KzhZ` left the live devnet program in two separate transactions, one per authority. Both were decoded from chain on 2026-09-16:
+
+| Authority | `F6f8...KzhZ` removed | Evidence |
+|-----------|-----------------------|----------|
+| `VaultState` signer set of `EQGFJAcA…` | 2026-06-02 18:29:51Z | `update_signers`, slot `466694441`, cosigned by `7ZDJp7FU…` and `CytJS23p…`; replaced by `8K81w4e6…` |
+| devnet Squads membership (`7nRuVw3V…`) | 2026-06-06 22:00:14Z | Squads config transaction #11: `RemoveMember F6f8…`, `AddMember 8K81w4e6…` |
+
+So "retired 2026-06-02" and "retired 2026-06-06" are both true, of different authorities. Name the authority when you cite a date. The key keeps its slot in the orphaned `Dx8u…` vault above. Agent key material should be referenced through 1Password item names, not pasted into docs.
 
 ## Mainnet
 
@@ -28,7 +35,7 @@ The retired Alex Bot signer `F6f8...KzhZ` has zero devnet authority after the 20
 | Version | v0.25.0 |
 | Deployed | 2026-06-11, slot `425788802` |
 | Upgrade authority | Squads V4 vault PDA `Bk9sS7iiSRL18vuo2KVzkeGw7EekKqxMCjrdoyGGdJm` |
-| Threshold | 2-of-3 for treasury and governance ops |
+| `VaultState` threshold | 2-of-3 for treasury and governance ops — the program's own signer set below, NOT the Squads multisig that holds the upgrade authority (3-of-5; see **Squads Governance**) |
 | Alex Bot signer | `8K81w4e6UcB7TiANhM9N8sAgijJvTxxybRi8AENRaRYd` |
 | Alex signer | `7ZDJp7FUHhuceAqcW9CHe81hCiaMTjgWAXfprBM59Tcr` |
 | Mason signer | `CytJS23p1zCM2wvUUngiDePtbMB484ebD7bK4nDqWjrR` |
@@ -36,11 +43,20 @@ The retired Alex Bot signer `F6f8...KzhZ` has zero devnet authority after the 20
 | Program SHA256 | `e71a3fce25f8b5f28a203b33705a0274ebf1b2200c9f092ac86339931f2dbee7` (545,928 bytes) |
 | Consumer app | `turf-monster-mainnet` |
 
+**The FIRST mainnet deployment is still on chain, and the retired key still holds authority in it.** `MAINNET_LAUNCH.md` was executed against a program that is not the one above. Squads multisig `9dCLMZct…` was created on 2026-05-26 at 2-of-3 with `7ZDJp7FU…`, `F6f8...KzhZ` and `CytJS23p…`. Program `mnzowM2F…` was deployed from `F6f8...KzhZ` at 2026-06-02 08:56:16Z, and its authority passed to that Squad's vault `83BXrVFB…` 19 seconds later. The Alex Bot leak then forced the `KEY_ROTATION.md` redeploy onto `DaFv83yo…` later that day. Read at `finalized` on 2026-09-16, the old deployment was never retired:
+
+- `9dCLMZct…` still reads **2-of-3** with `F6f8...KzhZ` seated, and has never had a transaction.
+- `mnzowM2F…` is still open and upgradeable by `83BXrVFB…`; its ProgramData still holds 3.50 SOL of rent.
+- Its `VaultState` still lists `F6f8...KzhZ`, `7ZDJp7FU…` and `CytJS23p…` at threshold 2.
+- It holds 0 USDC and 0 USDT, and `turf-monster-mainnet`'s `SOLANA_PROGRAM_ID` is `DaFv83yo…`, not it.
+
+`KEY_ROTATION.md` §7 (evict the key from `9dCLM…`) and §8 (close `mnzow…`) are the two steps that retire it, and neither has run. So "`F6f8` holds no mainnet authority" is true of the LIVE program and its Squad only.
+
 Both clusters run **v0.25.0** today; mainnet reached it on 2026-06-11, nine minutes after devnet. The next upgrade window carries `burn_entry_token` AND the v0.26 governance change (both Unreleased in `CHANGELOG.md`), which change the IDL and so need a freshly built `EXPECTED_IDL_HASH` pinned on `turf-monster-mainnet`. The Version row above is read off the deployed executable, not inferred from a commit message; the method is under **Verification** below.
 
 **The crate version is not this row.** `programs/turf_vault/Cargo.toml` reads `0.26.0` as of 2026-09-15: that is what the SOURCE is, and it is the label a freshly built IDL will carry. Both tables above say v0.25.0 because that is what the CHAIN runs. The two agree again only after the upgrade window. Reading `0.26.0` in the crate and concluding these rows are stale is the mistake this paragraph exists to prevent.
 
-**The `Threshold` rows above describe v0.25, which is what is DEPLOYED.** They say
+**The `VaultState` threshold rows above describe v0.25, which is what is DEPLOYED.** They say
 2-of-3 because that is what the deployed program can express: `validate_multisig`
 takes exactly two signers and never reads the `threshold` field at all. v0.26
 replaces that with per-action thresholds stored in a `GovernanceConfig` PDA
