@@ -193,4 +193,6 @@ pub enum VaultError {
     UsernameRecordNotExpected,                   // 6065
     #[msg("The vault does not hold this username — it is not a reservation")]
     UsernameNotReserved,                         // 6066
+    #[msg("The vault PDA is not a wallet — only reserve_username can make the vault hold a name")]
+    VaultPdaNotAWallet,                          // 6067
 }
