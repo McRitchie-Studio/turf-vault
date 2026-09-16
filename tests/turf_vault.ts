@@ -54,9 +54,12 @@ const expectRejected = async (
   expect(String(rejection)).to.match(pattern);
 };
 
-// The helper above is the suite's ONLY negative-assertion primitive: 45 call
-// sites route through it. It was inert for its entire life, so this block
-// exercises the primitive itself. It needs no validator and no chain state —
+// The helper above is the suite's ONLY negative-assertion primitive: 70 call
+// sites in the matrix describe route through it (re-measured 2026-09-15; the
+// "45" this line carried was the count on 2026-09-07, before the username
+// registry's cases landed — the dated 45s in docs/VERIFICATION_MATRIX.md are
+// about that moment and stay as written). It was inert for its entire life, so
+// this block exercises the primitive itself. It needs no validator and no chain state —
 // it is pure control flow — which is why it lives outside the matrix describe.
 describe("expectRejected (the suite's own negative-assertion helper)", () => {
   const helperFails = async (fn: () => Promise<void>): Promise<string> => {
@@ -1037,6 +1040,68 @@ describe("turf_vault verification matrix", () => {
           .rpc(),
         /UsernameAlreadyClaimed/i
       );
+    });
+
+    it("REFUSES a signup that names the vault PDA as its wallet", async () => {
+      // THE FORGERY THIS CLOSES. `create_user_account` takes `wallet` as a
+      // plain ARGUMENT and never as a `Signer` — deliberately, because neither
+      // live onboarding path has the wallet's signature to offer: the server
+      // holds no key for a Phantom wallet, and the managed-wallet account is
+      // created from a background job at signup. The argument therefore goes
+      // straight into `claim_or_confirm` as the record's owner, whose only
+      // guard was `owner != default`.
+      //
+      // So a caller could name the `[b"vault"]` PDA and mint a record that
+      // reads EXACTLY like the reservation the test above creates — same
+      // owner field, no quorum, no `reserve_username`. `UsernameRecord`'s own
+      // doc rests uniqueness on "a player-held record is written from a
+      // Signer's key and can therefore never collide with the vault PDA";
+      // this instruction was the path where that was not true.
+      const forged = "forged-name";
+
+      // DERIVE BOTH PDAs FROM THE BYTES ACTUALLY BEING PASSED. `wallet` seeds
+      // `user_account` and `name_key` seeds `username_record`, and Anchor
+      // resolves both in generated `try_accounts` BEFORE the handler body
+      // runs. Derive either from anything else and `ConstraintSeeds` fires
+      // first — the refusal would be real and the assertion would still prove
+      // nothing but that Anchor validates seeds.
+      await expectRejected(
+        program.methods
+          .createUserAccount(
+            vaultStatePda,
+            username(forged) as any,
+            nameKey(forged) as any
+          )
+          .accountsStrict({
+            payer: admin.publicKey,
+            userAccount: deriveUser(vaultStatePda),
+            usernameRecord: deriveUsernameRecord(forged),
+            systemProgram: SystemProgram.programId,
+          })
+          .rpc(),
+        /VaultPdaNotAWallet/i
+      );
+
+      // AND NOTHING WAS WRITTEN. A refusal that left the record behind would
+      // be the same bug wearing an error code — the name would be burned even
+      // though the claim was rejected.
+      await expectRejected(
+        program.account.usernameRecord.fetch(deriveUsernameRecord(forged)),
+        /Account does not exist|AccountNotInitialized/i
+      );
+
+      // CONTROL: a REAL wallet still claims the same name, and the record it
+      // gets is owned by that wallet rather than the vault. Without this the
+      // refusal above is equally consistent with the instruction being broken
+      // for everybody.
+      const honest = Keypair.generate();
+      await fund(honest.publicKey);
+      await createUser(honest.publicKey, forged);
+      const record = await program.account.usernameRecord.fetch(
+        deriveUsernameRecord(forged)
+      );
+      expect(record.owner.toBase58()).to.equal(honest.publicKey.toBase58());
+      expect(record.owner.toBase58()).to.not.equal(vaultStatePda.toBase58());
     });
 
     it("REFUSES releasing a name the vault does not hold, or paying rent anywhere but the treasury", async () => {

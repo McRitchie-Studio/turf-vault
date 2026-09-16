@@ -947,11 +947,19 @@ impl MintWindow {
 ///
 /// ── WHY THE VAULT PDA AND NOT A SENTINEL ──────────────────────────────────
 ///
-/// `owner` is the vault's own `[b"vault"]` PDA for a reservation. That address
-/// is off-curve, so no keypair can produce it — a player-held record is
-/// written from a `Signer`'s key and can therefore never collide with it. An
-/// off-chain reader needs no side table: derive `[b"vault"]` once and the
-/// owner field answers "taken or reserved?" by itself.
+/// `owner` is the vault's own `[b"vault"]` PDA for a reservation. An off-chain
+/// reader needs no side table: derive `[b"vault"]` once and the owner field
+/// answers "taken or reserved?" by itself.
+///
+/// WHAT KEEPS A PLAYER RECORD OFF THAT VALUE, precisely — the earlier wording
+/// here said the address is off-curve so no keypair can produce it, and left
+/// the reader to conclude that a player record therefore cannot collide with
+/// it. Off-curve settles only the paths that take their owner from a `Signer`
+/// (`set_username`) or from a chain-asserted field (`overwrite_username`,
+/// `backfill_username_record`). `create_user_account` takes its owner as an
+/// ARGUMENT, because neither onboarding path has the wallet's signature to
+/// offer, so on that path the curve guarantees nothing and an explicit refusal
+/// does the work: `require_not_vault_pda`, `VaultPdaNotAWallet` (6067).
 ///
 /// `Pubkey::default()` is NOT a reservation sentinel, but `is_reserved` treats
 /// it as one anyway — see that method.

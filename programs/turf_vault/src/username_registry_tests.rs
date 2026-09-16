@@ -22,6 +22,7 @@ use crate::instructions::set_username::{
     canonical_username_key, require_canonical_form, require_canonical_key, validate_username,
     validate_username_charset_len, validate_username_prefix,
 };
+use crate::instructions::create_user_account::require_not_vault_pda;
 use crate::instructions::username_registry::{claim_or_confirm, settle_previous_record};
 use crate::state::{
     gov_action, GovernanceConfig, UserAccount, UsernameRecord, DEFAULT_THRESHOLDS,
@@ -528,6 +529,37 @@ fn reserving_a_name_is_never_costlier_than_releasing_one() {
 }
 
 #[test]
+fn a_signup_may_not_claim_a_name_for_the_vault_pda() {
+    // `create_user_account` is the one path whose record owner is an argument
+    // rather than a signature, so it is the one path that can name the vault
+    // and forge a reservation. `claim_or_confirm` cannot hold this line: it is
+    // also what `reserve_username` calls, WITH the vault key, on purpose.
+    let vault = pk(9);
+
+    let err = require_not_vault_pda(&vault, &vault)
+        .expect_err("naming the vault PDA as a wallet must be refused");
+    assert_eq!(err_code(err), 6067, "expected VaultPdaNotAWallet");
+
+    // CONTROL: any other key passes, so the refusal is the vault check firing
+    // and not the function refusing everything.
+    require_not_vault_pda(&pk(1), &vault).expect("an ordinary wallet is fine");
+    require_not_vault_pda(&Pubkey::default(), &vault)
+        .expect("the zero key is claim_or_confirm's to refuse, not this rule's");
+}
+
+#[test]
+fn the_vault_reserving_a_name_is_still_allowed_to_own_a_record() {
+    // The guard above must not have narrowed the registry itself. A real
+    // reservation is the vault owning a record, and that stays legal.
+    let vault = pk(9);
+    let mut record = empty_record();
+    claim_or_confirm(&mut record, vault, key("blocked"), 254, NOW)
+        .expect("reserve_username still claims for the vault");
+    assert_eq!(record.owner, vault);
+    assert!(record.is_reserved(&vault));
+}
+
+#[test]
 fn the_username_registry_owns_error_codes_6060_upward() {
     // The governance block reserved 6060+ with three unreachable variants
     // because Anchor assigns codes BY POSITION. These are the codes Rails
@@ -539,6 +571,7 @@ fn the_username_registry_owns_error_codes_6060_upward() {
     assert_eq!(VaultError::UsernameRecordNameMismatch as u32 + 6000, 6064);
     assert_eq!(VaultError::UsernameRecordNotExpected as u32 + 6000, 6065);
     assert_eq!(VaultError::UsernameNotReserved as u32 + 6000, 6066);
+    assert_eq!(VaultError::VaultPdaNotAWallet as u32 + 6000, 6067);
 
     // Nothing below the boundary moved.
     assert_eq!(VaultError::ReservedGovernance6059 as u32 + 6000, 6059);
