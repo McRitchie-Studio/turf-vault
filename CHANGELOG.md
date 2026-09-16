@@ -7,7 +7,8 @@ All notable changes to TurfVault are documented here. Format based on [Keep a Ch
 ### The Anchor suite runs in CI
 
 `tests/turf_vault.ts` — the only tests in this repo that EXECUTE the program —
-ran nowhere but on a developer's machine until now. The 45 cases include
+ran nowhere but on a developer's machine until now. The cases (45 when this
+lane landed, **46** on this tree — `VaultPdaNotAWallet` added the 46th) include
 `THE EVICTION: three personal wallets remove the agent-reachable slots`, which
 proves by negative assertion that the two agent-reachable keys cannot pause the
 vault after a five-signer rotation: the doomsday property the governance rewrite
@@ -33,7 +34,9 @@ rather than at the guard they named: each passed a bad `name_key` alongside a
 `username_record` derived from the GOOD one, and Anchor validates account
 constraints before the handler body. They now derive the record from the key under
 test, so `UsernameInvalidChars` (6021) and `UsernameKeyMismatch` (6061) are what
-actually refuses. Suite result on this tree: **45 passing, 0 failing**.
+actually refuses. Suite result when this lane landed: **45 passing, 0
+failing**; the tree now carries **46** cases. Re-derive with `grep -c 'it('` on
+`tests/turf_vault.ts` rather than quoting either figure.
 
 `scripts/tests/anchor-suite-lane.test.js` — which used to pin "no lane runs this
 suite" — is INVERTED rather than deleted: it now fails if no lane runs the suite,

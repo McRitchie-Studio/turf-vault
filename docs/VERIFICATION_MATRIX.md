@@ -68,7 +68,8 @@ thing.
 > absence for as long as nothing ran them.
 >
 > The unit lanes ARE current and did run on this tree — see `bin/release-check`
-> below, now **48 `cargo test` cases** (was 19) and **170 `node:test` cases**.
+> below, now **50 `cargo test` cases** (was 19, then 48) and **170 `node:test`
+> cases**.
 > They carry the registry's uniqueness and threshold properties; what they
 > cannot carry is whether the instructions reach them, which is what the
 > unstamped Anchor cases exist to prove.
@@ -96,9 +97,10 @@ them they carry five lanes:
 bin/release-check          # the five `CI` lanes, cheapest first
 ```
 
-Both Node lanes and all three Rust lanes were run green on the
-username-registry tree on **2026-09-15** (`cargo test`: 48 passed;
-`npm run test:scripts`: 170 passed).
+Both Node lanes and all three Rust lanes were run green on **2026-09-16**, on
+the tree that carries the `VaultPdaNotAWallet` guard (`cargo test`: 50 passed;
+`npm run test:scripts`: 170 passed). The 2026-09-15 stamp this replaces read 48,
+measured before that guard added its two cases.
 
 `cargo test` matters more than its name suggests here. `cargo check` COMPILES
 `#[cfg(test)]` code without running it, so before this lane existed a unit test
@@ -239,9 +241,9 @@ not earned, so the gaps below are kept even where they shrank.
 - `cargo clippy … -D clippy::correctness` fails on code clippy classes as
   outright wrong.
 - `cargo test --workspace --locked` is a real executing suite, new in v0.26:
-  **48 cases** (measured 2026-09-15; the bullet said 19 while
-  `username_registry_tests.rs` was adding 29 more) across
-  `programs/turf_vault/src/governance_tests.rs` and
+  **50 cases** (measured 2026-09-16; the bullet said 19, then 48 — see the
+  count discipline under [What it does not cover](#what-it-does-not-cover))
+  across `programs/turf_vault/src/governance_tests.rs` and
   `username_registry_tests.rs`, covering the `VaultState` field offsets, the
   migration-safety case, the N-of-M threshold, the floors, the 6046-6059 error
   boundary, and the registry's key canonicalization and reservation rules. It is the lane `cargo check`
@@ -334,8 +336,17 @@ not earned, so the gaps below are kept even where they shrank.
   carries zero `#[test]` functions", which was true when written and stopped
   being true in the same change that added `cargo test` to `ci.yml` and
   `bin/release-check`. `programs/turf_vault/src/governance_tests.rs` and
-  `username_registry_tests.rs` now hold 48 cases between them, and `lib.rs`
-  declares both modules.
+  `username_registry_tests.rs` hold **18** and **31** `#[test]` functions
+  respectively — **49 assertions between them** — and `lib.rs` declares both
+  modules.
+
+  **THE RUN TOTAL IS 50, AND THE 50TH IS NOT AN ASSERTION IN EITHER FILE.**
+  `declare_id!` generates a `test_id` case at the crate root, so `cargo test`
+  always reports one more than the two files contain. Reading the run total back
+  as "assertions in `governance_tests.rs`" is exactly how this number was first
+  written as 19 when that file held 18. They are two measurements, not one:
+  `grep -c '#\[test\]'` per file for the assertions, `cargo test` for the run
+  total, and they differ by exactly one.
 
   **`cargo check` was never enough for them.** `--all-targets` COMPILES test
   targets; it runs none. So a repo with unit tests and no `cargo test` lane
@@ -509,9 +520,13 @@ is raised both by "this key holds no vault seat" and by "this signer holds a
 seat, but a second one was required", and the suite asserts both with the same
 `/Unauthorized/i`. They are not interchangeable evidence.
 
-- `tests/turf_vault.ts:1551`, in `only a vault signer may burn, and the hash
-  must name the token`, IS a genuine non-signer check: `burnEntryToken(token,
-  stranger)` is called by a key with no seat at all.
+- The `it()` block named `only a vault signer may burn, and the hash must name
+  the token`, in `tests/turf_vault.ts`, IS a genuine non-signer check:
+  `burnEntryToken(token, stranger)` is called by a key with no seat at all.
+  (This cited `tests/turf_vault.ts:1551` until 2026-09-16, by which time that
+  line had drifted into an unrelated `updateSigners` helper — a line number is
+  true only at the SHA it was written against, so the test's NAME is the
+  pointer now.)
 - The two cases in `enforces set_contest_lock_time and
   set_contest_conclusion_time rules` are NOT. Both call as `admin` — a real
   vault signer — with `cosigner: null`, and both are followed by the identical
@@ -538,6 +553,9 @@ deployed, are in the PDA at seeds `[b"governance"]`.
 |------|-------------|----------------|
 | Vault setup | `initialize` | Creates singleton `VaultState`; pins payout mint, treasury authority, signers, threshold, USDC slot 0, USDT slot 1; mainnet build rejects non-`INIT_AUTHORITY`. |
 | Governance | `update_signers` | Requires **3** (floor 3 — no quorum can lower it); up to FIVE left-packed slots; rejects duplicates, gaps, a set too small for any live threshold, and rotations that keep fewer than `threshold` of the AUTHORIZING signers. |
+| Governance | `init_governance` | Requires **2** (`BOOTSTRAP_THRESHOLD`, not a `gov_action`). Takes NO ARGUMENTS, which is the whole reason two is safe — it can write only the compiled-in `DEFAULT_THRESHOLDS`, so the bootstrapping party cannot install weak numbers. Two is also what the LIVE 2-of-3 signer set can assemble on upgrade day, and every vault-authorized instruction reads this account, so a bootstrap needing a third signature would strand the platform. `init` collides on a second call, so it cannot be re-run to overwrite a retuned table. **Ordering: it must run immediately after the v0.26 upgrade and before normal operation resumes.** |
+| Governance | `set_action_threshold` | Requires **3** via `SET_GOVERNANCE` (floor 3 — it cannot lower the bar on itself). Refuses, in this order: an unknown action id (`InvalidGovernanceAction`), a value below that action's `THRESHOLD_FLOORS` entry (`GovernanceFloorViolation`), zero or more than `MAX_SIGNERS` (`GovernanceThresholdInvalid`), and more than the vault currently HAS signers (`ThresholdExceedsSignerSet`) — storing a threshold the set cannot satisfy would brick that action, and for `update_signers` it would brick the only way back. Order matters: the FIRST failing constraint is the error the caller sees. |
+| Governance | `set_mint_window_policy` | Requires **3** via `SET_GOVERNANCE`. Refuses a non-positive `window_seconds` or a zero `cap` (`InvalidMintWindowPolicy`, 6054). Changing `window_seconds` RE-PARTITIONS time, so the window index a given moment maps to changes and the next mint lands in a fresh, empty counter — a one-window loosening, which is why the length is set once and the CAP is the knob to turn. |
 | Currency registry | `register_currency` | Requires **3**; rejects duplicate mint and full registry; initializes stable `op_rev` ATA for the new slot. |
 | Currency registry | `deactivate_currency` | Requires **3**; flips `active=false`; preserves slot and historical tallies. |
 | Pause control | `pause` | Requires **2** (floor 1 — `cosigner` is `Option<Signer>` so the account struct cannot out-vote the table, and a retune to 1 really reaches one signature); records reason; blocks `enter_contest` and `enter_contest_with_token` only. |
