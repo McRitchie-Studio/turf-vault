@@ -988,7 +988,7 @@ Prioritize a clean upgrade-authority + Squads state so §8 can execute.
 > lamports of ProgramData rent, and the same transaction swept the old vault's
 > 1,000,000-lamport float, both to `Bk9sS7ii…`. Left behind for good: 1,141,440
 > lamports under `mnzow…`'s 36-byte program tombstone, and about 0.024 SOL in the
-> accounts `mnzow…` created. About 0.0087 SOL of proposal rent on `9dCLM…` stays
+> accounts `mnzow…` created. About 0.0087 SOL of transaction and proposal rent on `9dCLM…` stays
 > reclaimable, but only after a `SetRentCollector` config change, not yet made.
 
 ---
