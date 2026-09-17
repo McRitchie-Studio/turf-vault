@@ -14,14 +14,17 @@
 > leak then forced the [`KEY_ROTATION.md`](KEY_ROTATION.md) redeploy later that
 > day, onto `DaFv83yo…` under a NEW Squad, `4H3fP3ot…`.
 >
-> **So every "2-of-3" in this file describes `9dCLM…` — and is still true of it**,
-> because that multisig was never rotated or retired. None of it describes the
-> live program, whose Squad reads 3-of-5 since 2026-09-15. See
+> **So every "2-of-3" in this file describes `9dCLM…` as it stood from
+> 2026-05-26 to 2026-09-16.** That evening a vault transaction closed
+> `mnzowM2F…`, and a config transaction then removed `F6f8…` and `Cyt…` and left
+> `9dCLM…` at 1-of-1 with `7ZDJ…` alone
+> ([`KEY_ROTATION.md`](KEY_ROTATION.md) §7–§8). None of it describes the live
+> program, whose Squad reads 3-of-5 since 2026-09-15. See
 > [`CURRENT_DEPLOYMENT.md`](CURRENT_DEPLOYMENT.md) for both deployments.
 
 **Scope:** broadcasts an immutable program ID + locks the upgrade authority
-to a Squads 2-of-3 multisig (as executed: `9dCLM…`, which still reads 2-of-3 —
-not the live program's Squad). Everything in §§3–8 is irreversible. Read the
+to a Squads 2-of-3 multisig (as executed: `9dCLM…`, 2-of-3 until it was retired
+on 2026-09-16 — not the live program's Squad). Everything in §§3–8 is irreversible. Read the
 whole runbook before starting §3.
 
 ---
@@ -88,11 +91,11 @@ trusting it.)
    - Members:
      - `alex_bot`  = `F6f8...KzhZ` — **RETIRED (leaked, 2026-06). Never place
        this key on a multisig again.** The full address is redacted from this
-       imperative step on purpose. It sits on `9dCLM…` today because this step
-       ran with it.
+       imperative step on purpose. It sat on `9dCLM…` from this step until
+       config transaction #2 removed it on 2026-09-16.
      - `alex`      = `7ZDJp7FUHhuceAqcW9CHe81hCiaMTjgWAXfprBM59Tcr`
      - `mason`     = `CytJS23p1zCM2wvUUngiDePtbMB484ebD7bK4nDqWjrR`
-   - Threshold: **2 of 3** (this Squad's threshold; `9dCLM…` still reads it)
+   - Threshold: **2 of 3** (this Squad's threshold; `9dCLM…` read it until 2026-09-16)
 3. From the vault page, copy the **multisig PDA** and the **vault PDA**
    (under "Vaults" → main vault). These are the two addresses we need.
 4. Fund the **vault PDA** with ≥ 0.05 SOL so it can pay fees on its own
@@ -204,8 +207,9 @@ If `anchor deploy` fails partway (network blip, retried txs), it'll print a
 
 The program ships with Alex Bot as upgrade authority. We need to transfer
 that to the Squads vault so every subsequent upgrade needs that Squad's
-approvals — two signatures on `9dCLM…`, the Squad this step used. The live
-program is under a different Squad, which has required three since 2026-09-15.
+approvals — two signatures on `9dCLM…`, the Squad this step used, until that
+Squad closed the program on 2026-09-16. The live program is under a different
+Squad, which has required three since 2026-09-15.
 
 ```bash
 solana program set-upgrade-authority <PROGRAM_ID_FROM_§3> \

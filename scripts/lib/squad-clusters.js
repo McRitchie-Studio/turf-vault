@@ -114,17 +114,26 @@ const AGENT_SEATS = {
  * waiting on instead of printing a bare base58 string at someone under
  * pressure. Absence from this map is not an error — an unrecognised member is
  * reported as `unrecognised`, which is itself worth seeing.
+ *
+ * The operator is Mr. McRitchie. "Alex" is an AGENT in this ecosystem, so a
+ * handoff that printed "waiting on Alex Phantom" named the wrong party; the
+ * three operator labels said exactly that until 2026-09-16.
+ *
+ * A DATE IN A LABEL NAMES THE MULTISIG IT HAPPENED ON. `F6f8…` read "evicted
+ * 2026-06-06" — true of the devnet Squad only, while the key stayed seated on
+ * the first mainnet Squad `9dCLM…` until config transaction #2 removed it on
+ * 2026-09-16. A bare date was true of one multisig and read as true of all.
  */
 const MEMBER_NAMES = {
-  "7ZDJp7FUHhuceAqcW9CHe81hCiaMTjgWAXfprBM59Tcr": "Alex Phantom (operator)",
-  "3Qj4v9qjhXgkru6zCRCErRVhy8Q6qU3NrNpvpXLTZboA": "Alex two (operator)",
-  "9gACbzsCLmkYF9Yx1EBGmwMvvyfuTquJ6qs8QsoQvHXf": "Alex three (operator)",
+  "7ZDJp7FUHhuceAqcW9CHe81hCiaMTjgWAXfprBM59Tcr": "Mr. McRitchie's Phantom (operator)",
+  "3Qj4v9qjhXgkru6zCRCErRVhy8Q6qU3NrNpvpXLTZboA": "Mr. McRitchie's second (operator)",
+  "9gACbzsCLmkYF9Yx1EBGmwMvvyfuTquJ6qs8QsoQvHXf": "Mr. McRitchie's third (operator)",
   "7auwTLSvNniSUeAgL6v9RStMXJhWrrUhSJgwFWLpcqC": "system (agent)",
   "2eGs8G3wzhEeNQQU2Q86BmmA2xTpDbMMae3Y1bvpZfx9": "system.devnet (agent)",
   BLSBw8fXHzZc5pbaYCKMpMSsrtXBTbWXpUPVzMrXx9oo: "admin (agent)",
   "8K81w4e6UcB7TiANhM9N8sAgijJvTxxybRi8AENRaRYd": "Xan (agent)",
-  CytJS23p1zCM2wvUUngiDePtbMB484ebD7bK4nDqWjrR: "Mason (retired 2026-09-15)",
-  F6f8h5yynbnkgWvU5abQx3RJxJpe8EoQmeFBuNKdKzhZ: "LEAKED agent.solana (evicted 2026-06-06)",
+  CytJS23p1zCM2wvUUngiDePtbMB484ebD7bK4nDqWjrR: "Mason (retired: live Squads 2026-09-15, 9dCLM 2026-09-16)",
+  F6f8h5yynbnkgWvU5abQx3RJxJpe8EoQmeFBuNKdKzhZ: "LEAKED agent.solana (evicted: devnet 2026-06-06, 9dCLM 2026-09-16)",
 };
 
 const DEFAULT_RPC = {
@@ -212,7 +221,7 @@ function resolveCluster(name, opts = {}) {
   };
 }
 
-/** "Alex Phantom (operator)" — or "unrecognised", which is worth seeing. */
+/** "Mr. McRitchie's Phantom (operator)" — or "unrecognised", which is worth seeing. */
 function memberName(pubkey) {
   return MEMBER_NAMES[pubkey] || "unrecognised";
 }
