@@ -207,8 +207,9 @@ If `anchor deploy` fails partway (network blip, retried txs), it'll print a
 
 The program ships with Alex Bot as upgrade authority. We need to transfer
 that to the Squads vault so every subsequent upgrade needs that Squad's
-approvals — two signatures on `9dCLM…`, the Squad this step used. The live
-program is under a different Squad, which has required three since 2026-09-15.
+approvals — two signatures on `9dCLM…`, the Squad this step used, until that
+Squad closed the program on 2026-09-16. The live program is under a different
+Squad, which has required three since 2026-09-15.
 
 ```bash
 solana program set-upgrade-authority <PROGRAM_ID_FROM_§3> \

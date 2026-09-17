@@ -880,7 +880,9 @@ Also confirm:
 
 Squads members ARE mutable. The leaked key must be evicted from **every**
 Squads it's still a member of — at minimum the OLD Squads (`9dCLM…`), which
-still governs the OLD program (needed live for the §8 close vote).
+governed the OLD program (needed live for the §8 close vote). *As written
+before the ceremony: since 2026-09-16 the leaked key is on no Squads this repo
+records, and `9dCLM…` governs nothing (box above).*
 
 ```
 Via https://app.squads.so (mainnet) on the OLD multisig 9dCLM…:
