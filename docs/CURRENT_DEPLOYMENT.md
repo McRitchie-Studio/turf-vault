@@ -43,14 +43,14 @@ So "retired 2026-06-02" and "retired 2026-06-06" are both true, of different aut
 | Program SHA256 | `e71a3fce25f8b5f28a203b33705a0274ebf1b2200c9f092ac86339931f2dbee7` (545,928 bytes) |
 | Consumer app | `turf-monster-mainnet` |
 
-**The FIRST mainnet deployment is still on chain, and the retired key still holds authority in it.** `MAINNET_LAUNCH.md` was executed against a program that is not the one above. Squads multisig `9dCLMZct…` was created on 2026-05-26 at 2-of-3 with `7ZDJp7FU…`, `F6f8...KzhZ` and `CytJS23p…`. Program `mnzowM2F…` was deployed from `F6f8...KzhZ` at 2026-06-02 08:56:16Z, and its authority passed to that Squad's vault `83BXrVFB…` 19 seconds later. The Alex Bot leak then forced the `KEY_ROTATION.md` redeploy onto `DaFv83yo…` later that day. Read at `finalized` on 2026-09-16, the old deployment was never retired:
+**The FIRST mainnet deployment was retired on 2026-09-16.** `MAINNET_LAUNCH.md` was executed against a program that is not the one above. Squads multisig `9dCLMZct…` was created on 2026-05-26 at 2-of-3 with `7ZDJp7FU…`, `F6f8...KzhZ` and `CytJS23p…`. Program `mnzowM2F…` was deployed from `F6f8...KzhZ` at 2026-06-02 08:56:16Z, and its authority passed to that Squad's vault `83BXrVFB…` 19 seconds later. The Alex Bot leak then forced the `KEY_ROTATION.md` redeploy onto `DaFv83yo…` later that day. The old deployment stayed un-retired, with the leaked key still seated on its Squad, until two Squads transactions on the evening of 2026-09-16 (MDT), both executed by Mr. McRitchie's `7ZDJp7FU…`. Read at `finalized` afterwards:
 
-- `9dCLMZct…` still reads **2-of-3** with `F6f8...KzhZ` seated, and has never had a transaction.
-- `mnzowM2F…` is still open and upgradeable by `83BXrVFB…`; its ProgramData still holds 3.50 SOL of rent.
-- Its `VaultState` still lists `F6f8...KzhZ`, `7ZDJp7FU…` and `CytJS23p…` at threshold 2.
-- It holds 0 USDC and 0 USDT, and `turf-monster-mainnet`'s `SOLANA_PROGRAM_ID` is `DaFv83yo…`, not it.
+- **`mnzowM2F…` is closed** (`KEY_ROTATION.md` §8). Vault transaction #1 on `9dCLM…`, executed 2026-09-17 02:27:09Z, closed it and sent its 3.50 SOL of ProgramData rent to `Bk9sS7ii…`, the live upgrade-authority vault above. A closed program ID can never be deployed again.
+- **`9dCLMZct…` is retired** (`KEY_ROTATION.md` §7). Config transaction #2, executed eleven minutes later, removed `F6f8...KzhZ` and `CytJS23p…` and set the threshold to 1. `7ZDJp7FU…` is its only member. Squads v4 cannot close a multisig, so the account persists, controlling nothing.
+- Its `VaultState` still lists `F6f8...KzhZ`, `7ZDJp7FU…` and `CytJS23p…` at threshold 2, and always will: nothing can rewrite an account owned by a closed program. No program is left to read those bytes, so they authorize nothing.
+- It held 0 USDC and 0 USDT, and `turf-monster-mainnet`'s `SOLANA_PROGRAM_ID` is `DaFv83yo…`, not it.
 
-`KEY_ROTATION.md` §7 (evict the key from `9dCLM…`) and §8 (close `mnzow…`) are the two steps that retire it, and neither has run. So "`F6f8` holds no mainnet authority" is true of the LIVE program and its Squad only.
+So "`F6f8` holds no mainnet authority" is now true of both mainnet deployments, not only the live one. Its devnet leftovers, including its signer slot in the orphaned `Dx8u…` vault, are under **Devnet**. Signatures for both transactions are recorded in `KEY_ROTATION.md` §7–§8.
 
 Both clusters run **v0.25.0** today; mainnet reached it on 2026-06-11, nine minutes after devnet. The next upgrade window carries `burn_entry_token` AND the v0.26 governance change (both Unreleased in `CHANGELOG.md`), which change the IDL and so need a freshly built `EXPECTED_IDL_HASH` pinned on `turf-monster-mainnet`. The Version row above is read off the deployed executable, not inferred from a commit message; the method is under **Verification** below.
 
@@ -275,7 +275,9 @@ the other.
 `VaultState`'s in-program 2-of-3 is a separate mechanism from the Squads vault
 that holds the program upgrade authority, and **they no longer even have the same
 shape**. `VaultState` is still 2-of-3 with the signers listed in the tables above;
-both Squads multisigs are 3-of-5 as of 2026-09-15. Two multisigs, two vocabularies
+both LIVE Squads multisigs are 3-of-5 (since 2026-09-15, and re-read at
+`finalized` on 2026-09-16). The retired first mainnet Squad `9dCLM…` is 1-of-1 and
+governs nothing (see **Mainnet**). Two multisigs, two vocabularies
 — see **Squads Governance** below, and read `scripts/squad.json`'s `_members_are`
 note before touching that file.
 
@@ -290,7 +292,8 @@ node scripts/squad-inventory.js              # both clusters, read-only, no keys
 node scripts/squad-inventory.js --cluster=mainnet
 ```
 
-What it reports, and what the numbers mean, as of **2026-09-15**:
+What it reports, and what the numbers mean, as of **2026-09-15**. Membership and
+thresholds were re-read from chain at `finalized` on 2026-09-16 and had not changed:
 
 | Cluster | Multisig | Threshold | Agent-held seats | An upgrade run would |
 |---------|----------|-----------|------------------|----------------------|
@@ -298,8 +301,8 @@ What it reports, and what the numbers mean, as of **2026-09-15**:
 | mainnet | `4H3fP3otjMtupk1DQDjKXYY1dWjT6LNM4H4ZWZ1XcKSX` | 3 of 5 | 2 — `system` `7auwTLSv…`, `admin` `BLSBw8fX…` | **HAND OFF** one approval and the execute to Mr. McRitchie |
 
 **The asymmetry is the design, not a gap.** Devnet is meant to run unattended;
-mainnet is meant to need Mr. McRitchie. His three wallets — `7ZDJp7FU…` (Alex
-Phantom), `3Qj4v9qj…` (Alex two), `9gACbz…` (Alex three) — sit on mainnet, and any
+mainnet is meant to need Mr. McRitchie. His three wallets — `7ZDJp7FU…` (his
+Phantom), `3Qj4v9qj…` (his second), `9gACbz…` (his third) — sit on mainnet, and any
 one of them closes the mainnet quorum. Mainnet crossing into AUTONOMOUS is a
 governance regression to investigate, and devnet falling out of it is a broken
 automation lane; `squad-inventory.js` prints either in one line.
@@ -309,9 +312,17 @@ a transaction and cast a vote. Confirm rather than assume — the mask, not the
 membership, is what decides whether a seat can do the step being asked of it.
 
 **Retired 2026-09-15, with Mr. McRitchie's authorization:** Xan `8K81w4e6…` off
-mainnet (still seated on devnet) and Mason `CytJS23p…` off both. Neither is a
-Squads member on the cluster the old tooling named them for. They remain
-`VaultState` signers, which is a different multisig — see above.
+mainnet and Mason `CytJS23p…` off both live Squads. Xan also left devnet in that
+09:41 MDT change (config transaction #16) and was re-seated there at 14:02 MDT
+(#18), which is why the table shows him on devnet. Neither is a Squads member on
+the cluster the old tooling named them for. They remain `VaultState` signers,
+which is a different multisig — see above.
+
+**Retired 2026-09-16, signed by Mr. McRitchie:** the first mainnet Squad
+`9dCLMZct…`, which the table leaves out because it governs nothing. It closed the
+program it held (`mnzowM2F…`), then removed `F6f8...KzhZ` and Mason and dropped
+to 1-of-1 with `7ZDJp7FU…` alone. `squad-inventory.js` does not read it. The
+detail is under **Mainnet** above; the signatures are in `KEY_ROTATION.md` §7–§8.
 
 The scripts that ran that rotation are preserved in
 [`scripts/ceremony/`](../scripts/ceremony/README.md), with what each one did and

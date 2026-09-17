@@ -12,10 +12,13 @@
 
 > **HISTORICAL SUPERSEDED PLAN. DO NOT EXECUTE AS CURRENT PROCEDURE.**
 > The retired Alex Bot key `F6f8...KzhZ` holds no authority over either LIVE
-> program or either LIVE Squad. It is NOT gone from the chain: it keeps a signer
-> slot in the orphaned devnet `Dx8u…` vault, and on mainnet it is still seated on
-> the first Squad `9dCLMZct…` and in the first program's `VaultState` — see the
-> status box below and [`CURRENT_DEPLOYMENT.md`](CURRENT_DEPLOYMENT.md). Current live signer facts live in
+> program or either LIVE Squad, and since 2026-09-16 none over either mainnet
+> deployment. It is NOT gone from the chain: it keeps a signer slot in the
+> orphaned devnet `Dx8u…` vault, and its bytes stay in the `VaultState` of the
+> first mainnet program `mnzowM2F…`, which was closed on 2026-09-16 — so that
+> slot authorizes nothing. Eleven minutes after the close, it was removed from
+> the first Squad `9dCLMZct…` (§7, §8). See the status box below and
+> [`CURRENT_DEPLOYMENT.md`](CURRENT_DEPLOYMENT.md). Current live signer facts live in
 > [`CURRENT_DEPLOYMENT.md`](CURRENT_DEPLOYMENT.md). `update_signers` is not
 > merely in current source — it is **on both deployed programs** (§0), so a
 > signer rotation is planned from current source, `CURRENT_DEPLOYMENT.md`, and
@@ -32,7 +35,8 @@
 > 1. an adversarial mini-review of v0.20 (`update_signers` + this plan), and
 > 2. an explicit operator GO.
 >
-> **Most of it WAS run — on mainnet, on 2026-06-02.** This box used to say
+> **Most of it WAS run — on mainnet, on 2026-06-02 — and §7–§8 ran on
+> 2026-09-16.** This box used to say
 > nothing in §1–§8 had run. The chain says otherwise. Decoded at `finalized` on
 > 2026-09-16 from each account's own transaction history (times UTC):
 >
@@ -44,8 +48,11 @@
 > | §4b upgrade authority to the new Squad's vault | `SetAuthority` → `Bk9sS7ii…` at 19:14:10Z, 17 seconds later |
 > | §5 re-init from Alex's Phantom | `initialize` at 19:23:59Z, signed by `7ZDJp7FU…`: signers `8K81…` / `7ZDJ…` / `CytJ…`, threshold 2 |
 > | §6 re-point `turf-monster-mainnet` | its `SOLANA_PROGRAM_ID` is `DaFv83yo…`, with the IDL pinned (Heroku config, read 2026-09-16) |
-> | §7 evict the old key from `9dCLM…` | **NOT RUN.** `9dCLM…` has never had a transaction; `F6f8…` is still seated |
-> | §8 close the old program `mnzow…` | **NOT RUN.** Still open, still holding its 3.50 SOL of ProgramData rent |
+> | §7 evict the old key from `9dCLM…` | **RAN 2026-09-16 MDT, AFTER §8.** Config transaction #2 executed 2026-09-17 02:38:50Z: `ChangeThreshold 1`, `RemoveMember F6f8…`, `RemoveMember CytJ…`. `7ZDJ…` is the only member (§7) |
+> | §8 close the old program `mnzow…` | **RAN 2026-09-16 MDT.** Vault transaction #1 executed 2026-09-17 02:27:09Z: `mnzow…` closed, its 3.50 SOL of ProgramData rent sent to the live Squad's vault `Bk9sS7ii…` (§8) |
+>
+> Until 2026-09-16 those two rows read **NOT RUN**: `9dCLM…` had never had a
+> transaction, and `mnzow…` was still open and upgradeable.
 >
 > §2 was not checked. Devnet took the in-place route instead: `update_signers`
 > on 2026-06-02 and a Squads config transaction on 2026-06-06
@@ -96,7 +103,7 @@ Two separate things contain this key:
 
 | Where | Mutable in place? | How |
 |-------|-------------------|-----|
-| Squads multisig **membership** (upgrade authority) | **YES** | Squads config tx, approved at THAT multisig's own threshold — 2 on both incident-era Squads (the old mainnet `9dCLM…` still reads 2), 3 on both live Squads since 2026-09-15 (`node scripts/squad-inventory.js`). Members ARE mutable. |
+| Squads multisig **membership** (upgrade authority) | **YES** | Squads config tx, approved at THAT multisig's own threshold — 2 on both incident-era Squads (the old mainnet `9dCLM…` read 2 until its retirement on 2026-09-16, and reads 1 since), 3 on both live Squads since 2026-09-15 (`node scripts/squad-inventory.js`). Members ARE mutable. |
 | The deployed program's **VaultState.signers** | **YES on every program deployed today**; **NO** on the v0.19 program this plan was written against | v0.20 restored `update_signers` (2-of-3), and it has shipped in every release since. On v0.19 the set was immutable, because v0.16 had removed the instruction. |
 
 Because the **v0.19** program could not rotate its own `VaultState.signers`,
@@ -224,8 +231,8 @@ reduction.**
    it. This is hygiene, not containment: it constrains **your own server**
    across every on-chain-gated op, and constrains the attacker in none of them.
 4. **Rotate the Squads membership** (procedure in §7, against the live Squads in
-   `scripts/squad.json` — §7's `9dCLM…` is the historical multisig, historical
-   but never retired: the old key is still seated on it). Step 2
+   `scripts/squad.json` — §7's `9dCLM…` is the historical multisig, retired on
+   2026-09-16 with the old key removed from it). Step 2
    moves the vault signer set only; the leaked key remains a Squads member, and
    so a partial route to the program's **upgrade** authority, until this runs.
    Two authorities, two transactions. Treat this and any old-program close (§8)
@@ -379,9 +386,9 @@ and it is what both `squad-upgrade.js` and `initialize-mainnet.js` read):
 
 | | value |
 |--|--|
-| OLD program ID | `mnzowM2F9dppGVFGrcTAh5351mMqYunX3b2MvdvgS2S` |
-| OLD Squads vault PDA | `83BXrVFBNxonkiTsWm7ZPetLqKEvEGcGhALjVbLm4D1K` |
-| OLD Squads multisig PDA | `9dCLMZctmoo3gZj9BGPWD9ueqBx2zpMhpVGU53sRknJr` |
+| OLD program ID | `mnzowM2F9dppGVFGrcTAh5351mMqYunX3b2MvdvgS2S` — **closed 2026-09-16** (§8) |
+| OLD Squads vault PDA | `83BXrVFBNxonkiTsWm7ZPetLqKEvEGcGhALjVbLm4D1K` — emptied 2026-09-16 (§8) |
+| OLD Squads multisig PDA | `9dCLMZctmoo3gZj9BGPWD9ueqBx2zpMhpVGU53sRknJr` — **retired 2026-09-16**: 1-of-1, `7ZDJ…` alone (§7) |
 | NEW program ID | generated in §3 |
 | Squads vault for new program | **recommend a NEW Squads** (see §4) |
 
@@ -741,7 +748,7 @@ heroku run 'bin/rails runner "puts Solana::Vault.new.read_vault_state.inspect"' 
 > **It no longer names a fixed pair of people at all.** Until 2026-09-15 it read
 > `ALEX_BOT_KEY` (Xan) and `MASON_KEY` (Mason) and assumed both could drive an
 > upgrade unattended; the rotation that morning removed both from both Squads
-> multisigs (Xan was re-seated on devnet that evening) and the script could not
+> multisigs (Xan was re-seated on devnet at 14:02 MDT) and the script could not
 > run on either cluster. It now takes a ROSTER
 > of candidate seats per cluster, intersects it with live membership, and branches
 > on the count — so a future rotation drops a seat out of the plan instead of
@@ -812,12 +819,64 @@ Also confirm:
 
 ## §7. Rotate OLD Alex Bot out of the Squads membership  *(operator, 2-of-3)*
 
-> **Which multisig the 2-of-3 describes, and whether this ran — read on chain
-> 2026-09-16.** The heading's 2-of-3 is the OLD mainnet Squad `9dCLMZct…`, and it
-> is still correct: that multisig reads threshold 2 of `7ZDJ…`, `F6f8…` and
-> `Cyt…` today. It is not the live Squads, which read 3-of-5. **This step has not
-> run:** `9dCLM…` has never had a transaction, so the leaked key is still a
-> member.
+> **DONE 2026-09-16 (MDT) — this section is now a record, not a step.** It ran
+> AFTER §8, as ONE Squads config transaction on the OLD mainnet Squad
+> `9dCLMZct…` (transaction index 2), on Mr. McRitchie's instruction "One combined
+> change, go." Three actions, applied atomically:
+>
+> | # | Action |
+> |---|--------|
+> | 0 | `ChangeThreshold` 1 |
+> | 1 | `RemoveMember` `F6f8h5yy…KzhZ` — the leaked key |
+> | 2 | `RemoveMember` `CytJS23p…` — Mason |
+>
+> Config transaction PDA `EJwCQNhgM18AJ45Swe1Un2ZGTrG7tZAReskXuwHMc1S`; proposal
+> PDA `KsRuwwLkgEpvDc8f8pVQqSbDXaJQDApXEM23EbVCZ8f`. Every signature below was
+> read back at `finalized`:
+>
+> | Step | Signer | Signature |
+> |------|--------|-----------|
+> | create | `CytJ…` | `5c6VX3E8czRagDZAdKrLkyJhSEnBeHfLvhXaDEma29TmGP6ARi2iaoKWw2LLXQ2uvYSNPBKDuxvvTS9ZDJUzdiE7` |
+> | propose | `CytJ…` | `23Eszhq51JQDzcyegWvGGA5mTjoKqf2aHySBVSNZFB8KrRHDEb27TGi6k76tu6Job8P5j7dXbUSYn71tXamVxAje` |
+> | approve | `CytJ…` | `P2FWkV5sNt1BsVC36husCyhruJgZj2rkBSjvWcaVvND68yfsJ76gMqRz7H6veDLJrYsLMrbxKobDAwJW2dXEicq` |
+> | approve | `7ZDJ…` | `GVKsfNVGxskovHD6M1WXpoaxoaVPw8pW8md1RA6vMNpxrE8Mv47ZDsWguwEHVJfbJibQ6xLA23oVSZaMe9FxmAW` |
+> | **execute** | `7ZDJ…` | `3BQQ1fbgYf1tqcq7Psz4UvAK94wNqACAfnHsKTEesegLvhQAhXpLFctaa92Q8fSYMdizSRGzsLQbNTTyN7un4y7A` — slot `447683443`, 2026-09-17 02:38:50Z (8:38 PM MDT on 09-16), `ConfigTransactionExecute` |
+>
+> **After it — read at `finalized`, slot `447698643`:** `9dCLM…` is threshold 1
+> with ONE member, `7ZDJp7FU…` (mask 7); transaction index 2, stale index 2; no
+> rent collector. `F6f8…` is seated on none of the three Squads this repo records
+> (`9dCLM…`, the live mainnet `4H3fP3ot…`, devnet `7nRuVw3V…`), and it cast no
+> vote in either 2026-09-16 transaction: its newest mainnet signature is still
+> from 2026-06-02.
+>
+> **`9dCLM…` still exists, and always will.** Squads v4 has no instruction that
+> closes a `Multisig` account, so it keeps its ~0.0025 SOL of rent and controls
+> nothing: its vault `83BXrVFB…` holds no lamports and is no program's upgrade
+> authority. Its two transaction and two proposal accounts hold another
+> ~0.0087 SOL, reclaimable only after a `SetRentCollector` config change —
+> optional, and not done.
+>
+> **What ran supersedes two pieces of guidance below.** They stay as the plan
+> that was written, not as advice.
+>
+> 1. **"Alex (7ZDJ) + Mason (Cyt) — the two CLEAN signers."** Mason's key is
+>    clean of the leak, but it is not a second human's key. `CytJS23p…`'s secret
+>    is item `agent.mason.solana` in the `studio-agents` vault, which every agent
+>    lane reads. So the approving pair was Mr. McRitchie plus a key any agent
+>    could load. That is why this change removed Mason as well and dropped the
+>    threshold to 1, leaving `7ZDJ…` alone — instead of seating a replacement
+>    bot, which the plan's `addMember(<NEW_ALEX_BOT_PUBKEY>)` would have done.
+> 2. **"Recommended: rotate membership first (§7), then run the §8 close."** The
+>    close ran first, eleven minutes earlier. One vault proposal ended the
+>    upgrade authority — the only thing of value the leaked seat could reach —
+>    and recovered the rent. Being a vault transaction, it staled nothing (only a
+>    config execution moves `staleTransactionIndex`). Once the program was
+>    closed, the membership change guarded nothing of value and could safely run
+>    second.
+>
+> *Before it ran:* the heading's 2-of-3 is the OLD mainnet Squad `9dCLMZct…`,
+> which read threshold 2 of `7ZDJ…`, `F6f8…` and `Cyt…` from 2026-05-26 until
+> this change. It never described the live Squads, which read 3-of-5.
 
 Squads members ARE mutable. The leaked key must be evicted from **every**
 Squads it's still a member of — at minimum the OLD Squads (`9dCLM…`), which
@@ -843,10 +902,46 @@ Via https://app.squads.so (mainnet) on the OLD multisig 9dCLM…:
 
 ## §8. Close the OLD program to reclaim rent  *(operator, Squads 2-of-3)*
 
-> **Read on chain 2026-09-16:** "Squads 2-of-3" is the same OLD Squad
-> `9dCLMZct…`, still 2-of-3. **This step has not run:** `mnzowM2F…` is still
-> open, still upgradeable by that Squad's vault `83BXrVFB…`, and its ProgramData
-> still holds 3.50 SOL of rent.
+> **DONE 2026-09-16 (MDT) — this section is now a record, not a step.** It ran
+> BEFORE §7, as Squads **vault transaction #1** on the OLD mainnet Squad
+> `9dCLMZct…` (vault index 0, so `83BXrVFB…` signed by CPI), approved by `CytJ…`
+> and `7ZDJ…` while the leaked key was still seated. Two instructions:
+>
+> 1. BPF Loader Upgradeable `Close` of program
+>    `mnzowM2F9dppGVFGrcTAh5351mMqYunX3b2MvdvgS2S`: ProgramData
+>    `6LcahoVM4fzWtX2JZ45GVygRio5waF5CfFRFh2VXKUXH` closed, rent to recipient
+>    `Bk9sS7iiSRL18vuo2KVzkeGw7EekKqxMCjrdoyGGdJm` — vault 0 of the LIVE mainnet
+>    Squad `4H3fP3ot…` (3-of-5), not an agent key.
+> 2. System transfer of 1,000,000 lamports from `83BXrVFB…` to `Bk9sS7ii…`,
+>    emptying the old vault.
+>
+> Transaction PDA `FvAjkXZ6x17u7bXeWunX2DYn1JiufYUKsWSZrzBafRXh`; proposal PDA
+> `D5pPmnzYNQpkQyeMBeMo5ssBT2gmArJHZGaEYmiqQKBX`. Every signature below was read
+> back at `finalized`:
+>
+> | Step | Signer | Signature |
+> |------|--------|-----------|
+> | create | `CytJ…` | `3FREbHgqCPSkxbYU6z9nRpy1N2gHUP3j8msZcYB7V5sxaZ4UzW6MWE512ibbUXAaaNv4tAPwfwseomaXJtHvXSKm` |
+> | propose | `CytJ…` | `5AYokBqZ5G8TB2WXsH7wEYs4piomSALm85QEhzzWwmkFe7kuhFsWDXgoN57Dm7sQWqi3WHLw9W8Gj1EGsZXfYWJV` |
+> | approve | `CytJ…` | `4qzx3jKrRQ4A1EQ6bVyWyXnxFQUQKKkKN65SKoNYRFawqFma7Bg6hzMoqgDSUEVcTJyYz4hAZGGxSq2wi7DpK2oq` |
+> | approve | `7ZDJ…` | `5975jjS9GJF8WGuZmLb1uF5TsyS8Xorw1GvQND5KVogVZaDgunuaPs9e5Dy2osUwPyu94tAxnvNaKCZdJiVZ27N1` |
+> | **execute** | `7ZDJ…`, from the Squads app | `3Dww9wTJq5kbbWpXgzCUqoroVPbGj1TRKR6C7LkVXZogAvtF6ickusuB9dYJJErL1BXyyXg7Q5Kktf51Fzy9bh6t` — slot `447681223`, 2026-09-17 02:27:09Z (8:27 PM MDT on 09-16), log `Closed Program mnzowM2F…` |
+>
+> **Post-flight — read at `finalized`, slot `447681865`:** ProgramData
+> `6LcahoVM…` no longer exists; `83BXrVFB…` holds 0; `Bk9sS7ii…` rose by
+> 3,501,859,120 lamports (101,010,000 → 3,602,869,120), which is the
+> 3,500,859,120 of ProgramData rent plus the 1,000,000 transfer; and `mnzow…`'s
+> program account is a 36-byte tombstone holding 1,141,440 lamports. Re-read at
+> slot `447698643`: unchanged. A closed program ID can never be deployed again.
+>
+> **`mnzow…`'s `VaultState` (`J81p…`) still lists `F6f8…`, and always will.** No
+> instruction can rewrite or close an account owned by a closed program, so it
+> keeps `F6f8…`, `7ZDJ…` and `CytJ…` at threshold 2 for good. The leaked key has
+> no authority there because no program is left to read that account, not
+> because its bytes changed. The same is true of the other accounts `mnzow…`
+> created (about 0.024 SOL): nothing can close them.
+>
+> The "clean members" wording below is superseded; see the box at the top of §7.
 
 The OLD program (`mnzow…`) is now dead — nothing points at it. Close it to
 reclaim its ~3.5 SOL ProgramData rent. The close authority is the OLD program's
@@ -886,6 +981,13 @@ solana program close <OLD_PROGRAM_ID> --recipient <NEW_ALEX_BOT_OR_TREASURY>
 The dominant risk to cost is **§8 failing** — if the old program can't be
 closed, the real cost balloons by the stranded ~3.5 SOL ProgramData rent.
 Prioritize a clean upgrade-authority + Squads state so §8 can execute.
+
+> **Outcome, 2026-09-16: §8 succeeded.** The close returned 3,500,859,120
+> lamports of ProgramData rent, and the same transaction swept the old vault's
+> 1,000,000-lamport float, both to `Bk9sS7ii…`. Left behind for good: 1,141,440
+> lamports under `mnzow…`'s 36-byte program tombstone, and about 0.024 SOL in the
+> accounts `mnzow…` created. About 0.0087 SOL of proposal rent on `9dCLM…` stays
+> reclaimable, but only after a `SetRentCollector` config change, not yet made.
 
 ---
 
