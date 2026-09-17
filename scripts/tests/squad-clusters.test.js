@@ -42,6 +42,7 @@ const {
   AGENT_SEATS,
   ClusterError,
   GENESIS,
+  MEMBER_NAMES,
   SQUAD_JSON,
   addressesFor,
   canonicalCluster,
@@ -244,6 +245,24 @@ test("member names cover every key either cluster can present", () => {
     );
   }
   assert.equal(memberName("NotAKey"), "unrecognised", "an unknown key says so rather than guessing");
+});
+
+test("the operator's wallets are named for Mr. McRitchie, because Alex is an agent", () => {
+  // These three seats are the approvals a mainnet HANDOFF waits on, and
+  // squad-upgrade.js prints memberName() beside each one. Until 2026-09-16 they
+  // read "Alex Phantom", "Alex two" and "Alex three" — and in this ecosystem Alex
+  // is an AGENT, so the line a person reads mid-ceremony named the wrong party.
+  const operatorWallets = [
+    "7ZDJp7FUHhuceAqcW9CHe81hCiaMTjgWAXfprBM59Tcr",
+    "3Qj4v9qjhXgkru6zCRCErRVhy8Q6qU3NrNpvpXLTZboA",
+    "9gACbzsCLmkYF9Yx1EBGmwMvvyfuTquJ6qs8QsoQvHXf",
+  ];
+  for (const key of operatorWallets) {
+    assert.match(memberName(key), /^Mr\. McRitchie's .+ \(operator\)$/, `${key} is Mr. McRitchie's wallet`);
+  }
+  for (const [key, label] of Object.entries(MEMBER_NAMES)) {
+    assert.doesNotMatch(label, /\bAlex\b/, `${key} reads "${label}" — Alex is an agent, not the operator`);
+  }
 });
 
 // --- the coupling this suite cannot check in CI -----------------------------

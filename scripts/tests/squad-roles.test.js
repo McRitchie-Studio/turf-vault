@@ -50,7 +50,7 @@ const XAN = "8K81w4e6UcB7TiANhM9N8sAgijJvTxxybRi8AENRaRYd"; // agent, devnet onl
 const ALEX = "7ZDJp7FUHhuceAqcW9CHe81hCiaMTjgWAXfprBM59Tcr"; // operator
 const ALEX_TWO = "3Qj4v9qjhXgkru6zCRCErRVhy8Q6qU3NrNpvpXLTZboA"; // operator
 const ALEX_THREE = "9gACbzsCLmkYF9Yx1EBGmwMvvyfuTquJ6qs8QsoQvHXf"; // operator
-const MASON = "CytJS23p1zCM2wvUUngiDePtbMB484ebD7bK4nDqWjrR"; // retired 2026-09-15
+const MASON = "CytJS23p1zCM2wvUUngiDePtbMB484ebD7bK4nDqWjrR"; // off both live Squads 2026-09-15
 
 const ALL = INITIATE | VOTE | EXECUTE; // mask 7, what every live seat holds today
 
