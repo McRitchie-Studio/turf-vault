@@ -312,9 +312,9 @@ a transaction and cast a vote. Confirm rather than assume — the mask, not the
 membership, is what decides whether a seat can do the step being asked of it.
 
 **Retired 2026-09-15, with Mr. McRitchie's authorization:** Xan `8K81w4e6…` off
-mainnet and Mason `CytJS23p…` off both live Squads. Xan also left devnet in that
-09:41 MDT change (config transaction #16) and was re-seated there at 14:02 MDT
-(#18), which is why the table shows him on devnet. Neither is a Squads member on
+mainnet and Mason `CytJS23p…` off both live Squads — mainnet config transaction
+#3 at 09:46 MDT, devnet #16 at 09:41 MDT. Xan also left devnet in that #16 and
+was re-seated there at 14:02 MDT (#18), which is why the table shows him on devnet. Neither is a Squads member on
 the cluster the old tooling named them for. They remain `VaultState` signers,
 which is a different multisig — see above.
 
