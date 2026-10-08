@@ -3203,10 +3203,25 @@ describe("turf_vault verification matrix", () => {
   //   * the refusal is raised BEFORE the contest's own constraints, so a retry
   //     against a now-full contest still reads "already in use" rather than
   //     ContestFull — which is what lets the app read a retry's failure as
-  //     "your first payment landed";
+  //     "your first payment landed" (WHY it is first: see the note below);
   //   * lamports sitting at the address are NOT a ticket: a System-owned
   //     account there does not block the real entry, and only the owner tells
   //     the two apart.
+  //
+  // WHY `init` ANSWERS FIRST — the mechanism, AS READ from the generator, not
+  // something these cases prove. anchor-syn 0.32.1,
+  // src/codegen/accounts/try_accounts.rs: `generate` first walks the struct in
+  // declaration order and DESERIALIZES every non-init field (owner and
+  // discriminator), leaving each `init` field as a raw account; then
+  // `generate_constraints` emits EVERY `init` field's block, and only after all
+  // of them the access checks (`seeds`, `constraint = …`, `token::…`) of the
+  // non-init fields. So it is NOT declaration order that puts the ticket ahead
+  // of ContestFull or EntryTokenAlreadyConsumed: an `init` field runs before
+  // every non-init field's constraints wherever the struct declares it.
+  //
+  // What the cases below prove is the OUTCOME, on a real validator: which
+  // error the program returns. A future Anchor that reordered its generated
+  // checks would redden them, which is the point of having them.
   //
   // A fresh wallet and fresh contests keep every balance here a clean delta,
   // whatever the describes above left behind.
@@ -3527,9 +3542,36 @@ describe("turf_vault verification matrix", () => {
       expect(secondAfter.consumed).to.equal(false);
       expect(secondAfter.consumedAt).to.equal(null);
 
+      // The second voucher's retry again, LANDED: preflight off, so the
+      // transaction is included in a block and fails there. Same error, and
+      // the voucher and the entry count are exactly where they were.
+      const entriesBeforeLanded = (await ledger(contest)).currentEntries;
+      const { signature, confirmation, landed } = await landWithoutPreflight(
+        () => tokenEntry(contest, second.pda, 0)
+      );
+      trace("case 2: landed retry — signature", signature);
+      trace("case 2: landed retry — confirmation err", confirmation.value.err);
+      trace(
+        "case 2: landed retry — logs",
+        (landed?.meta?.logMessages ?? []).join("\n")
+      );
+      expect(confirmation.value.err).to.deep.equal(ALREADY_IN_USE);
+      expect(landed, "the failed retry is not on chain").to.not.equal(null);
+      expect(landed!.meta!.err).to.deep.equal(ALREADY_IN_USE);
+      expectSystemRefusalLogs(landed!.meta!.logMessages ?? [], ticket);
+      const secondAfterLanded = await tokenState(second.pda);
+      expect(secondAfterLanded.consumed).to.equal(false);
+      expect(secondAfterLanded.consumedAt).to.equal(null);
+      expect((await ledger(contest)).currentEntries).to.equal(
+        entriesBeforeLanded
+      );
+      expect(entriesBeforeLanded).to.equal(before.currentEntries + 1);
+
       // The retry a client actually makes — the SAME voucher, now consumed —
-      // reads the same way: `contest_entry` is declared before `entry_token`,
-      // so the occupied ticket answers before EntryTokenAlreadyConsumed can.
+      // reads the same way: the occupied ticket answers, not
+      // EntryTokenAlreadyConsumed. (`entry_token`'s constraints are access
+      // checks, which run after every `init`; see the note at the top of this
+      // describe. Declaration order is not what decides it.)
       await expectTicketInUse(
         () => tokenEntry(contest, first.pda, 0),
         ticket,
@@ -3599,10 +3641,12 @@ describe("turf_vault verification matrix", () => {
         /ContestFull/
       );
 
-      // The occupied slot is answered FIRST, by the System program: Anchor
-      // runs `init` while it walks the accounts, before the `constraint =`
-      // checks on `contest`. expectTicketInUse fails on any AnchorError line,
-      // so a ContestFull here could not pass.
+      // The occupied slot is answered FIRST, by the System program. That
+      // outcome is what this case proves. The mechanism is read from the
+      // generator, not proved here: Anchor emits every `init` field before the
+      // access checks of the non-init fields, `contest`'s `constraint =` among
+      // them (see the note at the top of this describe). expectTicketInUse
+      // fails on any AnchorError line, so a ContestFull here could not pass.
       await expectTicketInUse(
         () => paidEntry(contest, 0),
         ticket,
