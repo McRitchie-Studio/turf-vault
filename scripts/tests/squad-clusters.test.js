@@ -39,7 +39,9 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const {
+  ADMIN_VAULT,
   AGENT_SEATS,
+  AGENT_VAULT,
   ClusterError,
   GENESIS,
   MEMBER_NAMES,
@@ -48,6 +50,7 @@ const {
   canonicalCluster,
   memberName,
   resolveCluster,
+  seatSecretSource,
 } = require("../lib/squad-clusters");
 
 const cfg = () => JSON.parse(fs.readFileSync(SQUAD_JSON, "utf8"));
@@ -170,24 +173,74 @@ test("no Squads membership is resolved from the file — only from the chain", (
 // --- the seat roster --------------------------------------------------------
 
 test("the roster's public keys are the LIVE agent seats on each cluster", () => {
-  // Read off chain 2026-09-15, after the day's second rotation. Both multisigs
-  // are threshold 3 of 5; mainnet's agent seats reach 2 and devnet's reach 3,
-  // which is the asymmetry the two behaviours are built on.
+  // Read off chain 2026-09-15, after the day's second rotation, and amended by
+  // the 2026-10-08 governance rotation (BLSBw8 out, 4bKN in, one config
+  // transaction per cluster). Both multisigs are threshold 3 of 5; mainnet's
+  // agent seats reach 2 and devnet's reach 3, which is the asymmetry the two
+  // behaviours are built on.
   assert.deepEqual(
     AGENT_SEATS["mainnet-beta"].map((s) => s.pubkey),
     [
       "7auwTLSvNniSUeAgL6v9RStMXJhWrrUhSJgwFWLpcqC", // system
-      "BLSBw8fXHzZc5pbaYCKMpMSsrtXBTbWXpUPVzMrXx9oo", // admin
+      "4bKNSqkrKeggSyrds16Ak7rcB4ibvGJ4ZLsKjvQgC3Vk", // governance
     ]
   );
   assert.deepEqual(
     AGENT_SEATS.devnet.map((s) => s.pubkey),
     [
       "2eGs8G3wzhEeNQQU2Q86BmmA2xTpDbMMae3Y1bvpZfx9", // system.devnet
-      "BLSBw8fXHzZc5pbaYCKMpMSsrtXBTbWXpUPVzMrXx9oo", // admin
+      "4bKNSqkrKeggSyrds16Ak7rcB4ibvGJ4ZLsKjvQgC3Vk", // governance
       "8K81w4e6UcB7TiANhM9N8sAgijJvTxxybRi8AENRaRYd", // Xan — devnet ONLY since 09:41
     ]
   );
+});
+
+test("the exposed admin key is offered on NO cluster", () => {
+  // BLSBw8 (solana.turf.admin) sat in local env files on many desks. A roster
+  // that still offered it would have a rotated-out key sign the next upgrade.
+  const EXPOSED = "BLSBw8fXHzZc5pbaYCKMpMSsrtXBTbWXpUPVzMrXx9oo";
+  for (const [cluster, seats] of Object.entries(AGENT_SEATS)) {
+    assert.ok(!seats.some((s) => s.pubkey === EXPOSED), `${cluster} still offers BLSBw8`);
+    assert.ok(!seats.some((s) => s.item === "solana.turf.admin"), `${cluster} still reads solana.turf.admin`);
+  }
+});
+
+test("every seat names its vault; governance is the admin vault, the rest are not", () => {
+  for (const [cluster, seats] of Object.entries(AGENT_SEATS)) {
+    for (const seat of seats) {
+      const want = seat.role === "governance" ? ADMIN_VAULT : AGENT_VAULT;
+      assert.equal(seat.vault, want, `${cluster}/${seat.role} vault`);
+    }
+  }
+});
+
+test("an agent-vault seat reads exactly as before: MCR_OP_VAULT_AGENT, caller's token", () => {
+  const seat = AGENT_SEATS["mainnet-beta"].find((s) => s.role === "system");
+  const env = { OP_SERVICE_ACCOUNT_TOKEN: "agent-token" };
+  const plain = seatSecretSource(seat, env);
+  assert.equal(plain.ref, "op://studio-agents/solana.turf.system/private-key");
+  assert.equal(plain.childEnv, env, "an agent seat inherits the caller's environment untouched");
+
+  const renamed = seatSecretSource(seat, { ...env, MCR_OP_VAULT_AGENT: "other-agents" });
+  assert.equal(renamed.ref, "op://other-agents/solana.turf.system/private-key");
+
+  const xan = AGENT_SEATS.devnet.find((s) => s.role === "xan");
+  assert.equal(seatSecretSource(xan, env).ref, "op://studio-agents/agent.xan.solana/private key");
+});
+
+test("an admin-vault seat swaps in the admin token, and refuses without it", () => {
+  const seat = AGENT_SEATS.devnet.find((s) => s.role === "governance");
+  const env = { OP_SERVICE_ACCOUNT_TOKEN: "agent-token", OP_ADMIN_SERVICE_ACCOUNT_TOKEN: "admin-token", MCR_OP_VAULT_AGENT: "x" };
+  const spec = seatSecretSource(seat, env);
+  assert.equal(spec.ref, "op://studio-agents-admin/solana.turf.governance/private key");
+  assert.equal(spec.childEnv.OP_SERVICE_ACCOUNT_TOKEN, "admin-token");
+  assert.equal(env.OP_SERVICE_ACCOUNT_TOKEN, "agent-token", "the caller's env is not mutated");
+
+  assert.throws(
+    () => seatSecretSource(seat, { OP_SERVICE_ACCOUNT_TOKEN: "agent-token" }),
+    (e) => e instanceof ClusterError && /zprofile\.admin/.test(e.message)
+  );
+  assert.throws(() => seatSecretSource({ ...seat, vault: "agents" }, env), ClusterError);
 });
 
 test("no retired key is offered on the cluster that removed it", () => {

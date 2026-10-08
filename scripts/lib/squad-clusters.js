@@ -66,22 +66,41 @@ const GENESIS = {
  * names the item but not the field, so both spellings are recorded.
  *
  * `env` is the override: set it and 1Password is not consulted for that seat.
+ *
+ * `vault` names the 1Password vault the item lives in, because since
+ * 2026-10-08 the seats do not all live in one. `studio-agents` is readable by
+ * every agent's service account; `studio-agents-admin` only by the admin one
+ * (`OP_ADMIN_SERVICE_ACCOUNT_TOKEN`, exported by `~/.zprofile.admin`).
+ * `seatSecretSource()` below turns a seat into the `op read` reference and the
+ * token that can open it.
+ *
+ * THE GOVERNANCE SEAT (2026-10-08, task rotate-mainnet-admin-key). `BLSBw8…`
+ * (`solana.turf.admin`) sat in local env files on many desks, so it was rotated
+ * out of BOTH multisigs by one config transaction per cluster —
+ * `removeMember(BLSBw8…)` + `addMember(4bKNSqkr…, mask 7)`, threshold unchanged
+ * (`scripts/ceremony/rotate-admin-seat.js`). The replacement is filed in the
+ * ADMIN vault, so a desk-level agent token can no longer read it.
  */
+const AGENT_VAULT = "studio-agents";
+const ADMIN_VAULT = "studio-agents-admin";
+
 const AGENT_SEATS = {
   "mainnet-beta": [
     {
       role: "system",
       pubkey: "7auwTLSvNniSUeAgL6v9RStMXJhWrrUhSJgwFWLpcqC",
       item: "solana.turf.system",
+      vault: AGENT_VAULT,
       secretField: "private-key",
       env: "SQUAD_KEY_SYSTEM",
     },
     {
-      role: "admin",
-      pubkey: "BLSBw8fXHzZc5pbaYCKMpMSsrtXBTbWXpUPVzMrXx9oo",
-      item: "solana.turf.admin",
-      secretField: "private-key",
-      env: "SQUAD_KEY_ADMIN",
+      role: "governance",
+      pubkey: "4bKNSqkrKeggSyrds16Ak7rcB4ibvGJ4ZLsKjvQgC3Vk",
+      item: "solana.turf.governance",
+      vault: ADMIN_VAULT,
+      secretField: "private key",
+      env: "SQUAD_KEY_GOVERNANCE",
     },
   ],
   devnet: [
@@ -89,25 +108,61 @@ const AGENT_SEATS = {
       role: "system.devnet",
       pubkey: "2eGs8G3wzhEeNQQU2Q86BmmA2xTpDbMMae3Y1bvpZfx9",
       item: "solana.turf.system.devnet",
+      vault: AGENT_VAULT,
       secretField: "private-key",
       env: "SQUAD_KEY_SYSTEM",
     },
     {
-      role: "admin",
-      pubkey: "BLSBw8fXHzZc5pbaYCKMpMSsrtXBTbWXpUPVzMrXx9oo",
-      item: "solana.turf.admin",
-      secretField: "private-key",
-      env: "SQUAD_KEY_ADMIN",
+      role: "governance",
+      pubkey: "4bKNSqkrKeggSyrds16Ak7rcB4ibvGJ4ZLsKjvQgC3Vk",
+      item: "solana.turf.governance",
+      vault: ADMIN_VAULT,
+      secretField: "private key",
+      env: "SQUAD_KEY_GOVERNANCE",
     },
     {
+      // Measured 2026-10-08: `agent.xan.solana` lives in `studio-agents`, NOT
+      // `studio-agents-admin` as the hub's secrets-rotation runbook said; the
+      // admin vault holds no Solana item but `solana.turf.governance`.
       role: "xan",
       pubkey: "8K81w4e6UcB7TiANhM9N8sAgijJvTxxybRi8AENRaRYd",
       item: "agent.xan.solana",
+      vault: AGENT_VAULT,
       secretField: "private key",
       env: "SQUAD_KEY_XAN",
     },
   ],
 };
+
+/**
+ * Where one seat's secret is read from, and with which token.
+ *
+ * An `AGENT_VAULT` seat honours `MCR_OP_VAULT_AGENT` exactly as every seat did
+ * before 2026-10-08, and inherits the caller's environment. An `ADMIN_VAULT`
+ * seat is read with `OP_ADMIN_SERVICE_ACCOUNT_TOKEN` passed to `op` AS
+ * `OP_SERVICE_ACCOUNT_TOKEN` — the default token cannot even list that vault —
+ * and refuses, naming the remedy, when the admin token is not exported.
+ *
+ * Pure: no `op`, no network. Returns `{ vault, ref, childEnv }`.
+ */
+function seatSecretSource(seat, env = process.env) {
+  const declared = seat.vault || AGENT_VAULT;
+  if (declared !== AGENT_VAULT && declared !== ADMIN_VAULT) {
+    throw new ClusterError(`${seat.role}: unknown vault ${JSON.stringify(declared)}`);
+  }
+  const vault = declared === AGENT_VAULT ? env.MCR_OP_VAULT_AGENT || AGENT_VAULT : ADMIN_VAULT;
+  const ref = `op://${vault}/${seat.item}/${seat.secretField}`;
+  if (vault !== ADMIN_VAULT) return { vault, ref, childEnv: env };
+
+  const adminToken = env.OP_ADMIN_SERVICE_ACCOUNT_TOKEN;
+  if (!adminToken) {
+    throw new ClusterError(
+      `${seat.role}'s key is in ${ADMIN_VAULT}, which only the admin service account opens. ` +
+        `Run \`source ~/.zprofile.admin\` (exports OP_ADMIN_SERVICE_ACCOUNT_TOKEN), or set $${seat.env}.`
+    );
+  }
+  return { vault, ref, childEnv: { ...env, OP_SERVICE_ACCOUNT_TOKEN: adminToken } };
+}
 
 /**
  * Members nobody holds a key for, named so a run can say WHOSE approval it is
@@ -130,7 +185,9 @@ const MEMBER_NAMES = {
   "9gACbzsCLmkYF9Yx1EBGmwMvvyfuTquJ6qs8QsoQvHXf": "Mr. McRitchie's third (operator)",
   "7auwTLSvNniSUeAgL6v9RStMXJhWrrUhSJgwFWLpcqC": "system (agent)",
   "2eGs8G3wzhEeNQQU2Q86BmmA2xTpDbMMae3Y1bvpZfx9": "system.devnet (agent)",
-  BLSBw8fXHzZc5pbaYCKMpMSsrtXBTbWXpUPVzMrXx9oo: "admin (agent)",
+  "4bKNSqkrKeggSyrds16Ak7rcB4ibvGJ4ZLsKjvQgC3Vk": "governance (agent)",
+  BLSBw8fXHzZc5pbaYCKMpMSsrtXBTbWXpUPVzMrXx9oo:
+    "EXPOSED admin solana.turf.admin (rotation 2026-10-08, rotate-mainnet-admin-key)",
   "8K81w4e6UcB7TiANhM9N8sAgijJvTxxybRi8AENRaRYd": "Xan (agent)",
   CytJS23p1zCM2wvUUngiDePtbMB484ebD7bK4nDqWjrR: "Mason (retired: live Squads 2026-09-15, 9dCLM 2026-09-16)",
   F6f8h5yynbnkgWvU5abQx3RJxJpe8EoQmeFBuNKdKzhZ: "LEAKED agent.solana (evicted: devnet 2026-06-06, 9dCLM 2026-09-16)",
@@ -227,7 +284,9 @@ function memberName(pubkey) {
 }
 
 module.exports = {
+  ADMIN_VAULT,
   AGENT_SEATS,
+  AGENT_VAULT,
   ClusterError,
   DEFAULT_RPC,
   GENESIS,
@@ -238,4 +297,5 @@ module.exports = {
   canonicalCluster,
   memberName,
   resolveCluster,
+  seatSecretSource,
 };

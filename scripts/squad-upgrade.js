@@ -110,7 +110,12 @@ const multisig = require("@sqds/multisig");
 const bs58 = require("bs58");
 const { execFileSync } = require("child_process");
 
-const { ClusterError, memberName, resolveCluster } = require("./lib/squad-clusters");
+const {
+  ClusterError,
+  memberName,
+  resolveCluster,
+  seatSecretSource,
+} = require("./lib/squad-clusters");
 const { INITIATE, SquadRoleError, describeMask, planUpgrade } = require("./lib/squad-roles");
 const {
   BPF_LOADER_ID,
@@ -187,22 +192,25 @@ function keypairFrom(raw, source) {
 /**
  * Load one seat's secret: env override first, then 1Password.
  *
- * The vault name resolves the same way mcritchie-studio's OpVaults does —
- * `MCR_OP_VAULT_AGENT` with a `studio-agents` default — so a machine whose
- * vaults are named differently overrides instead of forking this script.
+ * Each seat names its own vault (`seat.vault`). A `studio-agents` seat resolves
+ * the same way mcritchie-studio's OpVaults does — `MCR_OP_VAULT_AGENT` with a
+ * `studio-agents` default — so a machine whose vaults are named differently
+ * overrides instead of forking this script. A `studio-agents-admin` seat is read
+ * with the admin service account's token; `seatSecretSource()` says how.
  */
 function loadSeatKeypair(seat) {
   const override = seat.env ? process.env[seat.env] : null;
-  const vault = process.env.MCR_OP_VAULT_AGENT || "studio-agents";
-  const source = override ? `$${seat.env}` : `op://${vault}/${seat.item}/${seat.secretField}`;
+  const spec = override ? null : seatSecretSource(seat);
+  const source = override ? `$${seat.env}` : spec.ref;
 
   let raw;
   if (override) {
     raw = override;
   } else {
     try {
-      raw = execFileSync("op", ["read", `op://${vault}/${seat.item}/${seat.secretField}`], {
+      raw = execFileSync("op", ["read", spec.ref], {
         encoding: "utf8",
+        env: spec.childEnv,
         stdio: ["ignore", "pipe", "pipe"],
       });
     } catch (error) {
