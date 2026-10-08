@@ -3186,4 +3186,560 @@ describe("turf_vault verification matrix", () => {
       );
     });
   });
+
+  // ── THE TICKET ADDRESS ADMITS ONE PAYMENT ────────────────────────────────
+  //
+  // `enter_contest` and `enter_contest_with_token` both declare
+  // `contest_entry` as `init` at seeds [b"entry", contest_id, user, entry_num],
+  // in the SAME instruction that moves the fee (or consumes the voucher). The
+  // Turf app relies on what follows from that, and these cases are the
+  // executable proof of each thing it relies on:
+  //
+  //   * a second entry at an occupied (contest, user, entry_num) is refused by
+  //     the SYSTEM program — custom program error 0x0, "already in use" — and
+  //     moves no second fee and consumes no second voucher;
+  //   * the two instructions share the address, so the refusal holds across
+  //     them;
+  //   * the refusal is raised BEFORE the contest's own constraints, so a retry
+  //     against a now-full contest still reads "already in use" rather than
+  //     ContestFull — which is what lets the app read a retry's failure as
+  //     "your first payment landed" (WHY it is first: see the note below);
+  //   * lamports sitting at the address are NOT a ticket: a System-owned
+  //     account there does not block the real entry, and only the owner tells
+  //     the two apart.
+  //
+  // WHY `init` ANSWERS FIRST — the mechanism, AS READ from the generator, not
+  // something these cases prove. anchor-syn 0.32.1,
+  // src/codegen/accounts/try_accounts.rs: `generate` first walks the struct in
+  // declaration order and DESERIALIZES every non-init field (owner and
+  // discriminator), leaving each `init` field as a raw account; then
+  // `generate_constraints` emits EVERY `init` field's block, and only after all
+  // of them the access checks (`seeds`, `constraint = …`, `token::…`) of the
+  // non-init fields. So it is NOT declaration order that puts the ticket ahead
+  // of ContestFull or EntryTokenAlreadyConsumed: an `init` field runs before
+  // every non-init field's constraints wherever the struct declares it.
+  //
+  // What the cases below prove is the OUTCOME, on a real validator: which
+  // error the program returns. A future Anchor that reordered its generated
+  // checks would redden them, which is the point of having them.
+  //
+  // A fresh wallet and fresh contests keep every balance here a clean delta,
+  // whatever the describes above left behind.
+  describe("entry retries: the ticket address admits one payment", () => {
+    const FEE = amount(9);
+    const SYSTEM_PROGRAM = SystemProgram.programId.toBase58();
+    // InstructionError at index 0 — the entry instruction is the only one in
+    // the transaction — carrying the System program's AccountAlreadyInUse (0).
+    const ALREADY_IN_USE = { InstructionError: [0, { Custom: 0 }] };
+
+    let retryUser: Keypair;
+    let retryUserPda: PublicKey;
+    let retryUserUsdcAta: PublicKey;
+    let retryContest: ContestFixture;
+
+    // `TICKET_TRACE=1 anchor test …` prints what the chain actually answered.
+    const trace = (label: string, value: unknown): void => {
+      if (!process.env.TICKET_TRACE) return;
+      console.log(`      [ticket-trace] ${label}`);
+      console.log(
+        typeof value === "string" ? value : JSON.stringify(value, null, 2)
+      );
+    };
+
+    const paidEntry = (contest: ContestFixture, entryNum: number) =>
+      program.methods
+        .enterContest(entryNum, 0)
+        .accountsStrict({
+          payer: admin.publicKey,
+          user: retryUser.publicKey,
+          userAccount: retryUserPda,
+          vaultState: vaultStatePda,
+          governance: governancePda,
+          contest: contest.contestPda,
+          contestEntry: deriveEntry(contest.id, retryUser.publicKey, entryNum),
+          currencyMint: usdcMint,
+          userTokenAccount: retryUserUsdcAta,
+          opRevAta: usdcOpRevPda,
+          season: defaultSeasonPda,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([retryUser]);
+
+    const tokenEntry = (
+      contest: ContestFixture,
+      entryToken: PublicKey,
+      entryNum: number
+    ) =>
+      program.methods
+        .enterContestWithToken(entryNum)
+        .accountsStrict({
+          payer: admin.publicKey,
+          user: retryUser.publicKey,
+          userAccount: retryUserPda,
+          vaultState: vaultStatePda,
+          governance: governancePda,
+          contest: contest.contestPda,
+          contestEntry: deriveEntry(contest.id, retryUser.publicKey, entryNum),
+          entryToken,
+          season: defaultSeasonPda,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([retryUser]);
+
+    type Ledger = {
+      userUsdc: number;
+      opRevUsdc: number;
+      currentEntries: number;
+      feeTally: number;
+      userEntries: number;
+    };
+
+    const ledger = async (contest: ContestFixture): Promise<Ledger> => {
+      const onChain = await program.account.contest.fetch(contest.contestPda);
+      const user = await program.account.userAccount.fetch(retryUserPda);
+      return {
+        userUsdc: await tokenAmount(retryUserUsdcAta),
+        opRevUsdc: await tokenAmount(usdcOpRevPda),
+        currentEntries: onChain.currentEntries,
+        feeTally: onChain.entryFees[0].toNumber(),
+        userEntries: user.entries,
+      };
+    };
+
+    // What moved between two readings, as (fees paid, entries counted).
+    const moved = (before: Ledger, after: Ledger) => ({
+      userPaid: before.userUsdc - after.userUsdc,
+      opRevReceived: after.opRevUsdc - before.opRevUsdc,
+      currentEntries: after.currentEntries - before.currentEntries,
+      feeTally: after.feeTally - before.feeTally,
+      userEntries: after.userEntries - before.userEntries,
+    });
+
+    const exactly = (fees: number, entries: number) => ({
+      userPaid: fees * FEE,
+      opRevReceived: fees * FEE,
+      currentEntries: entries,
+      feeTally: fees * FEE,
+      userEntries: entries,
+    });
+
+    // A RETRY MUST BE A DIFFERENT TRANSACTION. Same accounts, same arguments
+    // and same signers under the SAME recent blockhash is byte-for-byte the
+    // transaction that already landed, and the cluster answers that with
+    // "This transaction has already been processed" before the program runs at
+    // all. That is a different (and equally harmless) refusal from the one
+    // these cases are about, so wait for the blockhash to move first.
+    const nextBlockhash = async (): Promise<void> => {
+      const start = (await connection.getLatestBlockhash()).blockhash;
+      for (let i = 0; i < 100; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        if ((await connection.getLatestBlockhash()).blockhash !== start) return;
+      }
+      throw new Error("the validator's blockhash never advanced");
+    };
+
+    // The refusal, read from the program logs. Precise enough that it cannot
+    // be any other failure: the System program names THIS ticket as already in
+    // use, both the System program and turf-vault exit on 0x0, no other custom
+    // code appears anywhere, and Anchor never raised an error of its own (every
+    // turf-vault and Anchor-framework error logs an "AnchorError" line and a
+    // code of 100 or more; VaultError starts at 6000).
+    const expectSystemRefusalLogs = (logs: string[], ticket: PublicKey) => {
+      const text = logs.join("\n");
+      expect(
+        logs.some(
+          (line) =>
+            line.includes("Allocate: account Address") &&
+            line.includes(ticket.toBase58()) &&
+            line.includes("already in use")
+        ),
+        `no "already in use" line naming the ticket in:\n${text}`
+      ).to.equal(true);
+      expect(text).to.include(
+        `Program ${SYSTEM_PROGRAM} failed: custom program error: 0x0`
+      );
+      expect(text).to.include(
+        `Program ${program.programId.toBase58()} failed: custom program error: 0x0`
+      );
+      const codes = text.match(/custom program error: 0x[0-9a-f]+/gi) ?? [];
+      expect(codes.length).to.be.greaterThan(0);
+      for (const code of codes) {
+        expect(code.toLowerCase()).to.equal("custom program error: 0x0");
+      }
+      expect(text).to.not.match(/AnchorError|Error Code:|Error Number:/);
+    };
+
+    // Assert that `build()` — a fresh builder for the retry — is refused
+    // because its ticket address is already occupied, two ways:
+    //
+    //   1. SIMULATED, structurally: the RPC's own `err` object, which is what
+    //      a non-JS client (the Rails app) receives from preflight.
+    //   2. SENT through Anchor's `.rpc()`, the way every other case in this
+    //      suite sends: it must reject, and not as a turf-vault AnchorError.
+    const expectTicketInUse = async (
+      build: () => any,
+      ticket: PublicKey,
+      label: string
+    ): Promise<void> => {
+      await nextBlockhash();
+
+      const tx: anchor.web3.Transaction = await build().transaction();
+      tx.feePayer = admin.publicKey;
+      const simulated = await connection.simulateTransaction(tx, [
+        admin.payer,
+        retryUser,
+      ]);
+      trace(`${label} — simulated err`, simulated.value.err);
+      trace(`${label} — simulated logs`, (simulated.value.logs ?? []).join("\n"));
+      expect(simulated.value.err).to.deep.equal(ALREADY_IN_USE);
+      expectSystemRefusalLogs(simulated.value.logs ?? [], ticket);
+
+      let rejection: any;
+      let rejected = false;
+      try {
+        await build().rpc();
+      } catch (err: any) {
+        rejection = err;
+        rejected = true;
+      }
+      expect(
+        rejected,
+        `${label}: expected the occupied ticket to refuse, but the call SUCCEEDED`
+      ).to.equal(true);
+      trace(`${label} — .rpc() rejection`, String(rejection));
+      expect(rejection).to.not.be.instanceOf(anchor.AnchorError);
+      expect(rejection).to.not.be.instanceOf(anchor.ProgramError);
+      expect(String(rejection)).to.match(
+        /custom program error: 0x0(?![0-9a-f])/i
+      );
+      expectSystemRefusalLogs(rejection.logs ?? [], ticket);
+    };
+
+    // Send the retry with preflight OFF so it LANDS and fails on chain, and
+    // return the confirmed transaction. This is the shape a client sees when
+    // simulation is skipped or raced: a signature, and a failed transaction.
+    const landWithoutPreflight = async (build: () => any) => {
+      await nextBlockhash();
+      const tx: anchor.web3.Transaction = await build().transaction();
+      const latest = await connection.getLatestBlockhash();
+      tx.feePayer = admin.publicKey;
+      tx.recentBlockhash = latest.blockhash;
+      tx.sign(admin.payer, retryUser);
+      const signature = await connection.sendRawTransaction(tx.serialize(), {
+        skipPreflight: true,
+      });
+      const confirmation = await connection.confirmTransaction(
+        { signature, ...latest },
+        "confirmed"
+      );
+      const landed = await connection.getTransaction(signature, {
+        commitment: "confirmed",
+        maxSupportedTransactionVersion: 0,
+      });
+      return { signature, confirmation, landed };
+    };
+
+    const tokenState = async (pda: PublicKey) =>
+      program.account.entryTokenAccount.fetch(pda);
+
+    before(async () => {
+      retryUser = Keypair.generate();
+      await fund(retryUser.publicKey, 2);
+      retryUserUsdcAta = await ata(usdcMint, retryUser.publicKey, amount(100));
+      retryUserPda = await createUser(retryUser.publicKey, "ticketretry");
+    });
+
+    it("refuses a second enter_contest at the same entry_num with the System program's already-in-use (0x0), and the fee moves exactly once", async () => {
+      retryContest = await createContest("ticket-retry-usdc", {
+        fees: { 0: FEE },
+        maxEntries: 5,
+      });
+      const ticket = deriveEntry(retryContest.id, retryUser.publicKey, 0);
+      const before = await ledger(retryContest);
+      expect(await connection.getAccountInfo(ticket)).to.equal(null);
+
+      await paidEntry(retryContest, 0).rpc();
+      const afterFirst = await ledger(retryContest);
+      expect(moved(before, afterFirst)).to.deep.equal(exactly(1, 1));
+
+      await expectTicketInUse(
+        () => paidEntry(retryContest, 0),
+        ticket,
+        "case 1: enter_contest twice"
+      );
+      expect(moved(before, await ledger(retryContest))).to.deep.equal(
+        exactly(1, 1)
+      );
+
+      // The same retry, LANDED: preflight off, so the transaction is included
+      // in a block and fails there. It still charges nothing but the SOL fee.
+      const { signature, confirmation, landed } = await landWithoutPreflight(
+        () => paidEntry(retryContest, 0)
+      );
+      trace("case 1: landed retry — signature", signature);
+      trace("case 1: landed retry — confirmation err", confirmation.value.err);
+      trace(
+        "case 1: landed retry — logs",
+        (landed?.meta?.logMessages ?? []).join("\n")
+      );
+      expect(confirmation.value.err).to.deep.equal(ALREADY_IN_USE);
+      expect(landed, "the failed retry is not on chain").to.not.equal(null);
+      expect(landed!.meta!.err).to.deep.equal(ALREADY_IN_USE);
+      expectSystemRefusalLogs(landed!.meta!.logMessages ?? [], ticket);
+
+      const after = await ledger(retryContest);
+      trace("case 1: ledger before / after both retries", { before, after });
+      expect(moved(before, after)).to.deep.equal(exactly(1, 1));
+
+      const entry = await program.account.contestEntry.fetch(ticket);
+      expect(entry.entryNum).to.equal(0);
+      expect(entry.currencyIdx).to.equal(0);
+      expect(entry.wallet.toBase58()).to.equal(retryUser.publicKey.toBase58());
+    });
+
+    it("control: a different entry_num for the same user enters and moves a second fee", async () => {
+      const before = await ledger(retryContest);
+      await nextBlockhash();
+      await paidEntry(retryContest, 1).rpc();
+      const after = await ledger(retryContest);
+      trace("case 6: ledger before / after the second slot", { before, after });
+      expect(moved(before, after)).to.deep.equal(exactly(1, 1));
+
+      const info = await connection.getAccountInfo(
+        deriveEntry(retryContest.id, retryUser.publicKey, 1)
+      );
+      expect(info!.owner.toBase58()).to.equal(program.programId.toBase58());
+    });
+
+    it("refuses a second enter_contest_with_token at the same entry_num, leaving a second voucher unconsumed", async () => {
+      const contest = await createContest("ticket-retry-token", {
+        fees: { 0: FEE },
+        maxEntries: 5,
+      });
+      const ticket = deriveEntry(contest.id, retryUser.publicKey, 0);
+      const first = await mintEntryToken(
+        retryUser.publicKey,
+        "ticket-retry-token-first"
+      );
+      const second = await mintEntryToken(
+        retryUser.publicKey,
+        "ticket-retry-token-second"
+      );
+      const before = await ledger(contest);
+
+      await tokenEntry(contest, first.pda, 0).rpc();
+      expect((await tokenState(first.pda)).consumed).to.equal(true);
+      expect(moved(before, await ledger(contest))).to.deep.equal(exactly(0, 1));
+
+      // A SECOND, unspent voucher at the occupied slot: refused, and not spent.
+      await expectTicketInUse(
+        () => tokenEntry(contest, second.pda, 0),
+        ticket,
+        "case 2: enter_contest_with_token twice, second voucher"
+      );
+      const secondAfter = await tokenState(second.pda);
+      expect(secondAfter.consumed).to.equal(false);
+      expect(secondAfter.consumedAt).to.equal(null);
+
+      // The second voucher's retry again, LANDED: preflight off, so the
+      // transaction is included in a block and fails there. Same error, and
+      // the voucher and the entry count are exactly where they were.
+      const entriesBeforeLanded = (await ledger(contest)).currentEntries;
+      const { signature, confirmation, landed } = await landWithoutPreflight(
+        () => tokenEntry(contest, second.pda, 0)
+      );
+      trace("case 2: landed retry — signature", signature);
+      trace("case 2: landed retry — confirmation err", confirmation.value.err);
+      trace(
+        "case 2: landed retry — logs",
+        (landed?.meta?.logMessages ?? []).join("\n")
+      );
+      expect(confirmation.value.err).to.deep.equal(ALREADY_IN_USE);
+      expect(landed, "the failed retry is not on chain").to.not.equal(null);
+      expect(landed!.meta!.err).to.deep.equal(ALREADY_IN_USE);
+      expectSystemRefusalLogs(landed!.meta!.logMessages ?? [], ticket);
+      const secondAfterLanded = await tokenState(second.pda);
+      expect(secondAfterLanded.consumed).to.equal(false);
+      expect(secondAfterLanded.consumedAt).to.equal(null);
+      expect((await ledger(contest)).currentEntries).to.equal(
+        entriesBeforeLanded
+      );
+      expect(entriesBeforeLanded).to.equal(before.currentEntries + 1);
+
+      // The retry a client actually makes — the SAME voucher, now consumed —
+      // reads the same way: the occupied ticket answers, not
+      // EntryTokenAlreadyConsumed. (`entry_token`'s constraints are access
+      // checks, which run after every `init`; see the note at the top of this
+      // describe. Declaration order is not what decides it.)
+      await expectTicketInUse(
+        () => tokenEntry(contest, first.pda, 0),
+        ticket,
+        "case 2: enter_contest_with_token twice, same voucher"
+      );
+
+      const after = await ledger(contest);
+      trace("case 2: ledger before / after", { before, after });
+      expect(moved(before, after)).to.deep.equal(exactly(0, 1));
+      expect((await tokenState(second.pda)).consumed).to.equal(false);
+    });
+
+    it("refuses enter_contest_with_token at an entry_num a USDC entry already holds (the two instructions share the ticket address)", async () => {
+      const contest = await createContest("ticket-retry-cross", {
+        fees: { 0: FEE },
+        maxEntries: 5,
+      });
+      const ticket = deriveEntry(contest.id, retryUser.publicKey, 0);
+      const voucher = await mintEntryToken(
+        retryUser.publicKey,
+        "ticket-retry-cross-voucher"
+      );
+      const before = await ledger(contest);
+
+      await paidEntry(contest, 0).rpc();
+      await expectTicketInUse(
+        () => tokenEntry(contest, voucher.pda, 0),
+        ticket,
+        "case 3: token entry onto a USDC ticket"
+      );
+
+      const after = await ledger(contest);
+      trace("case 3: ledger before / after", { before, after });
+      expect(moved(before, after)).to.deep.equal(exactly(1, 1));
+      const voucherAfter = await tokenState(voucher.pda);
+      expect(voucherAfter.consumed).to.equal(false);
+      expect(voucherAfter.consumedAt).to.equal(null);
+      // The ticket is still the USDC entry, not a token-funded one (255).
+      expect(
+        (await program.account.contestEntry.fetch(ticket)).currencyIdx
+      ).to.equal(0);
+    });
+
+    it("answers already-in-use, NOT ContestFull, when the retried slot's own entry filled the contest", async () => {
+      const contest = await createContest("ticket-retry-full", {
+        fees: { 0: FEE },
+        maxEntries: 1,
+      });
+      const ticket = deriveEntry(contest.id, retryUser.publicKey, 0);
+      const voucher = await mintEntryToken(
+        retryUser.publicKey,
+        "ticket-retry-full-voucher"
+      );
+      const before = await ledger(contest);
+
+      await paidEntry(contest, 0).rpc();
+      const full = await program.account.contest.fetch(contest.contestPda);
+      expect(full.currentEntries).to.equal(1);
+      expect(full.maxEntries).to.equal(1);
+
+      // The contest IS full, and the ContestFull constraint IS live: a slot
+      // that holds no ticket is turned away by it, on both instructions.
+      await nextBlockhash();
+      await expectRejected(paidEntry(contest, 1).rpc(), /ContestFull/);
+      await expectRejected(
+        tokenEntry(contest, voucher.pda, 1).rpc(),
+        /ContestFull/
+      );
+
+      // The occupied slot is answered FIRST, by the System program. That
+      // outcome is what this case proves. The mechanism is read from the
+      // generator, not proved here: Anchor emits every `init` field before the
+      // access checks of the non-init fields, `contest`'s `constraint =` among
+      // them (see the note at the top of this describe). expectTicketInUse
+      // fails on any AnchorError line, so a ContestFull here could not pass.
+      await expectTicketInUse(
+        () => paidEntry(contest, 0),
+        ticket,
+        "case 4: retry on a full contest, enter_contest"
+      );
+      await expectTicketInUse(
+        () => tokenEntry(contest, voucher.pda, 0),
+        ticket,
+        "case 4: retry on a full contest, enter_contest_with_token"
+      );
+
+      const after = await ledger(contest);
+      trace("case 4: ledger before / after", { before, after });
+      expect(moved(before, after)).to.deep.equal(exactly(1, 1));
+      expect((await tokenState(voucher.pda)).consumed).to.equal(false);
+    });
+
+    it("a System-owned account holding lamports at the ticket address is not a ticket: the real entry still succeeds and takes the address", async () => {
+      const contest = await createContest("ticket-retry-dusted", {
+        fees: { 0: FEE },
+        maxEntries: 5,
+      });
+
+      // Two dustings: under the ticket's rent-exempt minimum (Anchor tops the
+      // account up), and over it (Anchor leaves the surplus where it is).
+      const rent = await connection.getMinimumBalanceForRentExemption(
+        program.account.contestEntry.size
+      );
+      const dustings = [
+        { entryNum: 0, lamports: 1_000_000 },
+        { entryNum: 1, lamports: rent + 1_000_000 },
+      ];
+      expect(dustings[0].lamports).to.be.lessThan(rent);
+
+      for (const { entryNum, lamports } of dustings) {
+        const ticket = deriveEntry(contest.id, retryUser.publicKey, entryNum);
+        expect(await connection.getAccountInfo(ticket)).to.equal(null);
+
+        await provider.sendAndConfirm(
+          new anchor.web3.Transaction().add(
+            SystemProgram.transfer({
+              fromPubkey: admin.publicKey,
+              toPubkey: ticket,
+              lamports,
+            })
+          )
+        );
+
+        // SOMETHING EXISTS at the ticket address, and it is not a ticket:
+        // System-owned, no data. "The account exists" or "it has lamports" is
+        // therefore not evidence of a paid entry; the OWNER is.
+        const dusted = await connection.getAccountInfo(ticket);
+        expect(dusted, "the dusted address has no account").to.not.equal(null);
+        expect(dusted!.owner.toBase58()).to.equal(SYSTEM_PROGRAM);
+        expect(dusted!.lamports).to.equal(lamports);
+        expect(dusted!.data.length).to.equal(0);
+
+        const before = await ledger(contest);
+        await paidEntry(contest, entryNum).rpc();
+        const after = await ledger(contest);
+        expect(moved(before, after)).to.deep.equal(exactly(1, 1));
+
+        const claimed = await connection.getAccountInfo(ticket);
+        trace(`case 5: dusted ticket ${entryNum}`, {
+          rentExemptMinimum: rent,
+          before: { owner: dusted!.owner.toBase58(), lamports: dusted!.lamports, dataLength: dusted!.data.length },
+          after: { owner: claimed!.owner.toBase58(), lamports: claimed!.lamports, dataLength: claimed!.data.length },
+        });
+        expect(claimed!.owner.toBase58()).to.equal(
+          program.programId.toBase58()
+        );
+        expect(claimed!.data.length).to.equal(
+          program.account.contestEntry.size
+        );
+        expect(claimed!.lamports).to.equal(Math.max(rent, lamports));
+
+        const entry = await program.account.contestEntry.fetch(ticket);
+        expect(entry.entryNum).to.equal(entryNum);
+        expect(entry.wallet.toBase58()).to.equal(
+          retryUser.publicKey.toBase58()
+        );
+        expect(statusName(entry.status)).to.equal("active");
+
+        // And once it IS a ticket, it refuses a retry like any other.
+        await expectTicketInUse(
+          () => paidEntry(contest, entryNum),
+          ticket,
+          `case 5: retry on the claimed dusted ticket ${entryNum}`
+        );
+        expect(moved(before, await ledger(contest))).to.deep.equal(
+          exactly(1, 1)
+        );
+      }
+    });
+  });
 });
