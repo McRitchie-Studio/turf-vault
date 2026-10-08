@@ -132,9 +132,14 @@ function describeAction(a) {
 async function readIndex(conn, msPda, index) {
   const [txPda] = multisig.getTransactionPda({ multisigPda: msPda, index });
   const [prPda] = multisig.getProposalPda({ multisigPda: msPda, transactionIndex: index });
-  const tx = (await conn.getAccountInfo(txPda)) ? await multisig.accounts.ConfigTransaction.fromAccountAddress(conn, txPda) : null;
+  // An index may hold a VAULT transaction (an upgrade); decoding that as a
+  // ConfigTransaction throws "Discriminant … out of range". Check the tag first.
+  const txInfo = await conn.getAccountInfo(txPda);
+  const isConfig =
+    !!txInfo && txInfo.data.subarray(0, 8).equals(Buffer.from(multisig.accounts.configTransactionDiscriminator));
+  const tx = isConfig ? multisig.accounts.ConfigTransaction.fromAccountInfo(txInfo)[0] : null;
   const pr = (await conn.getAccountInfo(prPda)) ? await multisig.accounts.Proposal.fromAccountAddress(conn, prPda) : null;
-  return { txPda, prPda, tx, pr };
+  return { txPda, prPda, tx, pr, exists: !!txInfo, isConfig };
 }
 
 function printProposal(pr, threshold) {
@@ -156,7 +161,7 @@ async function balanceGate(conn, seat, need, armed) {
 }
 
 function readBackOrFail(tx, label) {
-  if (!tx) fail(`no config transaction at ${label}.`);
+  if (!tx) fail(`no config transaction at ${label} (empty, or a vault transaction).`);
   const actions = flatActions(tx.actions);
   console.log(`\n  on-chain actions at ${label} (read back):`);
   actions.forEach((a) => console.log(`    ${describeAction(a)}`));
@@ -201,7 +206,7 @@ function readBackOrFail(tx, label) {
       }
     }
     const index = txIndex + 1n;
-    if ((await readIndex(conn, msPda, index)).tx) fail(`a transaction already exists at #${index}.`);
+    if ((await readIndex(conn, msPda, index)).exists) fail(`a transaction already exists at #${index}.`);
 
     console.log(`\n  PLAN — ONE atomic config transaction at #${index}, creator ${creator.role}:`);
     R.plannedActions().forEach((a) => console.log(`    ${describeAction(a)}`));
