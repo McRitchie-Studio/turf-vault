@@ -90,7 +90,7 @@
  *
  * KEYS. Never argv — argv leaks in `ps`. Each seat in the roster
  * (scripts/lib/squad-clusters.js) names a 1Password item, and an env override:
- * `SQUAD_KEY_SYSTEM`, `SQUAD_KEY_ADMIN`, `SQUAD_KEY_XAN` (base58 or a JSON byte
+ * `SQUAD_KEY_SYSTEM`, `SQUAD_KEY_GOVERNANCE`, `SQUAD_KEY_XAN` (base58 or a JSON byte
  * array). A loaded secret that does not derive to the roster's public key is
  * REFUSED.
  */

@@ -293,7 +293,7 @@ node scripts/squad-inventory.js --cluster=mainnet
 ```
 
 What it reports, and what the numbers mean, as of **2026-10-09**. Both clusters
-were re-read at `finalized` after the governance rotation (mainnet #6, devnet #19):
+were re-read at `confirmed` after the governance rotation (mainnet #6, devnet #19):
 
 | Cluster | Multisig | Threshold | Agent-held seats | An upgrade run would |
 |---------|----------|-----------|------------------|----------------------|

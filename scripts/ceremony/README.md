@@ -73,9 +73,9 @@ is the point of keeping these:
 
 Each script reads its signing key from 1Password at run time and never writes it
 to disk. The field LABEL differs between items and that is not a typo to tidy:
-`solana.turf.*` spell it `private-key`; `agent.xan.solana` spells it
-`private key`, with a space.
+the `solana.turf.system*` items spell it `private-key`; `solana.turf.governance`
+and `agent.xan.solana` spell it `private key`, with a space.
 
 ```bash
-op read "op://${MCR_OP_VAULT_AGENT:-studio-agents}/solana.turf.admin/private-key"
+op read "op://${MCR_OP_VAULT_AGENT:-studio-agents}/solana.turf.system.devnet/private-key"
 ```
