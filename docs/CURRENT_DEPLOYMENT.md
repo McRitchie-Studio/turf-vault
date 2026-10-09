@@ -343,6 +343,15 @@ and nothing else, through `rotate-admin-seat.js --allow-outgoing-signer`, which
 is refused on mainnet (cluster and genesis) and for create and execute. Mainnet
 needed two of his own wallets and got them.
 
+**BLSBw8 is emptied and archived.** On Mr. McRitchie's ruling, after both swaps
+read Executed, `scripts/ceremony/sweep-admin-seat.js` moved its mainnet SOL:
+0.5 SOL to `4bKNSqkr…` (`VxQ5DSDv…`), 3 SOL to `7ZDJp7FU…` (`5PEBmzSN…`), and the
+remaining 0.076570239 SOL to `7ZDJp7FU…` (`3MzbCGCE…`). All three are finalized,
+and BLSBw8 reads 0 SOL. `solana.turf.admin` is archived in `studio-agents`. No
+Heroku config value on `turf-monster-mainnet` or `turf-monster-qa`, and no local
+`.env*` file, derives to it. Its two mainnet token accounts (19.841973 USDT,
+0.0011 USDC) were not moved and are still open.
+
 Devnet #17 (2026-09-15, `AddMember 7auwTLSv…`, one approval, by BLSBw8) still reads
 Active and is left in place. Its index is at or below devnet's
 `staleTransactionIndex` (18 then, 19 after #19), so the program will not approve
