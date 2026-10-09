@@ -292,13 +292,13 @@ node scripts/squad-inventory.js              # both clusters, read-only, no keys
 node scripts/squad-inventory.js --cluster=mainnet
 ```
 
-What it reports, and what the numbers mean, as of **2026-09-15**. Membership and
-thresholds were re-read from chain at `finalized` on 2026-09-16 and had not changed:
+What it reports, and what the numbers mean, as of **2026-10-09**. Both clusters
+were re-read at `confirmed` after the governance rotation (mainnet #6, devnet #19):
 
 | Cluster | Multisig | Threshold | Agent-held seats | An upgrade run would |
 |---------|----------|-----------|------------------|----------------------|
-| devnet | `7nRuVw3VZFC6z85tYVDitPnaUHZCkqLpJRSTBNtPmtZB` | 3 of 5 | 3 — `system.devnet` `2eGs8G3w…`, `admin` `BLSBw8fX…`, Xan `8K81w4e6…` | run **AUTONOMOUS**, end to end |
-| mainnet | `4H3fP3otjMtupk1DQDjKXYY1dWjT6LNM4H4ZWZ1XcKSX` | 3 of 5 | 2 — `system` `7auwTLSv…`, `admin` `BLSBw8fX…` | **HAND OFF** one approval and the execute to Mr. McRitchie |
+| devnet | `7nRuVw3VZFC6z85tYVDitPnaUHZCkqLpJRSTBNtPmtZB` | 3 of 5 | 3 — `system.devnet` `2eGs8G3w…`, `governance` `4bKNSqkr…`, Xan `8K81w4e6…` | run **AUTONOMOUS**, end to end |
+| mainnet | `4H3fP3otjMtupk1DQDjKXYY1dWjT6LNM4H4ZWZ1XcKSX` | 3 of 5 | 2 — `system` `7auwTLSv…`, `governance` `4bKNSqkr…` | **HAND OFF** one approval and the execute to Mr. McRitchie |
 
 **The asymmetry is the design, not a gap.** Devnet is meant to run unattended;
 mainnet is meant to need Mr. McRitchie. His three wallets — `7ZDJp7FU…` (his
@@ -317,6 +317,53 @@ mainnet and Mason `CytJS23p…` off both live Squads — mainnet config transact
 was re-seated there at 14:02 MDT (#18), which is why the table shows him on devnet. Neither is a Squads member on
 the cluster the old tooling named them for. They remain `VaultState` signers,
 which is a different multisig — see above.
+
+**Rotated out of both clusters 2026-10-09: the exposed `admin` seat
+`BLSBw8fXHzZc5pbaYCKMpMSsrtXBTbWXpUPVzMrXx9oo`** (`solana.turf.admin`, which had sat
+in local env files on many desks). One config transaction per cluster,
+`RemoveMember BLSBw8…` + `AddMember 4bKNSqkrKeggSyrds16Ak7rcB4ibvGJ4ZLsKjvQgC3Vk`
+(mask 7), threshold unchanged, built by
+[`scripts/ceremony/rotate-admin-seat.js`](../scripts/ceremony/rotate-admin-seat.js).
+The new `governance` key is filed as `solana.turf.governance` in the ADMIN vault
+`studio-agents-admin`, which a desk-level agent token cannot open. BLSBw8 created
+neither transaction and executed neither. It cast ONE vote, devnet #19's third,
+under the exception described below the table.
+
+| Cluster | Config tx | Created | Approved by | State |
+|---------|-----------|---------|-------------|-------|
+| mainnet | #6 | 2026-10-08 20:36 UTC by `system` `7auwTLSv…` | `7auwTLSv…`, `3Qj4v9qj…`, `7ZDJp7FU…` | **Executed** 2026-10-09 16:42:51 UTC (10:42 MDT), by Mr. McRitchie in the Squads app |
+| devnet | #19 | 2026-10-08 by `system.devnet` `2eGs8G3w…` | `2eGs8G3w…`, Xan `8K81w4e6…`, the outgoing `BLSBw8fX…` | **Executed** 2026-10-09 16:48:36 UTC (10:48 MDT), by `system.devnet` `2eGs8G3w…` |
+
+**Devnet's third approval was the outgoing key itself, on Mr. McRitchie's
+instruction.** No Squads UI reaches the devnet Squad for his wallets, so his tap
+was not possible there. He ruled that morning (relayed as 10:50 MDT; the vote
+landed at 10:48 MDT by the chain's clock) that the agent's three devnet seats
+should finish it. The third agent seat was BLSBw8. It approved its own removal
+and nothing else, through `rotate-admin-seat.js --allow-outgoing-signer`, which
+is refused on mainnet (cluster and genesis) and for create and execute. Mainnet
+needed two of his own wallets and got them.
+
+**BLSBw8 is emptied and archived.** On Mr. McRitchie's ruling, after both swaps
+read Executed, `scripts/ceremony/sweep-admin-seat.js` moved its mainnet SOL:
+0.5 SOL to `4bKNSqkr…` (`VxQ5DSDv…`), 3 SOL to `7ZDJp7FU…` (`5PEBmzSN…`), and the
+remaining 0.076570239 SOL to `7ZDJp7FU…` (`3MzbCGCE…`). All three are finalized,
+and BLSBw8 reads 0 SOL. `solana.turf.admin` is archived in `studio-agents`. No
+Heroku config value on `turf-monster-mainnet` or `turf-monster-qa`, and no local
+`.env*` file, derives to it. Its two mainnet token accounts (19.841973 USDT,
+0.0011 USDC) were emptied into `7ZDJp7FU…`'s accounts and closed, with the rent
+to `7ZDJp7FU…`, in one transaction paid by `4bKNSqkr…` (`2Xs3xJxz…`). BLSBw8 owns
+no token accounts.
+
+**Xan's key moved to the admin vault the same day.** `agent.xan.solana` (`8K81…`) is
+production's `SOLANA_ADMIN_KEY` and Xan's devnet seat. It now lives in
+`studio-agents-admin`; the `studio-agents` original is archived. The roster reads
+it with the admin token.
+
+Devnet #17 (2026-09-15, `AddMember 7auwTLSv…`, one approval, by BLSBw8) still reads
+Active and is left in place. Its index is at or below devnet's
+`staleTransactionIndex` (18 then, 19 after #19), so the program will not approve
+or execute it. That is
+read from the account, not tested on chain.
 
 **Retired 2026-09-16, signed by Mr. McRitchie:** the first mainnet Squad
 `9dCLMZct…`, which the table leaves out because it governs nothing. It closed the
