@@ -196,7 +196,20 @@ async function plan(conn) {
   }
 
   const spec = seatSecretSource(OLD_ITEM);
-  const raw = execFileSync("op", ["read", spec.ref], { encoding: "utf8", env: spec.childEnv, stdio: ["ignore", "pipe", "pipe"] }).trim();
+  // The item is archived once its SOL is gone, and `op read` cannot resolve an
+  // archived item; fall back to `op item get --include-archive`, captured, never printed.
+  let raw;
+  try {
+    raw = execFileSync("op", ["read", spec.ref], { encoding: "utf8", env: spec.childEnv, stdio: ["ignore", "pipe", "pipe"] }).trim();
+  } catch (_) {
+    const out = execFileSync(
+      "op",
+      ["item", "get", OLD_ITEM.item, "--vault", spec.vault, "--include-archive", "--fields", `label=${OLD_ITEM.secretField}`, "--reveal", "--format", "json"],
+      { encoding: "utf8", env: spec.childEnv, stdio: ["ignore", "pipe", "pipe"] }
+    );
+    raw = String(JSON.parse(out).value || "").trim();
+    console.log(`  read ${OLD_ITEM.item} from the ARCHIVE (op item get --include-archive)`);
+  }
   const kp = Keypair.fromSecretKey(raw.startsWith("[") ? Uint8Array.from(JSON.parse(raw)) : bs58.decode(raw));
   if (kp.publicKey.toBase58() !== OLD_SEAT) fail(`${spec.ref} does not derive to ${OLD_SEAT}.`);
   console.log("  BLSBw8 key loaded and verified");
