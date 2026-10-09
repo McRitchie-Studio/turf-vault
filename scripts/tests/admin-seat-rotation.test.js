@@ -85,6 +85,14 @@ test("a stale or wrong-status proposal refuses; the devnet #17 shape is stale", 
   assert.ok(proposalProblems({ index: 6, staleTransactionIndex: 4, status: "Active", want: "Approved" }).length === 1);
 });
 
+test("the outgoing-signer override is devnet approve ONLY", () => {
+  const { outgoingSignerOverrideProblems: o } = require("../lib/admin-seat-rotation");
+  assert.deepEqual(o({ cluster: "devnet", mode: "approve" }), []);
+  assert.ok(o({ cluster: "mainnet-beta", mode: "approve" }).some((p) => /devnet-only/.test(p)));
+  assert.ok(o({ cluster: "devnet", mode: "execute" }).some((p) => /approve only/.test(p)));
+  assert.ok(o({ cluster: "devnet", mode: "create" }).length > 0);
+});
+
 test("the exposed key never signs", () => {
   assert.equal(refuseOldSigner(OLD_SEAT).length, 1);
   assert.deepEqual(refuseOldSigner(SYSTEM), []);

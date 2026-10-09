@@ -110,7 +110,27 @@ function refuseOldSigner(pubkey) {
   return pubkey === OLD_SEAT ? [`${OLD_SEAT} is the key being rotated out; it never signs its own removal`] : [];
 }
 
+/**
+ * The ONE exception to "the exposed key never signs", by Mr. McRitchie's
+ * instruction (2026-10-09 10:50 MDT): no Squads UI reaches devnet for his
+ * wallets, so on DEVNET the outgoing key casts the third APPROVAL of its own
+ * removal. Never on mainnet, never to create or execute.
+ *
+ * @returns {string[]} problems; empty means the override may be used
+ */
+function outgoingSignerOverrideProblems({ cluster, mode }) {
+  const problems = [];
+  if (cluster !== "devnet") problems.push(`--allow-outgoing-signer is devnet-only; refused on ${cluster}`);
+  if (mode !== "approve") problems.push(`--allow-outgoing-signer covers --approve only; refused for ${mode}`);
+  return problems;
+}
+
+const OUTGOING_SIGNER_NOTICE =
+  "NOTICE: devnet third vote by the outgoing key, Alex 2026-10-09 10:50 MDT, no UI reaches devnet";
+
 module.exports = {
+  OUTGOING_SIGNER_NOTICE,
+  outgoingSignerOverrideProblems,
   NEW_SEAT,
   OLD_SEAT,
   SEAT_MASK,

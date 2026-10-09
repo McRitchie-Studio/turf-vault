@@ -32,7 +32,7 @@ const multisig = require("@sqds/multisig");
 const bs58m = require("bs58");
 const { execFileSync } = require("child_process");
 
-const { memberName, resolveCluster, seatSecretSource } = require("../lib/squad-clusters");
+const { GENESIS, memberName, resolveCluster, seatSecretSource } = require("../lib/squad-clusters");
 const R = require("../lib/admin-seat-rotation");
 
 const bs58 = bs58m.default || bs58m;
@@ -73,6 +73,20 @@ try {
 } catch (e) {
   fail(e.message, 2);
 }
+// The ONE exception to "BLSBw8 never signs" (see admin-seat-rotation.js):
+// devnet, --approve, by Mr. McRitchie's instruction 2026-10-09 10:50 MDT.
+const ALLOW_OUTGOING = flag("--allow-outgoing-signer");
+if (ALLOW_OUTGOING) {
+  const op = R.outgoingSignerOverrideProblems({ cluster: cfg.cluster, mode: MODE });
+  if (op.length) fail(op.join("; "), 2);
+}
+const OUTGOING_SEAT = {
+  role: "admin (outgoing)",
+  pubkey: R.OLD_SEAT,
+  item: "solana.turf.admin",
+  vault: "studio-agents",
+  secretField: "private-key",
+};
 if (cfg.multisigPda !== EXPECTED_MULTISIG[cfg.cluster]) {
   fail(`squad.json names multisig ${cfg.multisigPda} for ${cfg.cluster}; this ceremony expects ${EXPECTED_MULTISIG[cfg.cluster]}.`, 2);
 }
@@ -90,9 +104,9 @@ async function settle(label, probe, tries = 40, delayMs = 1500) {
   throw new Error(`timed out waiting for ${label}`);
 }
 
-function loadSeat(seat) {
+function loadSeat(seat, { allowOutgoing = false } = {}) {
   const old = R.refuseOldSigner(seat.pubkey);
-  if (old.length) throw new Error(old[0]);
+  if (old.length && !allowOutgoing) throw new Error(old[0]);
   const spec = seatSecretSource(seat);
   let raw;
   try {
@@ -175,6 +189,7 @@ function readBackOrFail(tx, label) {
   const conn = new Connection(cfg.rpcUrl, "confirmed");
   const genesis = await conn.getGenesisHash();
   if (genesis !== cfg.genesisHash) fail(`${cfg.cluster} genesis mismatch (got ${genesis}).`, 2);
+  if (ALLOW_OUTGOING && genesis !== GENESIS.devnet) fail("--allow-outgoing-signer: this RPC is not devnet.", 2);
 
   const msPda = new PublicKey(cfg.multisigPda);
   const ms = await multisig.accounts.Multisig.fromAccountAddress(conn, msPda);
@@ -264,10 +279,13 @@ function readBackOrFail(tx, label) {
   if (plan.problems.length) fail(`live membership no longer matches the plan:\n  - ${plan.problems.join("\n  - ")}`);
 
   if (MODE === "approve") {
-    const seat = cfg.agentSeats.find((s) => s.role === value("--as"));
+    const outgoing = ALLOW_OUTGOING && value("--as") === "admin";
+    if (ALLOW_OUTGOING && !outgoing) fail("--allow-outgoing-signer only pairs with --as=admin.", 2);
+    const seat = outgoing ? OUTGOING_SEAT : cfg.agentSeats.find((s) => s.role === value("--as"));
     if (!seat) fail(`no seat with role ${value("--as")} on ${cfg.cluster}.`);
     const old = R.refuseOldSigner(seat.pubkey);
-    if (old.length) fail(old[0]);
+    if (old.length && !outgoing) fail(old[0]);
+    if (outgoing) console.log(`\n  ${R.OUTGOING_SIGNER_NOTICE}`);
     const mask = liveMask(seat.pubkey);
     if (mask === undefined || !(mask & VOTE)) fail(`${seat.role} ${seat.pubkey} is not a live member with Vote.`);
     const pp = R.proposalProblems({ index, staleTransactionIndex: stale, status: pr.status.__kind, want: "Active" });
@@ -278,7 +296,7 @@ function readBackOrFail(tx, label) {
     }
     await balanceGate(conn, seat, MIN_LAMPORTS.vote, SEND);
     if (!SEND) return console.log(`\n  DRY RUN — ${seat.role} would approve #${index}. Re-run with --send.\n`);
-    const kp = loadSeat(seat);
+    const kp = loadSeat(seat, { allowOutgoing: outgoing });
     const sig = await multisig.rpc.proposalApprove({ connection: conn, multisigPda: msPda, transactionIndex: index, feePayer: kp, member: kp });
     console.log(`   approve (${seat.role})  ${sig}`);
     await settle(`${seat.role}'s approval`, async () => {
