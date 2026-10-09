@@ -121,13 +121,14 @@ const AGENT_SEATS = {
       env: "SQUAD_KEY_GOVERNANCE",
     },
     {
-      // Measured 2026-10-08: `agent.xan.solana` lives in `studio-agents`, NOT
-      // `studio-agents-admin` as the hub's secrets-rotation runbook said; the
-      // admin vault holds no Solana item but `solana.turf.governance`.
+      // `agent.xan.solana` is production's SOLANA_ADMIN_KEY (turf-monster-mainnet
+      // and -qa), so it lives in the ADMIN vault. It sat in `studio-agents` by
+      // mistake until 2026-10-09, when it was copied to `studio-agents-admin` and
+      // the original archived (task rotate-mainnet-admin-key).
       role: "xan",
       pubkey: "8K81w4e6UcB7TiANhM9N8sAgijJvTxxybRi8AENRaRYd",
       item: "agent.xan.solana",
-      vault: AGENT_VAULT,
+      vault: ADMIN_VAULT,
       secretField: "private key",
       env: "SQUAD_KEY_XAN",
     },

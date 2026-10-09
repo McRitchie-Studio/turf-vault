@@ -205,10 +205,13 @@ test("the exposed admin key is offered on NO cluster", () => {
   }
 });
 
-test("every seat names its vault; governance is the admin vault, the rest are not", () => {
+test("every seat names its vault; governance and Xan are the admin vault, system seats are not", () => {
+  // Xan (8K81) is production's SOLANA_ADMIN_KEY; governance (4bKN) holds a
+  // Squads seat on both clusters. Neither may be readable by a desk-level token.
+  const ADMIN_ROLES = ["governance", "xan"];
   for (const [cluster, seats] of Object.entries(AGENT_SEATS)) {
     for (const seat of seats) {
-      const want = seat.role === "governance" ? ADMIN_VAULT : AGENT_VAULT;
+      const want = ADMIN_ROLES.includes(seat.role) ? ADMIN_VAULT : AGENT_VAULT;
       assert.equal(seat.vault, want, `${cluster}/${seat.role} vault`);
     }
   }
@@ -224,8 +227,14 @@ test("an agent-vault seat reads exactly as before: MCR_OP_VAULT_AGENT, caller's 
   const renamed = seatSecretSource(seat, { ...env, MCR_OP_VAULT_AGENT: "other-agents" });
   assert.equal(renamed.ref, "op://other-agents/solana.turf.system/private-key");
 
+});
+
+test("Xan's seat reads from the admin vault with the admin token", () => {
   const xan = AGENT_SEATS.devnet.find((s) => s.role === "xan");
-  assert.equal(seatSecretSource(xan, env).ref, "op://studio-agents/agent.xan.solana/private key");
+  const spec = seatSecretSource(xan, { OP_SERVICE_ACCOUNT_TOKEN: "agent-token", OP_ADMIN_SERVICE_ACCOUNT_TOKEN: "admin-token" });
+  assert.equal(spec.ref, "op://studio-agents-admin/agent.xan.solana/private key");
+  assert.equal(spec.childEnv.OP_SERVICE_ACCOUNT_TOKEN, "admin-token");
+  assert.throws(() => seatSecretSource(xan, { OP_SERVICE_ACCOUNT_TOKEN: "agent-token" }), ClusterError);
 });
 
 test("an admin-vault seat swaps in the admin token, and refuses without it", () => {

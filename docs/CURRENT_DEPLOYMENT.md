@@ -350,7 +350,14 @@ remaining 0.076570239 SOL to `7ZDJp7FU…` (`3MzbCGCE…`). All three are finali
 and BLSBw8 reads 0 SOL. `solana.turf.admin` is archived in `studio-agents`. No
 Heroku config value on `turf-monster-mainnet` or `turf-monster-qa`, and no local
 `.env*` file, derives to it. Its two mainnet token accounts (19.841973 USDT,
-0.0011 USDC) were not moved and are still open.
+0.0011 USDC) were emptied into `7ZDJp7FU…`'s accounts and closed, with the rent
+to `7ZDJp7FU…`, in one transaction paid by `4bKNSqkr…` (`2Xs3xJxz…`). BLSBw8 owns
+no token accounts.
+
+**Xan's key moved to the admin vault the same day.** `agent.xan.solana` (`8K81…`) is
+production's `SOLANA_ADMIN_KEY` and Xan's devnet seat. It now lives in
+`studio-agents-admin`; the `studio-agents` original is archived. The roster reads
+it with the admin token.
 
 Devnet #17 (2026-09-15, `AddMember 7auwTLSv…`, one approval, by BLSBw8) still reads
 Active and is left in place. Its index is at or below devnet's
