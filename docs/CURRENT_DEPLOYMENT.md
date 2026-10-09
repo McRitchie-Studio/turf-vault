@@ -292,13 +292,12 @@ node scripts/squad-inventory.js              # both clusters, read-only, no keys
 node scripts/squad-inventory.js --cluster=mainnet
 ```
 
-What it reports, and what the numbers mean, as of **2026-10-09** (mainnet re-read at
-`finalized` after config transaction #6; devnet unchanged since 2026-09-15 while its
-rotation, #19, waits for its third approval):
+What it reports, and what the numbers mean, as of **2026-10-09**. Both clusters
+were re-read at `finalized` after the governance rotation (mainnet #6, devnet #19):
 
 | Cluster | Multisig | Threshold | Agent-held seats | An upgrade run would |
 |---------|----------|-----------|------------------|----------------------|
-| devnet | `7nRuVw3VZFC6z85tYVDitPnaUHZCkqLpJRSTBNtPmtZB` | 3 of 5 | 3 — `system.devnet` `2eGs8G3w…`, the EXPOSED `admin` `BLSBw8fX…` (rotation **pending**: #19 swaps in `governance` `4bKNSqkr…`), Xan `8K81w4e6…` | run **AUTONOMOUS**, end to end (with this branch's roster: 2 until #19 executes, then 3 again) |
+| devnet | `7nRuVw3VZFC6z85tYVDitPnaUHZCkqLpJRSTBNtPmtZB` | 3 of 5 | 3 — `system.devnet` `2eGs8G3w…`, `governance` `4bKNSqkr…`, Xan `8K81w4e6…` | run **AUTONOMOUS**, end to end |
 | mainnet | `4H3fP3otjMtupk1DQDjKXYY1dWjT6LNM4H4ZWZ1XcKSX` | 3 of 5 | 2 — `system` `7auwTLSv…`, `governance` `4bKNSqkr…` | **HAND OFF** one approval and the execute to Mr. McRitchie |
 
 **The asymmetry is the design, not a gap.** Devnet is meant to run unattended;
@@ -319,24 +318,35 @@ was re-seated there at 14:02 MDT (#18), which is why the table shows him on devn
 the cluster the old tooling named them for. They remain `VaultState` signers,
 which is a different multisig — see above.
 
-**Rotated out 2026-10-09 (mainnet), pending on devnet: the exposed `admin` seat
+**Rotated out of both clusters 2026-10-09: the exposed `admin` seat
 `BLSBw8fXHzZc5pbaYCKMpMSsrtXBTbWXpUPVzMrXx9oo`** (`solana.turf.admin`, which had sat
 in local env files on many desks). One config transaction per cluster,
 `RemoveMember BLSBw8…` + `AddMember 4bKNSqkrKeggSyrds16Ak7rcB4ibvGJ4ZLsKjvQgC3Vk`
 (mask 7), threshold unchanged, built by
 [`scripts/ceremony/rotate-admin-seat.js`](../scripts/ceremony/rotate-admin-seat.js).
 The new `governance` key is filed as `solana.turf.governance` in the ADMIN vault
-`studio-agents-admin`, which a desk-level agent token cannot open. BLSBw8 signed
-neither transaction.
+`studio-agents-admin`, which a desk-level agent token cannot open. BLSBw8 created
+neither transaction and executed neither. It cast ONE vote, devnet #19's third,
+under the exception described below the table.
 
 | Cluster | Config tx | Created | Approved by | State |
 |---------|-----------|---------|-------------|-------|
 | mainnet | #6 | 2026-10-08 20:36 UTC by `system` `7auwTLSv…` | `7auwTLSv…`, `3Qj4v9qj…`, `7ZDJp7FU…` | **Executed** 2026-10-09 16:42:51 UTC (10:42 MDT), by Mr. McRitchie in the Squads app |
-| devnet | #19 | 2026-10-08 by `system.devnet` `2eGs8G3w…` | `2eGs8G3w…`, Xan `8K81w4e6…` | **Active, 2 of 3** — one operator approval owed |
+| devnet | #19 | 2026-10-08 by `system.devnet` `2eGs8G3w…` | `2eGs8G3w…`, Xan `8K81w4e6…`, the outgoing `BLSBw8fX…` | **Executed** 2026-10-09 16:48:36 UTC (10:48 MDT), by `system.devnet` `2eGs8G3w…` |
+
+**Devnet's third approval was the outgoing key itself, on Mr. McRitchie's
+instruction.** No Squads UI reaches the devnet Squad for his wallets, so his tap
+was not possible there. He ruled that morning (relayed as 10:50 MDT; the vote
+landed at 10:48 MDT by the chain's clock) that the agent's three devnet seats
+should finish it. The third agent seat was BLSBw8. It approved its own removal
+and nothing else, through `rotate-admin-seat.js --allow-outgoing-signer`, which
+is refused on mainnet (cluster and genesis) and for create and execute. Mainnet
+needed two of his own wallets and got them.
 
 Devnet #17 (2026-09-15, `AddMember 7auwTLSv…`, one approval, by BLSBw8) still reads
-Active and is left in place: its index is at or below devnet's
-`staleTransactionIndex` (18), so the program will not approve or execute it. That is
+Active and is left in place. Its index is at or below devnet's
+`staleTransactionIndex` (18 then, 19 after #19), so the program will not approve
+or execute it. That is
 read from the account, not tested on chain.
 
 **Retired 2026-09-16, signed by Mr. McRitchie:** the first mainnet Squad

@@ -45,7 +45,7 @@ they refuse once their plan is done.
 
 | Script | What it does | Notes |
 |--------|--------------|-------|
-| `rotate-admin-seat.js` | ONE config transaction per cluster: `removeMember(BLSBw8…)` + `addMember(4bKN…, mask 7)`, threshold unchanged. `--send` creates it, proposes it and casts the clean system seat's vote. `--approve --index --as=<role>` adds an agent vote, and `--execute --index` executes once it is Approved | Every mode reads the on-chain actions back against `scripts/lib/admin-seat-rotation.js` and refuses on any drift. BLSBw8 never signs |
+| `rotate-admin-seat.js` | ONE config transaction per cluster: `removeMember(BLSBw8…)` + `addMember(4bKN…, mask 7)`, threshold unchanged. `--send` creates it, proposes it and casts the clean system seat's vote. `--approve --index --as=<role>` adds an agent vote, and `--execute --index` executes once it is Approved | Every mode reads the on-chain actions back against `scripts/lib/admin-seat-rotation.js` and refuses on any drift. BLSBw8 never signs, with one exception: `--allow-outgoing-signer`, used once for devnet #19's third vote on Mr. McRitchie's instruction. It covers devnet `--approve` only |
 | `sweep-admin-seat.js` | Moves the SOL left on BLSBw8 to allow-listed destinations, fee-aware, leaving it at 0 or at rent-exempt | The dry run SIMULATES the unsigned transaction and loads no key. It lists SPL token accounts but never moves them |
 
 ## Three things they learned the hard way

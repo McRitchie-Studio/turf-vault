@@ -187,7 +187,7 @@ const MEMBER_NAMES = {
   "2eGs8G3wzhEeNQQU2Q86BmmA2xTpDbMMae3Y1bvpZfx9": "system.devnet (agent)",
   "4bKNSqkrKeggSyrds16Ak7rcB4ibvGJ4ZLsKjvQgC3Vk": "governance (agent)",
   BLSBw8fXHzZc5pbaYCKMpMSsrtXBTbWXpUPVzMrXx9oo:
-    "EXPOSED admin solana.turf.admin (rotated out: mainnet #6 2026-10-09; devnet #19 pending)",
+    "EXPOSED admin solana.turf.admin (rotated out of both 2026-10-09: mainnet #6, devnet #19)",
   "8K81w4e6UcB7TiANhM9N8sAgijJvTxxybRi8AENRaRYd": "Xan (agent)",
   CytJS23p1zCM2wvUUngiDePtbMB484ebD7bK4nDqWjrR: "Mason (retired: live Squads 2026-09-15, 9dCLM 2026-09-16)",
   F6f8h5yynbnkgWvU5abQx3RJxJpe8EoQmeFBuNKdKzhZ: "LEAKED agent.solana (evicted: devnet 2026-06-06, 9dCLM 2026-09-16)",
