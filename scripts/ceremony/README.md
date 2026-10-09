@@ -38,6 +38,16 @@ reach for the committed tooling instead:
 | `add-system-seat.js` | The second pass, cluster-parameterised: brought both multisigs to five seats, matching the `VaultState` signer list | It prints whether the agent reaches quorum in the resulting shape, and says so as `⚠ AGENT CAN ACT ALONE` |
 | `blast-radius.js` | Read-only: proved the Squads change did NOT move the vault PDA, the program's upgrade authority, or `VaultState` | Verifying what a change did *not* touch is as much a part of a ceremony as verifying what it did |
 
+## The 2026-10-08 governance rotation
+
+Two scripts were added for task `rotate-mainnet-admin-key`, and like the four above
+they refuse once their plan is done.
+
+| Script | What it does | Notes |
+|--------|--------------|-------|
+| `rotate-admin-seat.js` | ONE config transaction per cluster: `removeMember(BLSBw8…)` + `addMember(4bKN…, mask 7)`, threshold unchanged. `--send` creates it, proposes it and casts the clean system seat's vote. `--approve --index --as=<role>` adds an agent vote, and `--execute --index` executes once it is Approved | Every mode reads the on-chain actions back against `scripts/lib/admin-seat-rotation.js` and refuses on any drift. BLSBw8 never signs |
+| `sweep-admin-seat.js` | Moves the SOL left on BLSBw8 to allow-listed destinations, fee-aware, leaving it at 0 or at rent-exempt | The dry run SIMULATES the unsigned transaction and loads no key. It lists SPL token accounts but never moves them |
+
 ## Three things they learned the hard way
 
 All three are now encoded in `scripts/squad-upgrade.js` and its libraries, which
