@@ -634,7 +634,8 @@ heroku run 'bin/rails runner "puts Solana::Vault.new.read_vault_state.inspect"' 
 > (Alex Bot), `7ZDJ…` (Alex) and `Cyt…` (Mason), the same three as `VaultState`.
 > The 2026-09-15 rotation changed the Squads and left `VaultState` alone: both
 > live Squads now read 3-of-5 with different members, `Cyt…` sits on neither, and
-> `8K81…` sits on devnet's only. Read Squads membership with
+> `8K81…` sat on devnet's only until devnet #21 (2026-10-12) removed it there
+> too. Read Squads membership with
 > `node scripts/squad-inventory.js` — never from `scripts/squad.json`'s
 > `members`, which is the `VaultState` signer set `initialize-mainnet.js` writes.
 > Read the `VaultState` signer set with §0's **Verifying this yourself** B before

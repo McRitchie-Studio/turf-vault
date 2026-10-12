@@ -80,6 +80,15 @@ const GENESIS = {
  * `removeMember(BLSBw8…)` + `addMember(4bKNSqkr…, mask 7)`, threshold unchanged
  * (`scripts/ceremony/rotate-admin-seat.js`). The replacement is filed in the
  * ADMIN vault, so a desk-level agent token can no longer read it.
+ *
+ * THE DEVNET SEATS (2026-10-12, card devnet-exposed-keys-tidy). `4bKN…` and
+ * `8K81…` (production's SOLANA_ADMIN_KEY) were printed into a transcript on
+ * 2026-10-12 (activity-17894), so devnet config transaction #21 removed both
+ * from the devnet Squad and seated two fresh DEVNET-ONLY keys, generated
+ * straight into 1Password: `remove 8K81, remove 4bKN, add GF4s… (7), add
+ * 39qa… (7)`, threshold unchanged at 3 of 5. No key below is a member of the
+ * mainnet Squad or of any `VaultState` signer set, so devnet keeps its three
+ * agent seats (AUTONOMOUS) without one mainnet-capable key among them.
  */
 const AGENT_VAULT = "studio-agents";
 const ADMIN_VAULT = "studio-agents-admin";
@@ -113,24 +122,20 @@ const AGENT_SEATS = {
       env: "SQUAD_KEY_SYSTEM",
     },
     {
-      role: "governance",
-      pubkey: "4bKNSqkrKeggSyrds16Ak7rcB4ibvGJ4ZLsKjvQgC3Vk",
-      item: "solana.turf.governance",
+      role: "seat-a.devnet",
+      pubkey: "GF4sojG9tHF2kC3jpgto1gd3b1nXLuUiAcsAiYi5Y5vb",
+      item: "solana.turf.squad-seat-a.devnet",
       vault: ADMIN_VAULT,
       secretField: "private key",
-      env: "SQUAD_KEY_GOVERNANCE",
+      env: "SQUAD_KEY_SEATA",
     },
     {
-      // `agent.xan.solana` is production's SOLANA_ADMIN_KEY (turf-monster-mainnet
-      // and -qa), so it lives in the ADMIN vault. It sat in `studio-agents` by
-      // mistake until 2026-10-09, when it was copied to `studio-agents-admin` and
-      // the original archived (task rotate-mainnet-admin-key).
-      role: "xan",
-      pubkey: "8K81w4e6UcB7TiANhM9N8sAgijJvTxxybRi8AENRaRYd",
-      item: "agent.xan.solana",
+      role: "seat-b.devnet",
+      pubkey: "39qaSh2J4VoQhn3sZCwWmb1W17VCrDMri2JoBAN6dT1o",
+      item: "solana.turf.squad-seat-b.devnet",
       vault: ADMIN_VAULT,
       secretField: "private key",
-      env: "SQUAD_KEY_XAN",
+      env: "SQUAD_KEY_SEATB",
     },
   ],
 };
@@ -229,10 +234,12 @@ const MEMBER_NAMES = {
   "9gACbzsCLmkYF9Yx1EBGmwMvvyfuTquJ6qs8QsoQvHXf": "Mr. McRitchie's third (operator)",
   "7auwTLSvNniSUeAgL6v9RStMXJhWrrUhSJgwFWLpcqC": "system (agent)",
   "2eGs8G3wzhEeNQQU2Q86BmmA2xTpDbMMae3Y1bvpZfx9": "system.devnet (agent)",
-  "4bKNSqkrKeggSyrds16Ak7rcB4ibvGJ4ZLsKjvQgC3Vk": "governance (agent)",
+  "4bKNSqkrKeggSyrds16Ak7rcB4ibvGJ4ZLsKjvQgC3Vk": "governance (agent; off devnet at #21 2026-10-12)",
+  GF4sojG9tHF2kC3jpgto1gd3b1nXLuUiAcsAiYi5Y5vb: "seat-a.devnet (agent, devnet only)",
+  "39qaSh2J4VoQhn3sZCwWmb1W17VCrDMri2JoBAN6dT1o": "seat-b.devnet (agent, devnet only)",
   BLSBw8fXHzZc5pbaYCKMpMSsrtXBTbWXpUPVzMrXx9oo:
     "EXPOSED admin solana.turf.admin (rotated out of both 2026-10-09: mainnet #6, devnet #19)",
-  "8K81w4e6UcB7TiANhM9N8sAgijJvTxxybRi8AENRaRYd": "Xan (agent)",
+  "8K81w4e6UcB7TiANhM9N8sAgijJvTxxybRi8AENRaRYd": "Xan (agent; off devnet at #21 2026-10-12)",
   foUuRyeibadQoGdKXZ9pBGDqmkb1jY1jYsu8dZ29nds: "Mack (agent; devnet VaultState only)",
   CytJS23p1zCM2wvUUngiDePtbMB484ebD7bK4nDqWjrR: "Mason (retired: live Squads 2026-09-15, 9dCLM 2026-09-16)",
   F6f8h5yynbnkgWvU5abQx3RJxJpe8EoQmeFBuNKdKzhZ: "LEAKED agent.solana (evicted: devnet 2026-06-06, 9dCLM 2026-09-16)",

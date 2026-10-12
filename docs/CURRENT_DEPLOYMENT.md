@@ -19,6 +19,8 @@ This is the live operator reference for TurfVault deployment identity. Keep hist
 | slot 5 | `3Qj4v9qjhXgkru6zCRCErRVhy8Q6qU3NrNpvpXLTZboA` — Mr. McRitchie's second wallet |
 | Program SHA256 | `af3d1cdf3e35ec0348249db775f61d3d565ef4ca5a025ef80409128f785eb6b9` (707,328 bytes, the whole region; its first 706,304 bytes are the built `turf_vault.so`, `76a8db25…`) |
 | Consumer pin | turf-monster-qa `EXPECTED_IDL_HASH` = v0.25 `f11446fa…` + v0.26 `2d9f7151…`, `SOLANA_VAULT_GOVERNANCE=on` |
+| USDC test mint | `222Dcu2RgAXE3T8A4mGSG3kQyXaNjqePx7vva1RdWBN9`, mint authority `2eGs8G3w…` (QA's server key) since 2026-10-12, so QA mints its own rehearsal pools. It was `8K81…` until then; local development, which derives `8K81…`, can no longer mint devnet USDC |
+| USDT test mint | `9mxkN8KaVA8FFgDE2LEsn2UbYLPG8Xg9bf4V9MYYi8Ne`, supply 0, mint authority still the leaked `F6f8...KzhZ` (read 2026-10-12). Nothing mints it; move it before anything does |
 
 **No mainnet `VaultState` signer is seated on devnet.** `8K81…` (production's
 server key) and `CytJ…` (Mason) left devnet in the EVICT; `7ZDJ…` left in the
@@ -333,12 +335,12 @@ node scripts/squad-inventory.js              # both clusters, read-only, no keys
 node scripts/squad-inventory.js --cluster=mainnet
 ```
 
-What it reports, and what the numbers mean, as of **2026-10-09**. Both clusters
-were re-read at `confirmed` after the governance rotation (mainnet #6, devnet #19):
+What it reports, and what the numbers mean, as of **2026-10-12**. Devnet was
+re-read at `finalized` after devnet #21; mainnet at `confirmed` after mainnet #6:
 
 | Cluster | Multisig | Threshold | Agent-held seats | An upgrade run would |
 |---------|----------|-----------|------------------|----------------------|
-| devnet | `7nRuVw3VZFC6z85tYVDitPnaUHZCkqLpJRSTBNtPmtZB` | 3 of 5 | 3 — `system.devnet` `2eGs8G3w…`, `governance` `4bKNSqkr…`, Xan `8K81w4e6…` | run **AUTONOMOUS**, end to end |
+| devnet | `7nRuVw3VZFC6z85tYVDitPnaUHZCkqLpJRSTBNtPmtZB` | 3 of 5 | 3 — `system.devnet` `2eGs8G3w…`, `seat-a.devnet` `GF4sojG9…`, `seat-b.devnet` `39qaSh2J…` | run **AUTONOMOUS**, end to end |
 | mainnet | `4H3fP3otjMtupk1DQDjKXYY1dWjT6LNM4H4ZWZ1XcKSX` | 3 of 5 | 2 — `system` `7auwTLSv…`, `governance` `4bKNSqkr…` | **HAND OFF** one approval and the execute to Mr. McRitchie |
 
 **The asymmetry is the design, not a gap.** Devnet is meant to run unattended;
@@ -355,7 +357,7 @@ membership, is what decides whether a seat can do the step being asked of it.
 **Retired 2026-09-15, with Mr. McRitchie's authorization:** Xan `8K81w4e6…` off
 mainnet and Mason `CytJS23p…` off both live Squads — mainnet config transaction
 #3 at 09:46 MDT, devnet #16 at 09:41 MDT. Xan also left devnet in that #16 and
-was re-seated there at 14:02 MDT (#18), which is why the table shows him on devnet. Neither is a Squads member on
+was re-seated there at 14:02 MDT (#18); devnet #21 (below) removed him again on 2026-10-12. Neither is a Squads member on
 the cluster the old tooling named them for. They remain `VaultState` signers,
 which is a different multisig — see above.
 
@@ -396,9 +398,37 @@ to `7ZDJp7FU…`, in one transaction paid by `4bKNSqkr…` (`2Xs3xJxz…`). BLSB
 no token accounts.
 
 **Xan's key moved to the admin vault the same day.** `agent.xan.solana` (`8K81…`) is
-production's `SOLANA_ADMIN_KEY` and Xan's devnet seat. It now lives in
-`studio-agents-admin`; the `studio-agents` original is archived. The roster reads
-it with the admin token.
+production's `SOLANA_ADMIN_KEY`. It now lives in `studio-agents-admin`; the
+`studio-agents` original is archived. It is no longer a Squads seat on either
+cluster (devnet #21, below).
+
+**Rotated off devnet 2026-10-12: `8K81…` and `4bKN…`, both printed into a
+transcript that day** (activity-17894; card `devnet-exposed-keys-tidy`). ONE
+devnet config transaction, #21: `RemoveMember 8K81…`, `RemoveMember 4bKN…`,
+`AddMember GF4sojG9tHF2kC3jpgto1gd3b1nXLuUiAcsAiYi5Y5vb` (mask 7), `AddMember
+39qaSh2J4VoQhn3sZCwWmb1W17VCrDMri2JoBAN6dT1o` (mask 7), threshold unchanged at
+3 of 5. The two new keys are DEVNET-ONLY, generated straight into 1Password as
+`solana.turf.squad-seat-a.devnet` and `solana.turf.squad-seat-b.devnet`
+(`studio-agents-admin`); neither is in any `VaultState` signer set or on the
+mainnet Squad. `2eGs` created, paid and executed; `2eGs`, `4bKN` and `8K81`
+approved, each outgoing key voting once for its own removal under Mr.
+McRitchie's devnet-only grant. Read back at `finalized`: `2eGs`, `39qa`, `3Qj4`,
+`7ZDJ`, `GF4s`. `4bKN` stays a MAINNET seat; this changed devnet only.
+
+| Step | Signature |
+|------|-----------|
+| `configTransactionCreate` #21 | `4SEY2acMUr2AYfuvM5Cm6v9qX1VqgbWBVGTQQXmZadR3WEDMZJPLZgMqyREhDNJHsHGTUbDrvwzfYumVZzGrufSv` |
+| `proposalCreate` | `r92PDevrTsujbFeqbQBrq4DBFV12BDAZad8Ab3aZ2WccuvpARP8DGb6dUkoSMqw2bxbxMH92PN8tHHoKhbGwVoG` |
+| approve `2eGs` | `2hPa5grr5eYyfDgcQc45WFMT36n76gt1HKYSV3fTz74SHzYNBUeBMq8aztLH37xT7TX9kGDdJCkDuydy5e3TyzEm` |
+| approve `4bKN` | `2rEd2jCaP4cpQCPZ71i1KFeY5Tn6HHnFVD8cBPHhq3rebtWRHqK1pa4UdWCrv5qDDpJfTDNCTnTc86VpAUvv4t4D` |
+| approve `8K81` | `6vjCrpMhau466ibEcE9cHCncyBpzEM8KuXA3JBFBoGf3J8mXHZhn5w74nH9xFcpiVykNgWQTLCq7DVzQvyZ93SF` |
+| `configTransactionExecute` | `32QhTm82GPzSCLPYBuSFAtvzTr1aQUfjFFJyVv1qaDxRwFX4EGew31KwsUEW42mniFwux5iBKd17eyDAvPSvsg4P` |
+
+The same sitting moved the devnet USDC test mint's authority from `8K81…` to
+`2eGs…` (`SetAuthority`, signed by `8K81`, paid by `2eGs`:
+`5oW2NZM1MRJ6K5a5Aev7RM1SvfAjxdV1Xt2mfzq6gYamndrcCre7GvBCnPWKqfbWZZYRKCjaEi2NCX2PeW813STm`)
+and minted 2,000 devnet USDC to `2eGs`'s token account `nZBhH1hy…`
+(`ur8G88TK8bMY6WfhT29U4bJscR46n8RUDAVVhwCjrnErSJ67JNWVgyt18xJZwzk7Gf4HkobFxP87x9oHHM7e3PV`).
 
 Devnet #17 (2026-09-15, `AddMember 7auwTLSv…`, one approval, by BLSBw8) still reads
 Active and is left in place. Its index is at or below devnet's
