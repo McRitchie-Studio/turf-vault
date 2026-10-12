@@ -74,16 +74,35 @@ So "retired 2026-06-02" and "retired 2026-06-06" are both true, of different aut
 | Field | Value |
 |-------|-------|
 | Program ID | `DaFv83yokwTz8msP9CzJ13eazSGk15NuUTxjkfzJzxMM` |
-| Version | v0.25.0 |
-| Deployed | 2026-06-11, slot `425788802` |
-| Upgrade authority | Squads V4 vault PDA `Bk9sS7iiSRL18vuo2KVzkeGw7EekKqxMCjrdoyGGdJm` |
-| `VaultState` threshold | 2-of-3 for treasury and governance ops — the program's own signer set below, NOT the Squads multisig that holds the upgrade authority (3-of-5; see **Squads Governance**) |
-| Alex Bot signer | `8K81w4e6UcB7TiANhM9N8sAgijJvTxxybRi8AENRaRYd` |
-| Alex signer | `7ZDJp7FUHhuceAqcW9CHe81hCiaMTjgWAXfprBM59Tcr` |
-| Mason signer | `CytJS23p1zCM2wvUUngiDePtbMB484ebD7bK4nDqWjrR` |
-| Expected IDL hash | `b9b522635894a42f5434f1faa1cd126d146f3042ae2c233acd1dd76a300f7152` |
-| Program SHA256 | `e71a3fce25f8b5f28a203b33705a0274ebf1b2200c9f092ac86339931f2dbee7` (545,928 bytes) |
+| Version | v0.26.0 |
+| Deployed | 2026-10-12, slot `456161810` (19:28:42Z; Squads mainnet vault transaction #8; card `mainnet-v026-upgrade`) |
+| Upgrade authority | Squads V4 vault PDA `Bk9sS7iiSRL18vuo2KVzkeGw7EekKqxMCjrdoyGGdJm`, also the standing **upgrade reserve** (float from it, refunds to it; minimum in the hub's `program-upgrade` SOP). Read 10.304529006 SOL on 2026-10-12 |
+| `GovernanceConfig` | `BtiyZY1HbctFDg5orUkSxqbfM3f9rxxgFF1t8ED5fWVx` (PDA of `[b"governance"]`), 117 bytes, owned by `DaFv83yo…`. Created by `init_governance` `5KqNaY9rVj9bfKXHfT8EkvFCycHRRte1c13tmRXsR9TBys97K5sFfpGw5zojdURLioFmNdqLBzfHNWchyDADg4mo` (slot `456162765`, 19:32:14Z, 955 slots after the upgrade), signed by `8K81…` + `CytJ…`. Every entry is the shipped default, `settle_contest` = **3** included |
+| `VaultState` signers | three of five slots, **UNROTATED** (`node scripts/check-signer-slots.js --cluster mainnet`) |
+| slot 1 | `8K81w4e6UcB7TiANhM9N8sAgijJvTxxybRi8AENRaRYd` — production's `SOLANA_ADMIN_KEY` (`agent.xan.solana`) |
+| slot 2 | `7ZDJp7FUHhuceAqcW9CHe81hCiaMTjgWAXfprBM59Tcr` — Mr. McRitchie |
+| slot 3 | `CytJS23p1zCM2wvUUngiDePtbMB484ebD7bK4nDqWjrR` — Mason |
+| slots 4–5 | empty until the mainnet rotation (`SIGNER_ROTATION.md`) |
+| Threshold | v0.26's per-action table in `GovernanceConfig`, NOT the Squads multisig (3-of-5; see **Squads Governance**). With three seated signers, every action at threshold 3 (settle, cancel, sweep, `update_signers`, …) needs all three of `8K81`, `7ZDJ` and `CytJ` until the rotation |
+| Expected IDL hash | `turf-monster-mainnet` pins BOTH: v0.25 `b9b522635894a42f5434f1faa1cd126d146f3042ae2c233acd1dd76a300f7152` and v0.26 `1499f4cf9fd6f161e227965d1ca357a8a919c9f031928573e6607a9d71889f4e`, with `SOLANA_VAULT_GOVERNANCE=on` (Heroku v345). Tightening to v0.26 alone is still owed on card `mainnet-v026-upgrade` |
+| Program SHA256 | `3dfcb0c44b98fccfa900e1be21d33a2db3635e8723d5c08a8328d3a8be5415a2` (707,600 bytes, the whole region; ProgramData is 707,645 bytes with its 45-byte header, rent-exempt at 3.59548684 SOL) |
 | Consumer app | `turf-monster-mainnet` |
+
+The upgrade, all on the mainnet Squad `4H3fP3ot…` and read back at `finalized` on
+2026-10-12 (`transactionIndex` 8, `staleTransactionIndex` 6):
+
+| Step | Account | Approved by | State |
+|------|---------|-------------|-------|
+| #7 float: 6.2 SOL `Bk9s…` → single-use deploy key `HwqC6Bkv…` | vault tx `HrQ1vZuo4Mg7eyf96EA4NF4tBWEbE14to3YhcUZY6qsh`, proposal `5UAj3ytMNaxrxCuLeHyAE2kn1SnrufK96dFZbHtjxrDS` | `7auwTL…`, `4bKNSq…`, `7ZDJp7…` | **Executed** |
+| buffer `CToebfDCmJcaVXfoUWWK2cJDHuzTtuxMmoxC5JavcEAk` written and handed to `Bk9s…` by `HwqC…`; ProgramData extended +161,672 bytes | — | — | buffer closed by the upgrade (no account) |
+| #8 upgrade `DaFv…` from `CToe…`, spill `Bk9s…` | vault tx `CvSyA7WtjFk7FLHB62zCYq3yUT6fKvSSwXCssDxXh8xJ`, proposal `2new91f3T5z1uA5GKcdKN3is8qTTKf4s11r6k8i3iSBp` | `7auwTL…`, `4bKNSq…`, `7ZDJp7…` | **Executed** |
+
+The deploy key's leftover went back to `Bk9s…` after #8, and `HwqC…` now has no
+account. No buffer names `Bk9s…` or `HwqC…` as its authority.
+**Rollback:** the v0.25.0 dump (`e71a3fce25f8b5f28a203b33705a0274ebf1b2200c9f092ac86339931f2dbee7`,
+545,928 bytes) written to a buffer and upgraded through the same Squad, then unset
+`SOLANA_VAULT_GOVERNANCE` on `turf-monster-mainnet`. The `GovernanceConfig`
+account stays, and v0.25 ignores it.
 
 **The FIRST mainnet deployment was retired on 2026-09-16.** `MAINNET_LAUNCH.md` was executed against a program that is not the one above. Squads multisig `9dCLMZct…` was created on 2026-05-26 at 2-of-3 with `7ZDJp7FU…`, `F6f8...KzhZ` and `CytJS23p…`. Program `mnzowM2F…` was deployed from `F6f8...KzhZ` at 2026-06-02 08:56:16Z, and its authority passed to that Squad's vault `83BXrVFB…` 19 seconds later. The Alex Bot leak then forced the `KEY_ROTATION.md` redeploy onto `DaFv83yo…` later that day. The old deployment stayed un-retired, with the leaked key still seated on its Squad, until two Squads transactions on the evening of 2026-09-16 (MDT), both executed by Mr. McRitchie's `7ZDJp7FU…`. Read at `finalized` afterwards:
 
@@ -94,24 +113,33 @@ So "retired 2026-06-02" and "retired 2026-06-06" are both true, of different aut
 
 So "`F6f8` holds no mainnet authority" is now true of both mainnet deployments, not only the live one. Its devnet leftovers, including its signer slot in the orphaned `Dx8u…` vault, are under **Devnet**. Signatures for both transactions are recorded in `KEY_ROTATION.md` §7–§8.
 
-**Devnet runs v0.26.0 since 2026-10-12; mainnet runs v0.25.0** (reached 2026-06-11). The next upgrade window carries `burn_entry_token` AND the v0.26 governance change (both Unreleased in `CHANGELOG.md`), which change the IDL and so need a freshly built `EXPECTED_IDL_HASH` pinned on `turf-monster-mainnet`. The Version row above is read off the deployed executable, not inferred from a commit message; the method is under **Verification** below.
+**Both clusters run v0.26.0 since 2026-10-12**: devnet at 13:32Z (slot
+`510279923`), mainnet at 19:28Z (slot `456161810`). The Version rows are read off
+the deployed executables, not inferred from a commit message; the method is under
+**Verification** below. v0.26 carries `burn_entry_token` and the governance
+change, and both answer PRESENT in each cluster's dump.
 
-**The crate version is not this row.** `programs/turf_vault/Cargo.toml` reads `0.26.0` as of 2026-09-15: that is what the SOURCE is, and it is the label a freshly built IDL will carry. The mainnet table says v0.25.0 because that is what the mainnet CHAIN runs; devnet agrees with the crate since 2026-10-12. Mainnet agrees only after its upgrade window. Reading `0.26.0` in the crate and concluding these rows are stale is the mistake this paragraph exists to prevent.
+**The crate version is not this row.** `programs/turf_vault/Cargo.toml` reads
+`0.26.0`: that is what the SOURCE is. The tables say v0.26.0 because that is what
+each CHAIN runs, measured on 2026-10-12. The next source bump will make the crate
+read ahead of both tables until the next upgrade window, and that gap is what
+`bin/program-drift` in the hub reports; it is not a stale row.
 
-**Thresholds differ by cluster.** Mainnet's row is v0.25's 2-of-3
-(`validate_multisig` takes exactly two signers). Devnet's are v0.26's per-action
-table in `GovernanceConfig` (devnet table above); the v0.26 table in
-`CHANGELOG.md` describes mainnet only after its upgrade.
+**Thresholds now live in `GovernanceConfig` on both clusters, and they differ.**
+Mainnet holds the shipped defaults (`settle_contest` = 3); devnet lowered
+`settle_contest` to 2 (`scripts/set-devnet-threshold.js`). Read both tables
+off chain at offset 8 of each `GovernanceConfig` account: 32 one-byte entries,
+then the mint window (i64) and cap (u32). On 2026-10-12 they agreed at every
+entry but index 0.
 
-When v0.26 lands on mainnet, the mainnet rows need re-deriving and one step must
-not be skipped: `init_governance` runs immediately after the upgrade, because
-every vault-authorized instruction requires the account it creates (`RUNBOOK.md`
-→ *v0.26 Upgrade Ordering*). The signer rows do NOT change at deploy: the two
-appended slots read as empty until the ceremony in `SIGNER_ROTATION.md` runs.
-`node scripts/check-signer-slots.js --cluster <devnet|mainnet>` reads all five
-slots and is the cheapest way to re-derive either table's signer rows. Read on
-2026-10-12, devnet holds the five keys in its table and mainnet still holds
-`8K81…`, `7ZDJ…`, `CytJ…` with slots 4 and 5 empty.
+`init_governance` ran 955 slots (about three and a half minutes) after the
+mainnet upgrade, as `RUNBOOK.md` → *v0.26 Upgrade Ordering* requires. The signer
+rows did NOT change at deploy: the two appended slots read empty until the
+ceremony in `SIGNER_ROTATION.md` runs. `node scripts/check-signer-slots.js
+--cluster <devnet|mainnet>` reads all five slots and is the cheapest way to
+re-derive either table's signer rows. Read on 2026-10-12, devnet holds the five
+keys in its table (ROTATED) and mainnet holds `8K81…`, `7ZDJ…`, `CytJ…` with
+slots 4 and 5 empty (UNROTATED).
 
 **The upgrade authority is per cluster.** Mainnet's Squads vault PDA (`Bk9sS7ii...`) is a different vault from devnet's (`BW13kgfi...`). Never carry one cluster's vault address to the other; the devnet address is the one that historically leaked into mainnet-facing prose. The `VaultState` signer sets DIFFER since 2026-10-12 (devnet holds no mainnet signer), and nothing in the program ties them together — each cluster's `VaultState` was written by its own `initialize`, and `update_signers` can move one without the other. Read the cluster you mean.
 
@@ -119,14 +147,17 @@ Do not infer the live mainnet version from Turf Monster's committed IDL file alo
 
 ## Verification
 
-Every row of both tables above was re-derived on **2026-09-07** with the
-commands below — from chain, except the two consumer-side rows. `Expected IDL
-hash` comes from `turf-monster`'s Heroku config and the committed IDL file it
-must equal; `Consumer app` names that Heroku app. Chain cannot supply either,
-because Squads upgrades do not update the on-chain IDL account (see **Upgrade
-Rule**). That date covers those two tables and nothing else in this repository.
+Every row of both tables above was re-derived on **2026-10-12**, after both
+v0.26 upgrades, with the commands below: from chain, except the consumer-side
+rows. `Expected IDL hash` (mainnet) and `Consumer pin` (devnet) come from each
+Heroku app's config and the committed IDL files they must equal; `Consumer app`
+names the Heroku app. Chain cannot supply either, because Squads upgrades do not
+update the on-chain IDL account (see **Upgrade Rule**). The two `GovernanceConfig`
+rows were decoded from the accounts, and the Squads rows of the mainnet upgrade
+table from the vault-transaction and proposal accounts with `@sqds/multisig`.
+That date covers those two tables and nothing else in this repository.
 
-Read the stamp it replaces as a warning rather than a precedent. It claimed a
+Read the stamp the 2026-09-07 one replaced as a warning rather than a precedent. It claimed a
 2026-09-05 re-verification of *both* tables while mainnet's Version, Deployed,
 and Expected IDL hash rows were a full release stale — a proof stamp standing
 over rows it never covered, which is worse than no stamp because it stops the
@@ -138,8 +169,8 @@ solana program show DaFv83yokwTz8msP9CzJ13eazSGk15NuUTxjkfzJzxMM --url mainnet-b
 solana program show EQGFJAcABtDb6VXtiijTjZ6cE2UqdvhnqJvoharJbpMJ --url devnet
 
 # The Deployed row, from the slot each command above prints:
-solana block-time 425788802 --url mainnet-beta
-solana block-time 468716417 --url devnet
+solana block-time 456161810 --url mainnet-beta
+solana block-time 510279923 --url devnet
 
 # The Program SHA256 row. Two dumps taken minutes apart are byte-identical, so
 # this is a stable fingerprint of the bytes actually executing on chain:
@@ -158,7 +189,12 @@ shasum -a 256 /tmp/devnet.so
 # as JSON: `heroku config:get` prints an identical bare newline for "absent" and
 # for "present but empty", and that ambiguity has already produced a wrong reading.
 heroku config --app turf-monster-mainnet --json | jq -r '.EXPECTED_IDL_HASH'
-shasum -a 256 ../turf-monster/config/turf_vault.mainnet.idl.json
+shasum -a 256 ../turf-monster/config/turf_vault.mainnet.idl.json ../turf-monster/config/turf_vault.mainnet.v026.idl.json
+
+# The GovernanceConfig rows: the PDA of [b"governance"], then the table at offset 8.
+solana find-program-derived-address DaFv83yokwTz8msP9CzJ13eazSGk15NuUTxjkfzJzxMM string:governance
+solana account BtiyZY1HbctFDg5orUkSxqbfM3f9rxxgFF1t8ED5fWVx --url mainnet-beta --output json |
+  ruby -rjson -rbase64 -e 'd = Base64.decode64(JSON.parse(STDIN.read)["account"]["data"][0]); puts d[8, 32].bytes.join(",")'
 ```
 
 ### Reading the Version row off the chain
@@ -170,52 +206,39 @@ Read it instead from the instruction set the binary dispatches. Anchor keys
 each instruction by the first eight bytes of `sha256("global:<name>")`, and
 those constants are compiled into the program:
 
+Both clusters run v0.26, so this is the probe. The last name is the control:
+v0.26 DELETED `admin_set_username`, so it must answer **absent**. A probe where
+every name answers PRESENT has stopped discriminating.
+
 ```bash
 solana program dump DaFv83yokwTz8msP9CzJ13eazSGk15NuUTxjkfzJzxMM /tmp/mainnet.so --url mainnet-beta
-ruby -rdigest -e 'b = File.binread("/tmp/mainnet.so"); %w[admin_create_user_account admin_set_username burn_entry_token].each { |n| puts "#{n}: #{b.include?(Digest::SHA256.digest("global:#{n}")[0, 8]) ? "PRESENT" : "absent"}" }'
+ruby -rdigest -e 'b = File.binread("/tmp/mainnet.so"); %w[init_governance set_action_threshold overwrite_username reserve_username backfill_username_record burn_entry_token admin_set_username].each { |n| puts "#{n}: #{b.include?(Digest::SHA256.digest("global:#{n}")[0, 8]) ? "PRESENT" : "absent"}" }'
 ```
 
-On 2026-09-07 mainnet answered **PRESENT** for `admin_create_user_account` and
-`admin_set_username` — the two instructions v0.25.0 added — and **absent** for
-`burn_entry_token`, the only instruction added since. Devnet answered
-identically. The absence is the control: it shows the probe discriminates
-rather than matching whatever it is handed. So mainnet dispatches v0.25.0's
-instruction surface, not v0.24.0's and not the unreleased tree's.
+On 2026-10-12, after both upgrades, mainnet and devnet each answered **PRESENT**
+for the first six names and **absent** for `admin_set_username` (and for
+`admin_create_user_account`, which v0.26 also deleted). So both clusters
+dispatch v0.26.0's instruction surface.
 
-> **THE PROBE ABOVE GOES BLIND THE MOMENT v0.26 LANDS — use the second one
-> below from that day on.** v0.26 DELETES `admin_create_user_account` and
-> `admin_set_username`, so after the upgrade every name in that command answers
-> **absent**, including the control. "absent, absent, absent" matches no row in
-> this section, and the natural reading of a probe that finds nothing is that
-> the dump or the command is wrong — not that the binary moved on. Swap the
-> names rather than the conclusion:
->
-> ```bash
-> ruby -rdigest -e 'b = File.binread("/tmp/mainnet.so"); %w[init_governance set_action_threshold overwrite_username reserve_username backfill_username_record admin_set_username].each { |n| puts "#{n}: #{b.include?(Digest::SHA256.digest("global:#{n}")[0, 8]) ? "PRESENT" : "absent"}" }'
-> ```
->
-> On a v0.26 binary the first five answer **PRESENT** and `admin_set_username`
-> answers **absent** — and that last one is the control, in the same way
-> `burn_entry_token` was the control for the v0.25 reading: a probe where
-> everything answers PRESENT is a probe that has stopped discriminating. Until
-> the upgrade lands, the v0.25 command above is still the right one and its
-> 2026-09-07 measurement still stands.
+> **The old v0.25 probe asked a v0.25 question.** It named
+> `admin_create_user_account`, `admin_set_username` and `burn_entry_token`. On
+> 2026-10-12 both v0.26 dumps answered absent, absent, **PRESENT**: the inverse
+> of v0.25's reading, not the all-absent result this page used to predict,
+> because `burn_entry_token` shipped in v0.26. Use the probe above, whose names
+> belong to the release that is live. Its 2026-09-07 result (v0.25 on both
+> clusters) is history.
 
 The pinned IDL agrees from the other side, and it is the weaker of the two
-readings: `EXPECTED_IDL_HASH` on `turf-monster-mainnet` is the sha256 of
-`turf-monster/config/turf_vault.mainnet.idl.json`, which declares
-`metadata.version` `0.25.0` against address `DaFv83...`. Weaker because it reads a
-file in another repo rather than the chain: the pin proves which IDL
-turf-monster is configured to ACCEPT, never which program is executing. Since
-2026-09-15 the crate version does at least distinguish the two — a freshly
-built IDL now reads `0.26.0`, where before it also read `0.25.0` and nothing
-separated them. turf-monster still carries the proof of that: its staged
-`config/turf_vault.mainnet.v026.idl.json` declares `metadata.version` `0.25.0`
-against this same `DaFv83...` address while describing the 28-instruction v0.26
-program, indistinguishable by label from the 22-instruction file beside it. It
-reads `0.26.0` once rebuilt from the corrected tree. That improves the label
-without promoting it: the version is still written by hand, so the discriminator
-probe stays the reading that decides.
+readings. `EXPECTED_IDL_HASH` on `turf-monster-mainnet` holds two hashes on
+2026-10-12: `b9b52263…`, the sha256 of
+`turf-monster/config/turf_vault.mainnet.idl.json` (`metadata.version` `0.25.0`,
+22 instructions), and `1499f4cf…`, the sha256 of
+`config/turf_vault.mainnet.v026.idl.json` (`0.26.0`, 28 instructions), both on
+`turf-monster` `main`. The pin proves which IDLs turf-monster is configured to
+ACCEPT, never which program is executing, so while both are pinned it cannot
+tell v0.25 from v0.26 at all. The tighten to v0.26 alone is owed on card
+`mainnet-v026-upgrade`. The label is written by hand, so the discriminator probe
+stays the reading that decides.
 
 **What neither reading proves.** An instruction set fixes the release, not the
 build — a patch inside a handler leaves every discriminator unchanged. The
@@ -228,8 +251,12 @@ and no Squads upgrade was executed, something is wrong.
 
 `VaultState` stores its signers as raw 32-byte arrays, so `solana account`
 alone hands you a base64 blob and a comment naming byte offsets. This decodes
-it in place and leaves nothing further to convert — it ends in three pubkeys
-and a threshold, which is what the table rows above claim.
+it in place and leaves nothing further to convert — it ends in the first three
+signer slots and the legacy `threshold` byte. Under v0.26 that byte is v0.25's
+field and decides nothing (the per-action table in `GovernanceConfig` does), and
+slots 4 and 5 sit elsewhere in the account; `node scripts/check-signer-slots.js`
+reads all five. Run on mainnet on 2026-10-12 it printed `8K81…`, `7ZDJ…`,
+`CytJ…`, threshold 2, the USDC control, and `Bk9sS7ii…`.
 
 It is a plain public RPC read: no configured keypair, no Heroku, no
 `turf-monster`, no app credential. That independence matters most during an
@@ -314,12 +341,12 @@ this yourself** B, decoding the same offsets — deliberately, so a rotation and
 this reference cannot disagree about what the vault holds. Change one and change
 the other.
 
-`VaultState`'s in-program 2-of-3 is a separate mechanism from the Squads vault
-that holds the program upgrade authority, and **they no longer even have the same
-shape**. Mainnet's `VaultState` is still v0.25's 2-of-3 and devnet's is v0.26's
-five slots with per-action thresholds (the tables above);
-both LIVE Squads multisigs are 3-of-5 (since 2026-09-15, and re-read at
-`finalized` on 2026-09-16). The retired first mainnet Squad `9dCLM…` is 1-of-1 and
+The program's own signer set is a separate mechanism from the Squads vault that
+holds the program upgrade authority, and **they do not have the same shape**.
+Both clusters' `VaultState` now carry v0.26's five slots with per-action
+thresholds in `GovernanceConfig` (mainnet three seated, devnet five; the tables
+above); both LIVE Squads multisigs are 3-of-5 (re-read at `finalized` on
+2026-10-12). The retired first mainnet Squad `9dCLM…` is 1-of-1 and
 governs nothing (see **Mainnet**). Two multisigs, two vocabularies
 — see **Squads Governance** below, and read `scripts/squad.json`'s `_members_are`
 note before touching that file.
@@ -335,8 +362,10 @@ node scripts/squad-inventory.js              # both clusters, read-only, no keys
 node scripts/squad-inventory.js --cluster=mainnet
 ```
 
-What it reports, and what the numbers mean, as of **2026-10-12**. Devnet was
-re-read at `finalized` after devnet #21; mainnet at `confirmed` after mainnet #6:
+What it reports, and what the numbers mean, as of **2026-10-12**. Both were
+re-read at `finalized` that evening: devnet after #21 (`transactionIndex` 21),
+mainnet after #8 (`transactionIndex` 8; #7 and #8 are the v0.26 float and upgrade
+under **Mainnet**):
 
 | Cluster | Multisig | Threshold | Agent-held seats | An upgrade run would |
 |---------|----------|-----------|------------------|----------------------|
@@ -463,7 +492,11 @@ node scripts/squad-upgrade.js --cluster=mainnet <BUFFER_ADDR> \
 `--cluster` is required and has no default; the run is a dry run until `--send`.
 A dry run reads no key material at all, so it is free to run before the buffer
 even exists — which is the order the money wants, because a mainnet buffer costs
-~2.76 SOL to write.
+about 3.6 SOL to write at v0.26's 707,600 bytes (rent read 2026-10-12: 5,080
+lamports per byte). The float comes from the mainnet Squad vault `Bk9s…`, the
+upgrade reserve, and the buffer refund returns to it; its stated minimum and the
+warning that watches it are in the hub's `program-upgrade` SOP and
+`bin/program-drift`.
 
 A mainnet `--send` refuses, before any key is read or anything is signed, unless
 all three hold:
