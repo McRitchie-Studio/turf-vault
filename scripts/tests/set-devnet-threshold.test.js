@@ -13,7 +13,14 @@ const assert = require("node:assert");
 const fs = require("node:fs");
 const path = require("node:path");
 
-const { parsePlan, ACTIONS, FLOORED } = require("../set-devnet-threshold.js");
+const {
+  parsePlan,
+  ACTIONS,
+  FLOORED,
+  PROGRAM_ID,
+  MAINNET_ID,
+  DEVNET_GENESIS,
+} = require("../set-devnet-threshold.js");
 
 const STATE = fs.readFileSync(
   path.join(__dirname, "..", "..", "programs", "turf_vault", "src", "state.rs"),
@@ -65,4 +72,10 @@ test("an unknown action or an out-of-range value is refused", () => {
   assert.throws(() => parsePlan("settle_contest", "0"), /--value/);
   assert.throws(() => parsePlan("settle_contest", "6"), /--value/);
   assert.throws(() => parsePlan("settle_contest", "two"), /--value/);
+});
+
+test("the pinned program is devnet's, never mainnet's", () => {
+  assert.notStrictEqual(PROGRAM_ID, MAINNET_ID);
+  assert.strictEqual(PROGRAM_ID, "EQGFJAcABtDb6VXtiijTjZ6cE2UqdvhnqJvoharJbpMJ");
+  assert.strictEqual(DEVNET_GENESIS, "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG");
 });

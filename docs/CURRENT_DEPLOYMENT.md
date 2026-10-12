@@ -25,6 +25,17 @@ server key) and `CytJ…` (Mason) left devnet in the EVICT; `7ZDJ…` left in th
 v0.25 swap before the upgrade. `9gAC…` and `3Qj4…` are mainnet Squads members and
 the mainnet rotation's target, not mainnet `VaultState` signers today.
 
+**`9gAC…` and `3Qj4…` must leave the devnet `VaultState` when the mainnet rotation
+seats them.** The step: in the same sitting as the mainnet EVICT that seats them
+(card `mainnet-v026-upgrade`, `SIGNER_ROTATION.md`), Steffon runs one devnet
+`update_signers` with `node scripts/rotate-devnet-signers.js`, replacing both with
+devnet-only keys, signed by the three devnet agent keys `2eGs` + `foUu` + `BVQH`
+(no human tap). The replacements are two fresh devnet-only keys filed in the
+admin vault, unless Mr. McRitchie names devnet-only wallets of his own. The same
+rule holds for any key the mainnet rotation adds: no key is a `VaultState` signer
+on both clusters. turf-monster's `config/mainnet_vault_signers.yml` already fences
+both from the QA rehearsal.
+
 The devnet signer change ran in four devnet transactions, all agent-signed under
 Mr. McRitchie's devnet-only grant:
 
@@ -85,23 +96,25 @@ So "`F6f8` holds no mainnet authority" is now true of both mainnet deployments, 
 
 **The crate version is not this row.** `programs/turf_vault/Cargo.toml` reads `0.26.0` as of 2026-09-15: that is what the SOURCE is, and it is the label a freshly built IDL will carry. The mainnet table says v0.25.0 because that is what the mainnet CHAIN runs; devnet agrees with the crate since 2026-10-12. Mainnet agrees only after its upgrade window. Reading `0.26.0` in the crate and concluding these rows are stale is the mistake this paragraph exists to prevent.
 
-**The `VaultState` threshold rows above describe v0.25, which is what is DEPLOYED.** They say
-2-of-3 because that is what the deployed program can express: `validate_multisig`
+**The mainnet `VaultState` threshold row describes v0.25, which is what mainnet
+runs.** It says 2-of-3 because that is what v0.25 can express: `validate_multisig`
 takes exactly two signers and never reads the `threshold` field at all. v0.26
 replaces that with per-action thresholds stored in a `GovernanceConfig` PDA
 (3 for anything that moves money or changes who governs, 2 for pause, 3 for
-unpause), and widens the signer set to five slots. **It is live on devnet only** (2026-10-12); on mainnet none of it is —
-do not read the new table in `CHANGELOG.md` as a description of the chain.
+unpause) and widens the signer set to five slots. **Devnet runs it** (the devnet
+table above, with `settle_contest` retuned to 2 there only); on mainnet none of it
+is live, so do not read the new table in `CHANGELOG.md` as a description of
+mainnet.
 
-When v0.26 does land, two rows here need re-deriving and one step must not be
-skipped: `init_governance` has to run immediately after the upgrade, because
-every vault-authorized instruction requires the account it creates. See
-`RUNBOOK.md` → *v0.26 Upgrade Ordering*. The signer rows do NOT change at
-deploy — the two appended slots read as empty until a human runs the ceremony in
-`SIGNER_ROTATION.md`. `node scripts/check-signer-slots.js` reads all five slots
-off either cluster and is the cheapest way to re-derive the signer rows above;
-run on 2026-09-15 it reported 1515-byte accounts and the same three signers on
-both clusters, with slots 4 and 5 empty.
+When v0.26 lands on mainnet, the mainnet rows need re-deriving and one step must
+not be skipped: `init_governance` runs immediately after the upgrade, because
+every vault-authorized instruction requires the account it creates (`RUNBOOK.md`
+→ *v0.26 Upgrade Ordering*). The signer rows do NOT change at deploy: the two
+appended slots read as empty until the ceremony in `SIGNER_ROTATION.md` runs.
+`node scripts/check-signer-slots.js --cluster <devnet|mainnet>` reads all five
+slots and is the cheapest way to re-derive either table's signer rows. Read on
+2026-10-12, devnet holds the five keys in its table and mainnet still holds
+`8K81…`, `7ZDJ…`, `CytJ…` with slots 4 and 5 empty.
 
 **The upgrade authority is per cluster.** Mainnet's Squads vault PDA (`Bk9sS7ii...`) is a different vault from devnet's (`BW13kgfi...`). Never carry one cluster's vault address to the other; the devnet address is the one that historically leaked into mainnet-facing prose. The `VaultState` signer sets DIFFER since 2026-10-12 (devnet holds no mainnet signer), and nothing in the program ties them together — each cluster's `VaultState` was written by its own `initialize`, and `update_signers` can move one without the other. Read the cluster you mean.
 

@@ -126,8 +126,8 @@ function parsePlan(actionName, valueArg) {
 }
 
 async function main() {
-  if (PROGRAM_ID === MAINNET_ID)
-    die("REFUSING: the pinned program id is mainnet.");
+  // The runtime guard is the genesis hash checked below. That the pinned id is
+  // not mainnet's is a fact about two constants, so the unit test asserts it.
   if (argv.includes("--mainnet") || argv.includes("--cluster")) {
     die(
       "REFUSING: this script is devnet-only by construction. A mainnet retune is a separate act."
@@ -267,5 +267,5 @@ async function main() {
   );
 }
 
-module.exports = { parsePlan, ACTIONS, FLOORED };
+module.exports = { parsePlan, ACTIONS, FLOORED, PROGRAM_ID, MAINNET_ID, DEVNET_GENESIS };
 if (require.main === module) main().catch((e) => die(e.message || String(e)));
