@@ -42,8 +42,8 @@ takes one of two paths:
 
 | Cluster | Threshold | Agent seats | What the script does |
 |---------|-----------|-------------|----------------------|
-| devnet `7nRuVw3V…` | 3 of 5 | 3 (`system.devnet`, `admin`, Xan) | **AUTONOMOUS** — create → propose → approve ×3 → execute |
-| mainnet `4H3fP3ot…` | 3 of 5 | 2 (`system`, `admin`) | **HANDOFF** — create → propose → approve ×2 → **stop**, and print the transaction index, the on-chain instruction read back from chain, and which of Mr. McRitchie's wallets must approve |
+| devnet `7nRuVw3V…` | 3 of 5 | 3 (`system.devnet`, `governance`, Xan) | **AUTONOMOUS** — create → propose → approve ×3 → execute |
+| mainnet `4H3fP3ot…` | 3 of 5 | 2 (`system`, `governance`) | **HANDOFF** — create → propose → approve ×2 → **stop**, and print the transaction index, the on-chain instruction read back from chain, and which of Mr. McRitchie's wallets must approve |
 
 That asymmetry is deliberate (2026-09-15): devnet runs unattended, mainnet needs
 Mr. McRitchie. Confirm it before a ceremony with `node scripts/squad-inventory.js`,
@@ -56,6 +56,33 @@ McRitchie approves from one of `7ZDJp7FU…`, `3Qj4v9qj…` or `9gACbz…` and t
 executes. Before approving, compare what the Squads UI shows against the block the
 script printed — the script refuses to approve a transaction whose on-chain
 instruction is not the planned upgrade, and the same check is worth making by eye.
+
+## Vault Transfers (Squads)
+
+A move OUT of a Squad vault (SOL, or a classic SPL token such as swept operator
+revenue) runs through `scripts/squad-vault-transfer.js`, the tool behind Steffon's
+`squad-vault-ops` SOP in mcritchie-studio. On mainnet the agent queues and
+double-signs; Mr. McRitchie approves; the agent executes only after his approval
+is on chain.
+
+```bash
+node scripts/squad-vault-transfer.js plan    --cluster=mainnet --to=<wallet> --sol=<amount>
+node scripts/squad-vault-transfer.js send    --cluster=mainnet --to=<wallet> --sol=<amount> --expect-index=<n>
+node scripts/squad-vault-transfer.js execute --cluster=mainnet --to=<wallet> --sol=<amount> --index=<n+1>
+```
+
+- `plan` is read-only and prints the multisig's `transaction_index`. `send`
+  refuses unless `--expect-index` still equals it, so a second proposal for the
+  same move cannot slip in.
+- `send` creates the vault transaction and proposal with the `system` seat, reads
+  the instruction back from chain, approves with both agent seats, and prints the
+  hand-back: `https://app.squads.so/squads/<vault PDA>/transactions` and one line.
+  The link keys on the VAULT PDA; the multisig address 404s.
+- `approve` casts any agent approval a partial `send` left owed.
+- `execute` refuses on mainnet unless one of `7ZDJp7FU…`, `9gACbz…` or `3Qj4v9qj…`
+  has approved on chain. Two agent votes never move the mainnet vault.
+- `--mint=<mint> --amount=<n>` instead of `--sol` moves a classic SPL token; the
+  destination's token account must already exist.
 
 ## Test Failures
 
