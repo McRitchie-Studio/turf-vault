@@ -71,6 +71,7 @@ const {
   checkExpectedIndex,
   checkSourceFunds,
   executeGate,
+  expiredConfirmationAdvice,
   findMatchingIndex,
   formatAmount,
   handoff,
@@ -87,6 +88,7 @@ const RENT_RESERVE_LAMPORTS = 10_000_000; // 0.01 SOL: tx + proposal rent and fe
 const COMPUTE_UNIT_LIMIT = 200_000;
 const PRIORITY_MICRO_LAMPORTS = 50_000;
 const MODES = ["plan", "send", "approve", "execute"];
+let MODE = null; // set once argv is parsed; read by sendTx's expiry advice
 
 function fail(message) {
   console.error(`\nREFUSED: ${message}\n`);
@@ -172,20 +174,17 @@ async function sendTx(connection, payer, signers, instructions, label) {
   let result;
   try {
     result = await connection.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, "confirmed");
-  } catch (error) {
-    // The blockhash expired before confirmation. The transaction MAY still have
-    // landed. Ask once; otherwise stop and say how to find out, because a blind
-    // re-run of `send` is how a second proposal for the same move gets created.
+  } catch (_) {
+    // The blockhash expired before confirmation, so the transaction can no longer
+    // land, but it MAY already have. Ask once; otherwise stop and tell the operator
+    // to re-run the SAME command. A fresh plan would hand out the next index, and a
+    // send on that index is how a second proposal for the same move gets created.
     const status = (await connection.getSignatureStatus(signature, { searchTransactionHistory: true })).value;
     if (status && !status.err && ["confirmed", "finalized"].includes(status.confirmationStatus)) {
       console.log(`   ${label.padEnd(34)} ${signature} (confirmed after the blockhash expired)`);
       return signature;
     }
-    throw new TransferError(
-      `${label}: confirmation expired for ${signature} (${error.message.split("\n")[0]}). It may still land. ` +
-        `Do NOT re-run send. Run plan: if the index moved, plan's send refusal names the transaction that ` +
-        `carries this transfer and the approve command that finishes it.`
-    );
+    throw new TransferError(expiredConfirmationAdvice(label, signature, MODE));
   }
   if (result.value.err) throw new Error(`${label} failed: ${JSON.stringify(result.value.err)} (${signature})`);
   console.log(`   ${label.padEnd(34)} ${signature}`);
@@ -259,6 +258,7 @@ async function adviseOnMovedIndex(connection, multisigPda, from, to, plan, rerun
   if (!MODES.includes(args.mode)) {
     fail(`mode must be one of ${MODES.join(" | ")} (see the header of this file)`);
   }
+  MODE = args.mode;
 
   let cfg;
   try {

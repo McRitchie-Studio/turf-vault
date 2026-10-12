@@ -35,6 +35,7 @@ const {
   checkSourceFunds,
   describeInstruction,
   executeGate,
+  expiredConfirmationAdvice,
   findMatchingIndex,
   formatAmount,
   handoff,
@@ -259,15 +260,47 @@ test("a moved index that already carries this transfer says approve, never send 
     { index: 8n, instructions: [solTransfer(VAULT, HWQC, 6_200_000_000n)], status: "Executed" },
     { index: 9n, instructions: [solTransfer(VAULT, HWQC, 6_200_000_000n)], status: "Active" },
   ];
-  assert.equal(findMatchingIndex(candidates, SOL_PLAN), 9n, "an Executed match is not resumable");
-  assert.equal(findMatchingIndex(candidates.slice(0, 2), SOL_PLAN), null);
-  assert.equal(
+  assert.deepEqual(findMatchingIndex(candidates, SOL_PLAN), { index: 9n, executed: false }, "a live match wins");
+  assert.deepEqual(
     findMatchingIndex([{ index: 10n, instructions: [solTransfer(VAULT, HWQC, 6_200_000_000n)], status: "Approved" }], SOL_PLAN),
-    10n
+    { index: 10n, executed: false }
   );
-  assert.match(indexMovedAdvice(9n, "--cluster=mainnet --to=x --sol=6.2"), /approve --cluster=mainnet --to=x --sol=6\.2 --index=9/);
-  assert.match(indexMovedAdvice(9n, ""), /Do NOT send again/);
+  assert.equal(findMatchingIndex(candidates.slice(0, 1), SOL_PLAN), null);
+  assert.equal(
+    findMatchingIndex([{ index: 11n, instructions: [solTransfer(VAULT, HWQC, 6_200_000_000n)], status: "Rejected" }], SOL_PLAN),
+    null,
+    "a Rejected match is neither live nor done"
+  );
+  const advice = indexMovedAdvice({ index: 9n, executed: false }, "--cluster=mainnet --to=x --sol=6.2");
+  assert.match(advice, /approve --cluster=mainnet --to=x --sol=6\.2 --index=9/);
+  assert.match(advice, /Do NOT send again/);
   assert.match(indexMovedAdvice(null, ""), /re-plan/);
+});
+
+test("a moved index whose match already EXECUTED says so, and never says approve", () => {
+  const done = [
+    { index: 7n, instructions: [solTransfer(VAULT, PHANTOM, 1n)], status: "Active" },
+    { index: 8n, instructions: [solTransfer(VAULT, HWQC, 6_200_000_000n)], status: "Executed" },
+  ];
+  const match = findMatchingIndex(done, SOL_PLAN);
+  assert.deepEqual(match, { index: 8n, executed: true });
+  const advice = indexMovedAdvice(match, "--cluster=mainnet");
+  assert.match(advice, /already executed at #8/);
+  assert.doesNotMatch(advice, /approve|re-plan/);
+
+  // Two executed copies (a duplicate that both ran): name the FIRST, where the money left.
+  const twice = [...done, { index: 9n, instructions: [solTransfer(VAULT, HWQC, 6_200_000_000n)], status: "Executed" }];
+  assert.deepEqual(findMatchingIndex(twice, SOL_PLAN), { index: 8n, executed: true });
+});
+
+test("an expired confirmation says re-run the SAME command, never plan", () => {
+  const send = expiredConfirmationAdvice("create + propose #9", "SIG", "send");
+  assert.match(send, /confirmation expired for SIG/);
+  assert.match(send, /re-run the same send with the same --expect-index/);
+  assert.match(send, /never run plan/);
+  assert.doesNotMatch(send.replace("never run plan", ""), /run plan/, "plan is named only to forbid it");
+  assert.match(expiredConfirmationAdvice("approve #9 governance", "SIG", "approve"), /re-run the same approve\.$/);
+  assert.match(expiredConfirmationAdvice("execute #9", "SIG", "execute"), /re-run the same execute\.$/);
 });
 
 test("the vault must hold the amount, and an SPL vault must have the token account", () => {

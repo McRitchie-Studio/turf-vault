@@ -171,27 +171,49 @@ function checkExpectedIndex(current, expected) {
 /**
  * The index moved since the plan. Was it THIS move? `candidates` are the
  * transactions created since, read back as `{ index, instructions, status }`.
- * Returns the first index that still carries exactly the planned transfer and
- * can still take votes (Active or Approved), else null. A match means "approve
- * or execute THAT index"; never "send again".
+ * Returns `{ index, executed }` for the transaction that carries exactly the
+ * planned transfer, else null. A live match (Active or Approved) wins over an
+ * Executed one: it means "approve or execute THAT index". An Executed match
+ * means the money already moved. Neither ever means "send again".
  */
 function findMatchingIndex(candidates, plan) {
+  let executed = null;
   for (const c of candidates) {
-    if (!["Active", "Approved"].includes(c.status)) continue;
-    if (matchesPlan(c.instructions, plan).ok) return BigInt(c.index);
+    if (!matchesPlan(c.instructions, plan).ok) continue;
+    if (["Active", "Approved"].includes(c.status)) return { index: BigInt(c.index), executed: false };
+    if (c.status === "Executed" && executed === null) executed = { index: BigInt(c.index), executed: true };
   }
-  return null;
+  return executed;
 }
 
-/** What to tell the operator when the index moved: approve the match, or stop and read. */
+/** What to tell the operator when the index moved: approve the match, report it done, or stop and read. */
 function indexMovedAdvice(match, rerunArgs) {
-  if (match !== null) {
+  if (match && match.executed) {
+    return `this transfer was already executed at #${match.index}. Do NOT send again; verify the balances from chain.`;
+  }
+  if (match) {
     return (
-      `transaction #${match} already carries exactly this transfer. Do NOT send again; finish it with:\n` +
-      `   node scripts/squad-vault-transfer.js approve ${rerunArgs} --index=${match}`
+      `transaction #${match.index} already carries exactly this transfer. Do NOT send again; finish it with:\n` +
+      `   node scripts/squad-vault-transfer.js approve ${rerunArgs} --index=${match.index}`
     );
   }
   return "no transaction created since the plan carries this transfer. Read the Squads page, then re-plan.";
+}
+
+/**
+ * The blockhash expired before the network confirmed. The transaction cannot
+ * land any more, but it may already have landed. The recovery is to re-run the
+ * SAME command: `send` with the same --expect-index refuses if its create landed
+ * and names the transaction that carries the move; `approve` casts only the
+ * votes still owed; `execute` refuses an Executed proposal. A fresh `plan`
+ * would hand out the NEW index, and a send on it creates a second proposal.
+ */
+function expiredConfirmationAdvice(label, signature, mode) {
+  const rerun =
+    mode === "send"
+      ? "re-run the same send with the same --expect-index; never run plan for a new index"
+      : `re-run the same ${mode}`;
+  return `${label}: confirmation expired for ${signature}; it may already have landed. To recover, ${rerun}.`;
 }
 
 /**
@@ -298,6 +320,7 @@ module.exports = {
   checkSourceFunds,
   describeInstruction,
   executeGate,
+  expiredConfirmationAdvice,
   findMatchingIndex,
   formatAmount,
   handoff,
