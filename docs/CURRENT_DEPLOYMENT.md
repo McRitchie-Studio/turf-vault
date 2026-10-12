@@ -96,15 +96,10 @@ So "`F6f8` holds no mainnet authority" is now true of both mainnet deployments, 
 
 **The crate version is not this row.** `programs/turf_vault/Cargo.toml` reads `0.26.0` as of 2026-09-15: that is what the SOURCE is, and it is the label a freshly built IDL will carry. The mainnet table says v0.25.0 because that is what the mainnet CHAIN runs; devnet agrees with the crate since 2026-10-12. Mainnet agrees only after its upgrade window. Reading `0.26.0` in the crate and concluding these rows are stale is the mistake this paragraph exists to prevent.
 
-**The mainnet `VaultState` threshold row describes v0.25, which is what mainnet
-runs.** It says 2-of-3 because that is what v0.25 can express: `validate_multisig`
-takes exactly two signers and never reads the `threshold` field at all. v0.26
-replaces that with per-action thresholds stored in a `GovernanceConfig` PDA
-(3 for anything that moves money or changes who governs, 2 for pause, 3 for
-unpause) and widens the signer set to five slots. **Devnet runs it** (the devnet
-table above, with `settle_contest` retuned to 2 there only); on mainnet none of it
-is live, so do not read the new table in `CHANGELOG.md` as a description of
-mainnet.
+**Thresholds differ by cluster.** Mainnet's row is v0.25's 2-of-3
+(`validate_multisig` takes exactly two signers). Devnet's are v0.26's per-action
+table in `GovernanceConfig` (devnet table above); the v0.26 table in
+`CHANGELOG.md` describes mainnet only after its upgrade.
 
 When v0.26 lands on mainnet, the mainnet rows need re-deriving and one step must
 not be skipped: `init_governance` runs immediately after the upgrade, because
@@ -280,6 +275,9 @@ Offsets come from `VaultState` in `programs/turf_vault/src/state.rs`: an 8-byte
 Anchor discriminator, then `signers[3]` at **8 / 40 / 72**, `threshold` at
 **104**, `bump` 105, `paused` 106, `payout_mint` 107, `treasury_authority`
 **139**, for **1515** bytes in total.
+This recipe prints the three v0.25 slots only. v0.26 appends `signers_ext[2]`
+at offset 1443, and devnet fills all five: read either cluster's full set with
+`node scripts/check-signer-slots.js --cluster <devnet|mainnet>`.
 
 **What checks the read — three things, and none of them costs another command.**
 
@@ -316,7 +314,8 @@ the other.
 
 `VaultState`'s in-program 2-of-3 is a separate mechanism from the Squads vault
 that holds the program upgrade authority, and **they no longer even have the same
-shape**. `VaultState` is still 2-of-3 with the signers listed in the tables above;
+shape**. Mainnet's `VaultState` is still v0.25's 2-of-3 and devnet's is v0.26's
+five slots with per-action thresholds (the tables above);
 both LIVE Squads multisigs are 3-of-5 (since 2026-09-15, and re-read at
 `finalized` on 2026-09-16). The retired first mainnet Squad `9dCLM…` is 1-of-1 and
 governs nothing (see **Mainnet**). Two multisigs, two vocabularies
