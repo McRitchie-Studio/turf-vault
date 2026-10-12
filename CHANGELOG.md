@@ -4,6 +4,18 @@ All notable changes to TurfVault are documented here. Format based on [Keep a Ch
 
 ## [Unreleased]
 
+### Devnet Squad: the exposed seats are replaced by devnet-only keys
+
+`8K81…` (production's `SOLANA_ADMIN_KEY`) and `4bKN…` (a mainnet Squad seat)
+were printed into a transcript on 2026-10-12. Devnet config transaction #21
+removed both from the devnet Squad and seated two fresh devnet-only keys,
+`seat-a.devnet` `GF4s…` and `seat-b.devnet` `39qa…`, threshold unchanged at 3 of
+5. `scripts/lib/squad-clusters.js`'s devnet roster now offers `system.devnet`
+and the two new seats, so a devnet upgrade still runs AUTONOMOUS with no
+mainnet-capable key; `scripts/tests/squad-clusters.test.js` pins that. The
+devnet USDC test mint's authority moved from `8K81…` to QA's `2eGs…`. Signatures
+are in `docs/CURRENT_DEPLOYMENT.md` (card `devnet-exposed-keys-tidy`).
+
 ### `squad-vault-transfer.js`: the agent queues, Mr. McRitchie approves
 
 `scripts/squad-vault-transfer.js` (modes `plan`, `send`, `approve`, `execute`)

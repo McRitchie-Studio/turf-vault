@@ -42,7 +42,7 @@ takes one of two paths:
 
 | Cluster | Threshold | Agent seats | What the script does |
 |---------|-----------|-------------|----------------------|
-| devnet `7nRuVw3V…` | 3 of 5 | 3 (`system.devnet`, `governance`, Xan) | **AUTONOMOUS** — create → propose → approve ×3 → execute |
+| devnet `7nRuVw3V…` | 3 of 5 | 3 (`system.devnet`, `seat-a.devnet`, `seat-b.devnet`; devnet-only since #21, 2026-10-12) | **AUTONOMOUS** — create → propose → approve ×3 → execute |
 | mainnet `4H3fP3ot…` | 3 of 5 | 2 (`system`, `governance`) | **HANDOFF** — create → propose → approve ×2 → **stop**, and print the transaction index, the on-chain instruction read back from chain, and which of Mr. McRitchie's wallets must approve |
 
 That asymmetry is deliberate (2026-09-15): devnet runs unattended, mainnet needs

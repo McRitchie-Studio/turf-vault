@@ -43,6 +43,10 @@ const SYSTEM = "7auwTLSvNniSUeAgL6v9RStMXJhWrrUhSJgwFWLpcqC";
 const SYSTEM_DEVNET = "2eGs8G3wzhEeNQQU2Q86BmmA2xTpDbMMae3Y1bvpZfx9";
 const GOVERNANCE = "4bKNSqkrKeggSyrds16Ak7rcB4ibvGJ4ZLsKjvQgC3Vk"; // replaced the exposed admin BLSBw8 2026-10-08
 const XAN = "8K81w4e6UcB7TiANhM9N8sAgijJvTxxybRi8AENRaRYd";
+// The devnet-only seats that replaced 8K81 and 4bKN at devnet config tx #21
+// (2026-10-12, devnet-exposed-keys-tidy).
+const SEAT_A = "GF4sojG9tHF2kC3jpgto1gd3b1nXLuUiAcsAiYi5Y5vb";
+const SEAT_B = "39qaSh2J4VoQhn3sZCwWmb1W17VCrDMri2JoBAN6dT1o";
 const ALEX = "7ZDJp7FUHhuceAqcW9CHe81hCiaMTjgWAXfprBM59Tcr";
 const ALEX_TWO = "3Qj4v9qjhXgkru6zCRCErRVhy8Q6qU3NrNpvpXLTZboA";
 const ALEX_THREE = "9gACbzsCLmkYF9Yx1EBGmwMvvyfuTquJ6qs8QsoQvHXf";
@@ -56,7 +60,7 @@ const CLOCK = "SysvarC1ock11111111111111111111111111111111";
 const LIVE = {
   devnet: {
     threshold: 3,
-    members: [SYSTEM_DEVNET, ALEX_TWO, ALEX, XAN, GOVERNANCE],
+    members: [SYSTEM_DEVNET, ALEX_TWO, ALEX, SEAT_B, SEAT_A],
     vault: SQUAD.devnet.vaultPda,
     program: SQUAD.devnet.programId,
     genesis: "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG",
@@ -109,7 +113,7 @@ async function runUpgrade({
   // UTF-8 in those 32 bytes, so the slice truncates — the lookup below expands
   // it again, rather than the test asserting against a truncated address.
   const KNOWN_ADDRESSES = [
-    SYSTEM, SYSTEM_DEVNET, GOVERNANCE, XAN, ALEX, ALEX_TWO, ALEX_THREE, MASON,
+    SYSTEM, SYSTEM_DEVNET, GOVERNANCE, XAN, SEAT_A, SEAT_B, ALEX, ALEX_TWO, ALEX_THREE, MASON,
     BUFFER, PROGRAM_DATA, RENT, CLOCK,
     LIVE.devnet.vault, LIVE.devnet.program, LIVE.mainnet.vault, LIVE.mainnet.program,
   ];
@@ -346,7 +350,8 @@ async function runUpgrade({
   // the script's own derivation check then compares it to the roster.
   process.env.SQUAD_KEY_SYSTEM = cluster === "devnet" ? SYSTEM_DEVNET : SYSTEM;
   process.env.SQUAD_KEY_GOVERNANCE = GOVERNANCE;
-  process.env.SQUAD_KEY_XAN = XAN;
+  process.env.SQUAD_KEY_SEATA = SEAT_A;
+  process.env.SQUAD_KEY_SEATB = SEAT_B;
   delete process.env.SOLANA_RPC_URL;
 
   // THE STUBBED EXIT MUST HALT, or the assertions are worthless. The real
@@ -414,7 +419,7 @@ test("DEVNET reaches quorum, so the run approves three times and EXECUTES", asyn
 
   assert.deepEqual(
     steps(trace, "proposalApprove").map((t) => t.member),
-    [SYSTEM_DEVNET, GOVERNANCE, XAN],
+    [SYSTEM_DEVNET, SEAT_A, SEAT_B],
     "all three agent seats vote"
   );
   assert.equal(steps(trace, "vaultTransactionExecute").length, 1, "and the run executes");
@@ -472,15 +477,15 @@ test("the creator IS the fee payer, because the SDK signs with the fee payer alo
     cluster: "devnet",
     threshold: 3,
     send: true,
-    balances: { [SYSTEM_DEVNET]: 1_000_000_000, [GOVERNANCE]: 9_000_000_000, [XAN]: 2_000_000_000 },
+    balances: { [SYSTEM_DEVNET]: 1_000_000_000, [SEAT_A]: 9_000_000_000, [SEAT_B]: 2_000_000_000 },
   });
 
   const creator = steps(trace, "vaultTransactionCreate")[0].member;
   const proposer = steps(trace, "proposalCreate")[0].member;
 
-  assert.equal(creator, GOVERNANCE, "the best-funded Initiate-capable seat creates");
-  assert.equal(proposer, GOVERNANCE, "and opens the proposal, so it pays that rent too");
-  assert.match(lines(trace), /fee payer AND creator: governance/);
+  assert.equal(creator, SEAT_A, "the best-funded Initiate-capable seat creates");
+  assert.equal(proposer, SEAT_A, "and opens the proposal, so it pays that rent too");
+  assert.match(lines(trace), /fee payer AND creator: seat-a\.devnet/);
 });
 
 test("a seat that cannot Initiate is never chosen to create, however rich", async () => {
@@ -488,18 +493,18 @@ test("a seat that cannot Initiate is never chosen to create, however rich", asyn
     cluster: "devnet",
     threshold: 3,
     send: true,
-    masks: { [XAN]: 6 }, // Vote|Execute — rich, but cannot open a transaction
-    balances: { [SYSTEM_DEVNET]: 1_000_000_000, [GOVERNANCE]: 2_000_000_000, [XAN]: 9_000_000_000 },
+    masks: { [SEAT_B]: 6 }, // Vote|Execute — rich, but cannot open a transaction
+    balances: { [SYSTEM_DEVNET]: 1_000_000_000, [SEAT_A]: 2_000_000_000, [SEAT_B]: 9_000_000_000 },
   });
 
   assert.equal(
     steps(trace, "vaultTransactionCreate")[0].member,
-    GOVERNANCE,
+    SEAT_A,
     "the richest seat holds no Initiate bit, so the next-best one creates"
   );
   assert.deepEqual(
     steps(trace, "proposalApprove").map((t) => t.member),
-    [SYSTEM_DEVNET, GOVERNANCE, XAN],
+    [SYSTEM_DEVNET, SEAT_A, SEAT_B],
     "it can still vote — Initiate and Vote are different bits"
   );
 });
@@ -555,7 +560,7 @@ test("a vault transaction whose BUFFER is not the planned one is REFUSED", async
           PROGRAM_DATA,
           LIVE.devnet.program,
           "SomeOtherBuffer1111111111111111111111111111",
-          XAN,
+          SEAT_A,
           RENT,
           CLOCK,
           LIVE.devnet.vault,
@@ -681,7 +686,7 @@ test("a DRY RUN with --index AUDITS that index, read-only, and reports the verdi
           PROGRAM_DATA,
           LIVE.devnet.program,
           BUFFER,
-          GOVERNANCE, // the fee payer this fixture picks, and so the default spill
+          SEAT_A, // the fee payer this fixture picks, and so the default spill
           RENT,
           CLOCK,
           LIVE.devnet.vault,
@@ -696,7 +701,7 @@ test("a DRY RUN with --index AUDITS that index, read-only, and reports the verdi
         addressTableLookups: [],
       },
     },
-    balances: { [SYSTEM_DEVNET]: 1_000_000_000, [GOVERNANCE]: 9_000_000_000, [XAN]: 2_000_000_000 },
+    balances: { [SYSTEM_DEVNET]: 1_000_000_000, [SEAT_A]: 9_000_000_000, [SEAT_B]: 2_000_000_000 },
   });
 
   assert.equal(good.exitCode, null);

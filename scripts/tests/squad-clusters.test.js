@@ -192,10 +192,33 @@ test("the roster's public keys are the LIVE agent seats on each cluster", () => 
     AGENT_SEATS.devnet.map((s) => s.pubkey),
     [
       "2eGs8G3wzhEeNQQU2Q86BmmA2xTpDbMMae3Y1bvpZfx9", // system.devnet
-      "4bKNSqkrKeggSyrds16Ak7rcB4ibvGJ4ZLsKjvQgC3Vk", // governance
-      "8K81w4e6UcB7TiANhM9N8sAgijJvTxxybRi8AENRaRYd", // Xan — devnet ONLY since 09:41
+      "GF4sojG9tHF2kC3jpgto1gd3b1nXLuUiAcsAiYi5Y5vb", // seat-a.devnet — replaced 8K81 at #21
+      "39qaSh2J4VoQhn3sZCwWmb1W17VCrDMri2JoBAN6dT1o", // seat-b.devnet — replaced 4bKN at #21
     ]
   );
+});
+
+test("the devnet roster offers no exposed or mainnet-capable key", () => {
+  // devnet-exposed-keys-tidy, 2026-10-12: 4bKN (a mainnet Squad seat) and 8K81
+  // (production's SOLANA_ADMIN_KEY) were printed into a transcript and left the
+  // devnet Squad at config transaction #21. A devnet roster that offered either
+  // again would hand a mainnet-capable key to an unattended devnet run.
+  const EXPOSED = [
+    "4bKNSqkrKeggSyrds16Ak7rcB4ibvGJ4ZLsKjvQgC3Vk",
+    "8K81w4e6UcB7TiANhM9N8sAgijJvTxxybRi8AENRaRYd",
+  ];
+  const mainnetCapable = [
+    ...AGENT_SEATS["mainnet-beta"].map((s) => s.pubkey),
+    ...OPERATOR_KEYS,
+    ...Object.keys(MAINNET_FORBIDDEN_SIGNERS),
+  ];
+  for (const seat of AGENT_SEATS.devnet) {
+    assert.ok(!EXPOSED.includes(seat.pubkey), `devnet still offers exposed ${seat.pubkey}`);
+    if (seat.role === "system.devnet") continue; // QA's server key; devnet-only by construction
+    assert.ok(!mainnetCapable.includes(seat.pubkey), `devnet/${seat.role} is a mainnet-capable key`);
+    assert.match(seat.item, /\.devnet$/, `devnet/${seat.role} must read a devnet-only item`);
+  }
+  assert.equal(AGENT_SEATS.devnet.length, 3, "three agent seats keep devnet AUTONOMOUS at threshold 3");
 });
 
 test("the mainnet Squad's five seats, as read off chain 2026-10-12", () => {
@@ -258,10 +281,11 @@ test("the exposed admin key is offered on NO cluster", () => {
   }
 });
 
-test("every seat names its vault; governance and Xan are the admin vault, system seats are not", () => {
-  // Xan (8K81) is production's SOLANA_ADMIN_KEY; governance (4bKN) holds a
-  // Squads seat on both clusters. Neither may be readable by a desk-level token.
-  const ADMIN_ROLES = ["governance", "xan"];
+test("every seat names its vault; governance and the devnet seats are the admin vault, system seats are not", () => {
+  // governance (4bKN) holds a mainnet Squads seat; the two devnet seats hold
+  // two of devnet's three agent votes, enough with system.devnet to upgrade the
+  // devnet program alone. None may be readable by a desk-level token.
+  const ADMIN_ROLES = ["governance", "seat-a.devnet", "seat-b.devnet"];
   for (const [cluster, seats] of Object.entries(AGENT_SEATS)) {
     for (const seat of seats) {
       const want = ADMIN_ROLES.includes(seat.role) ? ADMIN_VAULT : AGENT_VAULT;
@@ -282,16 +306,16 @@ test("an agent-vault seat reads exactly as before: MCR_OP_VAULT_AGENT, caller's 
 
 });
 
-test("Xan's seat reads from the admin vault with the admin token", () => {
-  const xan = AGENT_SEATS.devnet.find((s) => s.role === "xan");
-  const spec = seatSecretSource(xan, { OP_SERVICE_ACCOUNT_TOKEN: "agent-token", OP_ADMIN_SERVICE_ACCOUNT_TOKEN: "admin-token" });
-  assert.equal(spec.ref, "op://studio-agents-admin/agent.xan.solana/private key");
+test("a devnet seat reads from the admin vault with the admin token", () => {
+  const seatA = AGENT_SEATS.devnet.find((s) => s.role === "seat-a.devnet");
+  const spec = seatSecretSource(seatA, { OP_SERVICE_ACCOUNT_TOKEN: "agent-token", OP_ADMIN_SERVICE_ACCOUNT_TOKEN: "admin-token" });
+  assert.equal(spec.ref, "op://studio-agents-admin/solana.turf.squad-seat-a.devnet/private key");
   assert.equal(spec.childEnv.OP_SERVICE_ACCOUNT_TOKEN, "admin-token");
-  assert.throws(() => seatSecretSource(xan, { OP_SERVICE_ACCOUNT_TOKEN: "agent-token" }), ClusterError);
+  assert.throws(() => seatSecretSource(seatA, { OP_SERVICE_ACCOUNT_TOKEN: "agent-token" }), ClusterError);
 });
 
 test("an admin-vault seat swaps in the admin token, and refuses without it", () => {
-  const seat = AGENT_SEATS.devnet.find((s) => s.role === "governance");
+  const seat = AGENT_SEATS["mainnet-beta"].find((s) => s.role === "governance");
   const env = { OP_SERVICE_ACCOUNT_TOKEN: "agent-token", OP_ADMIN_SERVICE_ACCOUNT_TOKEN: "admin-token", MCR_OP_VAULT_AGENT: "x" };
   const spec = seatSecretSource(seat, env);
   assert.equal(spec.ref, "op://studio-agents-admin/solana.turf.governance/private key");
@@ -308,7 +332,8 @@ test("an admin-vault seat swaps in the admin token, and refuses without it", () 
 test("no retired key is offered on the cluster that removed it", () => {
   // The whole defect: `ALEX_BOT_KEY` was Xan and `MASON_KEY` was Mason, and both
   // were removed from both multisigs at 09:41 on 2026-09-15. Mason is gone from
-  // everywhere; Xan survives on devnet alone.
+  // everywhere. Xan survived on devnet alone until devnet config transaction
+  // #21 (2026-10-12, devnet-exposed-keys-tidy) removed him there too.
   const MASON = "CytJS23p1zCM2wvUUngiDePtbMB484ebD7bK4nDqWjrR";
   const XAN = "8K81w4e6UcB7TiANhM9N8sAgijJvTxxybRi8AENRaRYd";
 
@@ -318,8 +343,9 @@ test("no retired key is offered on the cluster that removed it", () => {
       `${cluster} must not offer Mason — removed from both multisigs`
     );
   }
-  assert.ok(!AGENT_SEATS["mainnet-beta"].some((s) => s.pubkey === XAN));
-  assert.ok(AGENT_SEATS.devnet.some((s) => s.pubkey === XAN));
+  for (const cluster of Object.keys(AGENT_SEATS)) {
+    assert.ok(!AGENT_SEATS[cluster].some((s) => s.pubkey === XAN), `${cluster} must not offer Xan`);
+  }
 });
 
 test("every seat names a 1Password item, its FIELD, and an env override", () => {
@@ -330,15 +356,23 @@ test("every seat names a 1Password item, its FIELD, and an env override", () => 
   for (const [cluster, seats] of Object.entries(AGENT_SEATS)) {
     for (const seat of seats) {
       assert.ok(seat.role, `${cluster} seat needs a role`);
-      assert.match(seat.item, /^[a-z0-9.]+$/, `${cluster}/${seat.role} item`);
+      // Lowercase, dot-separated; a hyphen inside a part is legal, as in the
+      // filed items `solana.turf.settle-cosigner.devnet` and
+      // `solana.turf.squad-seat-a.devnet`.
+      assert.match(seat.item, /^[a-z0-9]+(?:[.-][a-z0-9]+)*$/, `${cluster}/${seat.role} item`);
       assert.match(seat.secretField, /^private[- ]key$/, `${cluster}/${seat.role} field`);
       assert.match(seat.env, /^SQUAD_KEY_[A-Z]+$/, `${cluster}/${seat.role} env override`);
     }
   }
   assert.equal(
-    AGENT_SEATS.devnet.find((s) => s.role === "xan").secretField,
+    AGENT_SEATS["mainnet-beta"].find((s) => s.role === "governance").secretField,
     "private key",
-    "agent.xan.solana's field has a SPACE — do not normalise it"
+    "solana.turf.governance's field has a SPACE — do not normalise it"
+  );
+  assert.equal(
+    AGENT_SEATS.devnet.find((s) => s.role === "seat-a.devnet").secretField,
+    "private key",
+    "the devnet seat items were filed with `private key`, with a SPACE"
   );
 });
 
