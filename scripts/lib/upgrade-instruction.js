@@ -31,6 +31,8 @@
 
 "use strict";
 
+const { createHash } = require("crypto");
+
 const BPF_LOADER_ID = "BPFLoaderUpgradeab1e11111111111111111111111";
 const SYSVAR_RENT_ID = "SysvarRent111111111111111111111111111111111";
 const SYSVAR_CLOCK_ID = "SysvarC1ock11111111111111111111111111111111";
@@ -67,6 +69,14 @@ class UpgradeReadbackError extends Error {
   constructor(message) {
     super(message);
     this.name = "UpgradeReadbackError";
+  }
+}
+
+/** A mainnet `--send` refused before any key is read (see assertMainnetUpgradeSend). */
+class UpgradeSendError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "UpgradeSendError";
   }
 }
 
@@ -305,6 +315,98 @@ function verifyUpgradeReadback(expected, onchain) {
   return true;
 }
 
+/**
+ * sha256 (lowercase hex) of the program bytes a buffer account holds: the
+ * `programLength` bytes that follow the 37-byte `UpgradeableLoaderState::Buffer`
+ * header, trailing zeros INCLUDED.
+ *
+ * `programLength` defaults to everything after the header, which is the ELF
+ * itself when the buffer was written without `--max-len` (`solana program
+ * write-buffer` sizes the account to header + ELF). Then this equals
+ * `shasum -a 256 target/deploy/turf_vault.so`. Nothing is trimmed: on
+ * 2026-10-12 a hash over "the program bytes, trailing zeros trimmed" (2c554e24…)
+ * and one over the full region (3dfcb0c4…) disagreed for the same account, and a
+ * guard that trims is a guard two people can compute two ways.
+ */
+function bufferProgramSha256(bufferAccountData, programLength) {
+  const data = Buffer.from(bufferAccountData || []);
+  const length = programLength === undefined ? data.length - BUFFER_HEADER : programLength;
+  if (!Number.isInteger(length) || length <= 0) {
+    throw new UpgradeSendError(
+      `the buffer holds no program bytes after its ${BUFFER_HEADER}-byte header (account is ${data.length} bytes)`
+    );
+  }
+  if (BUFFER_HEADER + length > data.length) {
+    throw new UpgradeSendError(
+      `the buffer account is ${data.length} bytes, too short for a ${length}-byte program after its ` +
+        `${BUFFER_HEADER}-byte header`
+    );
+  }
+  return createHash("sha256")
+    .update(data.subarray(BUFFER_HEADER, BUFFER_HEADER + length))
+    .digest("hex");
+}
+
+/**
+ * The mainnet `--send` gate, run BEFORE any key is read or anything is signed.
+ *
+ * Rule 10 of the agent operating model lets an agent create and co-sign a
+ * mainnet Upgrade proposal only when the buffer is the one reviewed and the
+ * buffer's rent refund (~2.76 SOL) goes back to the Squad vault. Until
+ * 2026-10-12 both conditions lived in the SOP alone: `--spill` defaulted to the
+ * fee payer, an agent seat, and nothing compared the buffer to anything. This
+ * makes them mechanical:
+ *
+ *   · `--spill` must be GIVEN and must be the vault PDA. A default is not
+ *     accepted, so the command that ran is the command that was reviewed.
+ *   · `--expect-buffer-sha256` must be given, well-formed, and equal the hash
+ *     of the buffer's on-chain program bytes (bufferProgramSha256).
+ *
+ * Devnet and dry runs pass straight through: the gate returns null.
+ *
+ * @param {{cluster: string, send: boolean, spillArg: string|null,
+ *          vaultPda: string, expectedSha256: string|null,
+ *          bufferData: Uint8Array|null}} input
+ * @returns {null|{sha256: string}}  null when the gate does not apply
+ */
+function assertMainnetUpgradeSend({ cluster, send, spillArg, vaultPda, expectedSha256, bufferData }) {
+  if (cluster !== "mainnet-beta" || !send) return null;
+  if (!spillArg) {
+    throw new UpgradeSendError(
+      `a mainnet --send needs --spill=${vaultPda} (the Squad vault). The buffer's rent refund ` +
+        `goes back to the vault, never to an agent seat, and the flag must say so out loud.`
+    );
+  }
+  if (spillArg !== vaultPda) {
+    throw new UpgradeSendError(
+      `--spill=${spillArg} is not the Squad vault ${vaultPda}. On mainnet the buffer's rent refund ` +
+        `returns to the vault. Refusing.`
+    );
+  }
+  if (!expectedSha256) {
+    throw new UpgradeSendError(
+      `a mainnet --send needs --expect-buffer-sha256=<hex>: the sha256 of the reviewed program ` +
+        `(shasum -a 256 target/deploy/turf_vault.so for a buffer written without --max-len). ` +
+        `The dry run prints the buffer's hash to compare.`
+    );
+  }
+  const expected = String(expectedSha256).trim().toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(expected)) {
+    throw new UpgradeSendError(`--expect-buffer-sha256=${expectedSha256} is not a 64-character hex sha256`);
+  }
+  if (!bufferData) {
+    throw new UpgradeSendError("the buffer is not on chain, so its program bytes cannot be hashed. Refusing.");
+  }
+  const actual = bufferProgramSha256(bufferData);
+  if (actual !== expected) {
+    throw new UpgradeSendError(
+      `the buffer's program bytes hash to ${actual}, not the expected ${expected}. ` +
+        `This is not the reviewed binary, or the buffer was written with --max-len. Refusing.`
+    );
+  }
+  return { sha256: actual };
+}
+
 /** One human-readable line per account, for the block a human approves from. */
 function describeUpgradeInstruction(ix) {
   return [
@@ -330,7 +432,10 @@ module.exports = {
   UPGRADE_ACCOUNT_ROLES,
   UPGRADE_DISCRIMINATOR,
   UpgradeReadbackError,
+  UpgradeSendError,
   assertIsVaultTransaction,
+  assertMainnetUpgradeSend,
+  bufferProgramSha256,
   buildExtendInstruction,
   buildUpgradeInstruction,
   decodeVaultMessage,
