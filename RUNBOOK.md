@@ -166,6 +166,20 @@ widens the set. Plan the rotation for the same maintenance window, and expect
 any unattended 2-signature automation (the QA rehearsal driver among them) to
 fail until it is updated.
 
+**Devnet only: the settle retune.** Devnet carries no money, and the QA
+rehearsal settles unattended with the QA server key plus one devnet-only agent
+key, so devnet's `settle_contest` is retuned to 2 after the rotation (done
+2026-10-12, card `devnet-v026-upgrade`). Three current signers authorize it,
+because `set_action_threshold` runs as `set_governance` (floor 3). Mainnet keeps
+the default of 3.
+
+```bash
+node scripts/set-devnet-threshold.js --action settle_contest --value 2 \
+  --signer a.json --signer b.json --signer c.json          # dry run
+node scripts/set-devnet-threshold.js --action settle_contest --value 2 \
+  --signer a.json --signer b.json --signer c.json --send
+```
+
 ## Schema / Account Layout Changes
 
 **When this matters**: After changing account layout in a way that existing PDAs cannot decode safely.
