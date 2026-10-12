@@ -348,6 +348,32 @@ function bufferProgramSha256(bufferAccountData, programLength) {
 }
 
 /**
+ * Read a buffer account's 37-byte `UpgradeableLoaderState::Buffer` header:
+ * a u32 LE variant (1 = Buffer), an Option tag (1 = Some), then the 32-byte
+ * authority. Returns `{ authority: Uint8Array|null }` — null when the buffer
+ * has no authority (it is immutable, and the loader will not upgrade from it).
+ * Throws UpgradeSendError when the account is not a Buffer at all.
+ */
+function readBufferHeader(bufferAccountData) {
+  const data = Buffer.from(bufferAccountData || []);
+  if (data.length < BUFFER_HEADER) {
+    throw new UpgradeSendError(
+      `the buffer account is ${data.length} bytes, shorter than the ${BUFFER_HEADER}-byte buffer header`
+    );
+  }
+  const variant = data.readUInt32LE(0);
+  if (variant !== 1) {
+    throw new UpgradeSendError(
+      `the account is not an upgradeable-loader BUFFER (state variant ${variant}, expected 1). Refusing.`
+    );
+  }
+  const tag = data[4];
+  if (tag === 0) return { authority: null };
+  if (tag !== 1) throw new UpgradeSendError(`the buffer's authority tag is ${tag}, neither None (0) nor Some (1)`);
+  return { authority: Uint8Array.from(data.subarray(5, BUFFER_HEADER)) };
+}
+
+/**
  * The mainnet `--send` gate, run BEFORE any key is read or anything is signed.
  *
  * Rule 10 of the agent operating model lets an agent create and co-sign a
@@ -359,17 +385,24 @@ function bufferProgramSha256(bufferAccountData, programLength) {
  *
  *   · `--spill` must be GIVEN and must be the vault PDA. A default is not
  *     accepted, so the command that ran is the command that was reviewed.
+ *   · the buffer's AUTHORITY must be the vault (`bufferAuthority`, read from
+ *     the header by readBufferHeader). Mainnet runs HANDOFF: between the
+ *     agents' approvals and the human execute, whoever holds the buffer's
+ *     authority can rewrite it, so the bytes hashed here are only the bytes
+ *     executed if nobody but the vault can write them (Jasper, activity-18035).
  *   · `--expect-buffer-sha256` must be given, well-formed, and equal the hash
- *     of the buffer's on-chain program bytes (bufferProgramSha256).
+ *     of the buffer's on-chain program bytes (bufferProgramSha256). The
+ *     expected value comes from the REVIEWED .so, never from this script's own
+ *     dry-run print: a hash copied from the chain compares the chain to itself.
  *
  * Devnet and dry runs pass straight through: the gate returns null.
  *
  * @param {{cluster: string, send: boolean, spillArg: string|null,
  *          vaultPda: string, expectedSha256: string|null,
- *          bufferData: Uint8Array|null}} input
+ *          bufferData: Uint8Array|null, bufferAuthority: string|null}} input
  * @returns {null|{sha256: string}}  null when the gate does not apply
  */
-function assertMainnetUpgradeSend({ cluster, send, spillArg, vaultPda, expectedSha256, bufferData }) {
+function assertMainnetUpgradeSend({ cluster, send, spillArg, vaultPda, expectedSha256, bufferData, bufferAuthority }) {
   if (cluster !== "mainnet-beta" || !send) return null;
   if (!spillArg) {
     throw new UpgradeSendError(
@@ -385,9 +418,9 @@ function assertMainnetUpgradeSend({ cluster, send, spillArg, vaultPda, expectedS
   }
   if (!expectedSha256) {
     throw new UpgradeSendError(
-      `a mainnet --send needs --expect-buffer-sha256=<hex>: the sha256 of the reviewed program ` +
-        `(shasum -a 256 target/deploy/turf_vault.so for a buffer written without --max-len). ` +
-        `The dry run prints the buffer's hash to compare.`
+      `a mainnet --send needs --expect-buffer-sha256=<hex>: the sha256 of the REVIEWED .so ` +
+        `(shasum -a 256 target/deploy/turf_vault.so from the reviewed build, for a buffer written ` +
+        `without --max-len). Never paste the dry run's printed hash: that is the chain compared with itself.`
     );
   }
   const expected = String(expectedSha256).trim().toLowerCase();
@@ -397,11 +430,19 @@ function assertMainnetUpgradeSend({ cluster, send, spillArg, vaultPda, expectedS
   if (!bufferData) {
     throw new UpgradeSendError("the buffer is not on chain, so its program bytes cannot be hashed. Refusing.");
   }
+  if (bufferAuthority !== vaultPda) {
+    throw new UpgradeSendError(
+      `the buffer's authority is ${bufferAuthority || "None"}, not the Squad vault ${vaultPda}. ` +
+        `Whoever holds it can rewrite the buffer after this hash and before the execute. ` +
+        `Run solana program set-buffer-authority <BUFFER> --new-buffer-authority ${vaultPda} first. Refusing.`
+    );
+  }
   const actual = bufferProgramSha256(bufferData);
   if (actual !== expected) {
     throw new UpgradeSendError(
       `the buffer's program bytes hash to ${actual}, not the expected ${expected}. ` +
-        `This is not the reviewed binary, or the buffer was written with --max-len. Refusing.`
+        `This is not the reviewed binary, or the buffer was written with --max-len. The expected ` +
+        `value must come from the reviewed .so, never from the dry run's print. Refusing.`
     );
   }
   return { sha256: actual };
@@ -436,6 +477,7 @@ module.exports = {
   assertIsVaultTransaction,
   assertMainnetUpgradeSend,
   bufferProgramSha256,
+  readBufferHeader,
   buildExtendInstruction,
   buildUpgradeInstruction,
   decodeVaultMessage,

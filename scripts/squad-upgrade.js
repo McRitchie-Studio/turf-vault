@@ -89,16 +89,20 @@
  *                              vault. That refund is ~2.76 SOL on mainnet, so it is
  *                              printed loudly either way.
  *   --expect-buffer-sha256=<hex>
- *                              the sha256 of the reviewed program: `shasum -a 256
- *                              target/deploy/turf_vault.so` for a buffer written
- *                              without --max-len. The dry run prints the buffer's
- *                              own hash to compare against.
+ *                              the sha256 of the REVIEWED program: `shasum -a 256
+ *                              target/deploy/turf_vault.so` from the reviewed
+ *                              build, for a buffer written without --max-len.
+ *                              Never the dry run's printed BUFFER SHA256: that
+ *                              is the chain read back, and pasting it compares
+ *                              the chain with itself.
  *
  * MAINNET --send IS GATED (squad-tools-hardening, 2026-10-12). Before any key is
  * read, a mainnet `--send` refuses unless `--spill` is GIVEN and is the Squad
- * vault PDA, and `--expect-buffer-sha256` equals the sha256 of the buffer's
- * on-chain program bytes (everything after its 37-byte header). Both used to be
- * SOP-only: `--spill` defaulted to the fee payer, an agent seat. The gate is
+ * vault PDA, the buffer's AUTHORITY is the vault (so nobody can rewrite it
+ * between the agents' approvals and the human execute), and
+ * `--expect-buffer-sha256` equals the sha256 of the buffer's on-chain program
+ * bytes (everything after its 37-byte header). These used to be SOP-only:
+ * `--spill` defaulted to the fee payer, an agent seat. The gate is
  * `assertMainnetUpgradeSend` in scripts/lib/upgrade-instruction.js.
  *
  * KEYS. Never argv — argv leaks in `ps`. Each seat in the roster
@@ -138,6 +142,7 @@ const {
   assertIsVaultTransaction,
   assertMainnetUpgradeSend,
   bufferProgramSha256,
+  readBufferHeader,
   buildExtendInstruction,
   buildUpgradeInstruction,
   decodeVaultMessage,
@@ -319,6 +324,12 @@ async function confirmSignature(connection, signature, label) {
   await connection.confirmTransaction({ signature: sig, ...blockhash }, "confirmed");
   console.log(`   ${label.padEnd(26)} ${sig}`);
   return sig;
+}
+
+/** The buffer's authority as base58, or null for None. Throws UpgradeSendError if not a Buffer. */
+function bufferAuthorityOf(bufferData) {
+  const { authority } = readBufferHeader(bufferData);
+  return authority ? new PublicKey(authority).toBase58() : null;
 }
 
 function explorerUrl(address, cluster) {
@@ -544,8 +555,20 @@ function explorerUrl(address, cluster) {
     }
     if (bufferSha) {
       console.log(`\n  BUFFER SHA256: ${bufferSha}`);
-      console.log(`    (the ${extend.elfBytes} program bytes after the ${BUFFER_HEADER}-byte header; compare with`);
-      console.log(`     shasum -a 256 target/deploy/turf_vault.so)`);
+      console.log(`    (the ${extend.elfBytes} program bytes after the ${BUFFER_HEADER}-byte header, read from chain.`);
+      console.log(`     Check it AGAINST shasum -a 256 of the reviewed .so; never paste it into`);
+      console.log(`     --expect-buffer-sha256, which must come from the reviewed build.)`);
+    }
+    try {
+      const authority = bufferAuthorityOf(bufferInfo.data);
+      const ok = authority === vaultPda.toBase58();
+      console.log(
+        `  BUFFER AUTHORITY: ${authority || "None (immutable)"}` +
+          (ok ? "  (the Squad vault)" : cfg.cluster === "mainnet-beta" ? "  — NOT the vault: an armed mainnet run refuses" : "")
+      );
+    } catch (error) {
+      if (!(error instanceof UpgradeSendError)) throw error;
+      console.log(`  BUFFER AUTHORITY: cannot read — ${error.message}`);
     }
   }
 
@@ -628,9 +651,16 @@ function explorerUrl(address, cluster) {
         console.log(`      ${error.message}`);
       }
     }
+    // On mainnet the hint carries the flags the gate demands, with the hash as a
+    // placeholder: the value must come from the reviewed .so, so this run never
+    // fills it in from the chain.
+    const armFlags =
+      cfg.cluster === "mainnet-beta"
+        ? ` --spill=${vaultPda.toBase58()} --expect-buffer-sha256=<sha256 of the reviewed .so>`
+        : "";
     console.log(
       `\n  DRY RUN — nothing signed, nothing sent, no key material read.\n` +
-        `  Arm with:  node scripts/squad-upgrade.js --cluster=${args.cluster} ${buffer.toBase58()} --send\n`
+        `  Arm with:  node scripts/squad-upgrade.js --cluster=${args.cluster} ${buffer.toBase58()}${armFlags} --send\n`
     );
     return;
   }
@@ -646,9 +676,13 @@ function explorerUrl(address, cluster) {
       vaultPda: vaultPda.toBase58(),
       expectedSha256: args.expectBufferSha256,
       bufferData: bufferInfo ? bufferInfo.data : null,
+      bufferAuthority:
+        cfg.cluster === "mainnet-beta" && args.send && bufferInfo ? bufferAuthorityOf(bufferInfo.data) : null,
     });
     if (gate) {
-      console.log(`\n  mainnet gate: spill is the vault, buffer sha256 ${gate.sha256} matches`);
+      console.log(
+        `\n  mainnet gate: spill and buffer authority are the vault, buffer sha256 ${gate.sha256} matches`
+      );
     }
   } catch (error) {
     if (error instanceof UpgradeSendError) fail(error.message);
