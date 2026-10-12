@@ -4,6 +4,31 @@ All notable changes to TurfVault are documented here. Format based on [Keep a Ch
 
 ## [Unreleased]
 
+### `squad-vault-transfer.js`: the agent queues, Mr. McRitchie approves
+
+`scripts/squad-vault-transfer.js` (modes `plan`, `send`, `approve`, `execute`)
+queues a SOL or SPL transfer out of a Squad vault, approves it with the agent
+seats, and prints the Squads link Mr. McRitchie approves from. On mainnet
+`execute` refuses until one of his seats has approved on chain. Lifted from the
+script behind mainnet Squad tx #7 (2026-10-12). The refusals live in
+`scripts/lib/vault-transfer.js` and are graded in
+`scripts/tests/vault-transfer.test.js`.
+
+Review hardening the same day: a malformed secret refuses with a fixed message
+that quotes none of it; every read-back guard has a case that fails without it
+(40 of 40 guard mutants killed); a moved `transaction_index` is read back and, if
+a live proposal already carries the transfer, the tool prints the `approve
+--index=<n>` that finishes it; `send` checks the vault holds the amount (and, for
+SPL, has the token account) before creating anything; a PDA destination's ATA is
+derived off-curve with a NOTE; each transaction sets a compute-unit limit and a
+priority fee; an expired confirmation stops with recovery advice instead of a
+blind retry.
+
+`scripts/lib/squad-clusters.js` gains `OPERATOR_KEYS`, `MAINNET_FORBIDDEN_SIGNERS`
+(Xan, Mason, Mack) and `squadsTransactionsUrl()`. Its test pins the mainnet
+Squad's five seats as read off chain on 2026-10-12: `7auwTL`, `3Qj4`, `4bKN`,
+`7ZDJ`, `9gAC`, threshold 3, every mask 7. `BLSBw8` is in none of them.
+
 ### Source comments stated an authority the program does not enforce
 
 PR 47 corrected `README.md`'s Auth column. It did not correct the SOURCE, so for
