@@ -32,6 +32,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const path = require("node:path");
 const Module = require("node:module");
+const crypto = require("node:crypto");
 
 const SCRIPT = path.join(__dirname, "..", "squad-upgrade.js");
 const SQUAD = JSON.parse(
@@ -56,6 +57,19 @@ const BUFFER = "BAGqkbHMwMxxCEhSJHbYCTuHA1KXZuEBZ3Dca2TR3xCt";
 const PROGRAM_DATA = "ProgramDataPda11111111111111111111111111111";
 const RENT = "SysvarRent111111111111111111111111111111111";
 const CLOCK = "SysvarC1ock11111111111111111111111111111111";
+
+/**
+ * The fixture buffer account: a 37-byte header, then program bytes with a
+ * pattern (not zeros, so a hash over the wrong window cannot collide with the
+ * right one by accident). BUFFER_SHA256 is computed here independently of the
+ * library under test.
+ */
+const BUFFER_DATA = (() => {
+  const data = Buffer.alloc(540_000);
+  for (let i = 37; i < data.length; i += 1) data[i] = (i * 31 + 7) & 0xff;
+  return data;
+})();
+const BUFFER_SHA256 = crypto.createHash("sha256").update(BUFFER_DATA.subarray(37)).digest("hex");
 
 const LIVE = {
   devnet: {
@@ -144,7 +158,7 @@ async function runUpgrade({
 
   const accountData = {
     [PROGRAM_DATA]: programDataBuffer(live.vault, programDataSize),
-    [BUFFER]: Buffer.alloc(540_000),
+    [BUFFER]: BUFFER_DATA,
   };
 
   const fakeWeb3 = {
@@ -404,6 +418,9 @@ async function runUpgrade({
   return { trace, exitCode };
 }
 
+/** The flags an armed mainnet run must carry to pass the gate. */
+const MAINNET_GATE_ARGS = [`--spill=${LIVE.mainnet.vault}`, `--expect-buffer-sha256=${BUFFER_SHA256}`];
+
 const steps = (trace, step) => trace.filter((t) => t.step === step);
 const indexOf = (trace, step) => trace.findIndex((t) => t.step === step);
 const lines = (trace) =>
@@ -432,7 +449,12 @@ test("DEVNET reaches quorum, so the run approves three times and EXECUTES", asyn
 });
 
 test("MAINNET is one seat short, so the SAME run approves twice and STOPS", async () => {
-  const { trace, exitCode } = await runUpgrade({ cluster: "mainnet", threshold: 3, send: true });
+  const { trace, exitCode } = await runUpgrade({
+    cluster: "mainnet",
+    threshold: 3,
+    send: true,
+    extraArgs: MAINNET_GATE_ARGS,
+  });
 
   assert.equal(exitCode, null, `a handoff is a success, not a failure:\n${lines(trace)}`);
   assert.match(lines(trace), /MODE: HANDOFF/);
@@ -460,7 +482,12 @@ test("the mode follows the COUNT: lower mainnet's threshold and it executes", as
   // Same cluster, same roster, same two seats — only the threshold moves. If the
   // branch were keyed on the cluster name rather than on the measurement, this
   // would still hand off.
-  const { trace } = await runUpgrade({ cluster: "mainnet", threshold: 2, send: true });
+  const { trace } = await runUpgrade({
+    cluster: "mainnet",
+    threshold: 2,
+    send: true,
+    extraArgs: MAINNET_GATE_ARGS,
+  });
 
   assert.match(lines(trace), /MODE: AUTONOMOUS/);
   assert.equal(steps(trace, "vaultTransactionExecute").length, 1);
@@ -735,4 +762,110 @@ test("a run with no --cluster refuses without touching the network", async () =>
   assert.equal(exitCode, 1);
   assert.match(lines(trace), /--cluster=devnet\|mainnet is REQUIRED/);
   assert.equal(steps(trace, "readMultisig").length, 0);
+});
+
+// --- the mainnet gate: spill to the vault, and the reviewed buffer ----------
+
+/** Nothing was signed, sent, created, approved or executed. */
+function assertNothingSigned(trace) {
+  for (const step of [
+    "sign",
+    "sendTransaction",
+    "vaultTransactionCreate",
+    "proposalCreate",
+    "proposalApprove",
+    "vaultTransactionExecute",
+  ]) {
+    assert.equal(steps(trace, step).length, 0, `${step} must not happen:\n${lines(trace)}`);
+  }
+}
+
+test("MAINNET --send with the vault spill and the matching buffer hash passes the gate", async () => {
+  const { trace, exitCode } = await runUpgrade({
+    cluster: "mainnet",
+    threshold: 3,
+    send: true,
+    extraArgs: MAINNET_GATE_ARGS,
+  });
+  assert.equal(exitCode, null, lines(trace));
+  assert.match(lines(trace), new RegExp(`mainnet gate: spill is the vault, buffer sha256 ${BUFFER_SHA256} matches`));
+  assert.equal(steps(trace, "vaultTransactionCreate").length, 1);
+});
+
+test("MAINNET --send with NO --spill is refused before anything is signed", async () => {
+  const { trace, exitCode } = await runUpgrade({
+    cluster: "mainnet",
+    threshold: 3,
+    send: true,
+    extraArgs: [`--expect-buffer-sha256=${BUFFER_SHA256}`],
+  });
+  assert.equal(exitCode, 1);
+  assert.match(lines(trace), /a mainnet --send needs --spill=/);
+  assertNothingSigned(trace);
+});
+
+test("MAINNET --send whose --spill is the fee payer (an agent seat) is refused", async () => {
+  const { trace, exitCode } = await runUpgrade({
+    cluster: "mainnet",
+    threshold: 3,
+    send: true,
+    extraArgs: [`--spill=${SYSTEM}`, `--expect-buffer-sha256=${BUFFER_SHA256}`],
+  });
+  assert.equal(exitCode, 1);
+  assert.match(lines(trace), /is not the Squad vault/);
+  assertNothingSigned(trace);
+});
+
+test("MAINNET --send with no --expect-buffer-sha256 is refused", async () => {
+  const { trace, exitCode } = await runUpgrade({
+    cluster: "mainnet",
+    threshold: 3,
+    send: true,
+    extraArgs: [`--spill=${LIVE.mainnet.vault}`],
+  });
+  assert.equal(exitCode, 1);
+  assert.match(lines(trace), /needs --expect-buffer-sha256/);
+  assertNothingSigned(trace);
+});
+
+test("MAINNET --send whose buffer does not hash to the expected sha256 is refused", async () => {
+  const wrong = "0".repeat(64);
+  const { trace, exitCode } = await runUpgrade({
+    cluster: "mainnet",
+    threshold: 3,
+    send: true,
+    extraArgs: [`--spill=${LIVE.mainnet.vault}`, `--expect-buffer-sha256=${wrong}`],
+  });
+  assert.equal(exitCode, 1);
+  assert.match(lines(trace), new RegExp(`hash to ${BUFFER_SHA256}, not the expected ${wrong}`));
+  assertNothingSigned(trace);
+});
+
+test("the mainnet gate runs BEFORE the permissionless extend, which is also a signature", async () => {
+  // A ProgramData too small for the buffer makes the run plan an extendProgram,
+  // which it signs directly with an agent seat. A refused gate must stop that too.
+  const { trace, exitCode } = await runUpgrade({
+    cluster: "mainnet",
+    threshold: 3,
+    send: true,
+    programDataSize: 100_000,
+    extraArgs: [`--spill=${LIVE.mainnet.vault}`, `--expect-buffer-sha256=${"f".repeat(64)}`],
+  });
+  assert.equal(exitCode, 1);
+  assert.match(lines(trace), /EXTEND REQUIRED/, "the fixture must actually plan an extend");
+  assertNothingSigned(trace);
+});
+
+test("DEVNET --send is not gated: no spill or hash flag is needed", async () => {
+  const { trace, exitCode } = await runUpgrade({ cluster: "devnet", threshold: 3, send: true });
+  assert.equal(exitCode, null, lines(trace));
+  assert.doesNotMatch(lines(trace), /mainnet gate/);
+});
+
+test("a MAINNET dry run defaults the spill to the vault and prints the buffer's sha256", async () => {
+  const { trace, exitCode } = await runUpgrade({ cluster: "mainnet", threshold: 3, send: false });
+  assert.equal(exitCode, null);
+  const out = lines(trace);
+  assert.match(out, new RegExp(`refunds to ${LIVE.mainnet.vault} — the Squad vault, by default`));
+  assert.match(out, new RegExp(`BUFFER SHA256: ${BUFFER_SHA256}`));
 });

@@ -455,13 +455,23 @@ the Squads vault PDA, then execute the upgrade through `scripts/squad-upgrade.js
 
 ```bash
 node scripts/squad-upgrade.js --cluster=mainnet <BUFFER_ADDR>          # dry run
-node scripts/squad-upgrade.js --cluster=mainnet <BUFFER_ADDR> --send   # armed
+node scripts/squad-upgrade.js --cluster=mainnet <BUFFER_ADDR> \
+  --spill=Bk9sS7iiSRL18vuo2KVzkeGw7EekKqxMCjrdoyGGdJm \
+  --expect-buffer-sha256=<sha256 of the reviewed .so> --send           # armed
 ```
 
 `--cluster` is required and has no default; the run is a dry run until `--send`.
 A dry run reads no key material at all, so it is free to run before the buffer
 even exists — which is the order the money wants, because a mainnet buffer costs
 ~2.76 SOL to write.
+
+A mainnet `--send` refuses, before any key is read or anything is signed, unless
+`--spill` is given and is the Squad vault (the buffer's rent refund goes back to
+the vault, never to an agent seat) and `--expect-buffer-sha256` equals the sha256
+of the buffer's on-chain program bytes: everything after its 37-byte header,
+trailing zeros included. For a buffer written without `--max-len` that is
+`shasum -a 256 target/deploy/turf_vault.so`; the dry run prints the buffer's own
+hash to compare. Devnet is not gated.
 
 After any upgrade, re-pin Turf Monster from the built IDL, not from `anchor idl
 fetch`; Squads upgrades do not update the on-chain IDL account.

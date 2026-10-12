@@ -84,9 +84,22 @@
  *   --send                     arm it. Without this nothing is signed or sent.
  *   --index=<n>                resume an existing transaction instead of creating
  *                              one — for a run interrupted after create.
- *   --spill=<pubkey>           where the buffer's rent refund lands. Defaults to
- *                              the fee payer. On mainnet that refund is ~2.76 SOL,
- *                              so it is printed loudly either way.
+ *   --spill=<pubkey>           where the buffer's rent refund lands. On devnet it
+ *                              defaults to the fee payer; on mainnet to the Squad
+ *                              vault. That refund is ~2.76 SOL on mainnet, so it is
+ *                              printed loudly either way.
+ *   --expect-buffer-sha256=<hex>
+ *                              the sha256 of the reviewed program: `shasum -a 256
+ *                              target/deploy/turf_vault.so` for a buffer written
+ *                              without --max-len. The dry run prints the buffer's
+ *                              own hash to compare against.
+ *
+ * MAINNET --send IS GATED (squad-tools-hardening, 2026-10-12). Before any key is
+ * read, a mainnet `--send` refuses unless `--spill` is GIVEN and is the Squad
+ * vault PDA, and `--expect-buffer-sha256` equals the sha256 of the buffer's
+ * on-chain program bytes (everything after its 37-byte header). Both used to be
+ * SOP-only: `--spill` defaulted to the fee payer, an agent seat. The gate is
+ * `assertMainnetUpgradeSend` in scripts/lib/upgrade-instruction.js.
  *
  * KEYS. Never argv — argv leaks in `ps`. Each seat in the roster
  * (scripts/lib/squad-clusters.js) names a 1Password item, and an env override:
@@ -119,8 +132,12 @@ const {
 const { INITIATE, SquadRoleError, describeMask, planUpgrade } = require("./lib/squad-roles");
 const {
   BPF_LOADER_ID,
+  BUFFER_HEADER,
   UpgradeReadbackError,
+  UpgradeSendError,
   assertIsVaultTransaction,
+  assertMainnetUpgradeSend,
+  bufferProgramSha256,
   buildExtendInstruction,
   buildUpgradeInstruction,
   decodeVaultMessage,
@@ -168,6 +185,7 @@ function parseArgs(argv) {
     send: argv.includes("--send"),
     index: flag("index"),
     spill: flag("spill"),
+    expectBufferSha256: flag("expect-buffer-sha256"),
   };
 }
 
@@ -318,7 +336,7 @@ function explorerUrl(address, cluster) {
   if (!args.buffer) {
     fail(
       "usage: node scripts/squad-upgrade.js --cluster=devnet|mainnet <BUFFER_ADDRESS> [--send] " +
-        "[--index=<n>] [--spill=<pubkey>]"
+        "[--index=<n>] [--spill=<pubkey>] [--expect-buffer-sha256=<hex>]"
     );
   }
 
@@ -491,7 +509,10 @@ function explorerUrl(address, cluster) {
   }
 
   // --- the instruction the multisig will hold -------------------------------
-  const spill = args.spill || feePayerSeat.pubkey;
+  // On mainnet the default is the VAULT, so a dry run plans what an armed run
+  // may send; an armed mainnet run still demands the flag (assertMainnetUpgradeSend).
+  const defaultSpill = cfg.cluster === "mainnet-beta" ? vaultPda.toBase58() : feePayerSeat.pubkey;
+  const spill = args.spill || defaultSpill;
   const upgrade = buildUpgradeInstruction({
     programId: programId.toBase58(),
     programData: programData.toBase58(),
@@ -505,8 +526,28 @@ function explorerUrl(address, cluster) {
   console.log(
     `\n  SPILL: the buffer's rent (${bufferInfo ? SOL(bufferInfo.lamports) : "buffer not on chain yet"}) ` +
       `refunds to ${spill}` +
-      `${args.spill ? " (--spill)" : ` — the fee payer, by default. Override with --spill=<pubkey>.`}`
+      `${
+        args.spill
+          ? " (--spill)"
+          : cfg.cluster === "mainnet-beta"
+          ? ` — the Squad vault, by default. An armed mainnet run needs --spill=${vaultPda.toBase58()} given.`
+          : ` — the fee payer, by default. Override with --spill=<pubkey>.`
+      }`
   );
+  if (bufferInfo) {
+    let bufferSha = null;
+    try {
+      bufferSha = bufferProgramSha256(bufferInfo.data);
+    } catch (error) {
+      if (!(error instanceof UpgradeSendError)) throw error;
+      console.log(`\n  BUFFER SHA256: cannot hash — ${error.message}`);
+    }
+    if (bufferSha) {
+      console.log(`\n  BUFFER SHA256: ${bufferSha}`);
+      console.log(`    (the ${extend.elfBytes} program bytes after the ${BUFFER_HEADER}-byte header; compare with`);
+      console.log(`     shasum -a 256 target/deploy/turf_vault.so)`);
+    }
+  }
 
   // --- the steps, named before any of them runs -----------------------------
   const resumeIndex = args.index ? BigInt(args.index) : null;
@@ -592,6 +633,26 @@ function explorerUrl(address, cluster) {
         `  Arm with:  node scripts/squad-upgrade.js --cluster=${args.cluster} ${buffer.toBase58()} --send\n`
     );
     return;
+  }
+
+  // --- the mainnet gate: spill to the vault, and the reviewed buffer ---------
+  // Before any key is read, so a refusal here has signed nothing — not even the
+  // permissionless extend below.
+  try {
+    const gate = assertMainnetUpgradeSend({
+      cluster: cfg.cluster,
+      send: args.send,
+      spillArg: args.spill,
+      vaultPda: vaultPda.toBase58(),
+      expectedSha256: args.expectBufferSha256,
+      bufferData: bufferInfo ? bufferInfo.data : null,
+    });
+    if (gate) {
+      console.log(`\n  mainnet gate: spill is the vault, buffer sha256 ${gate.sha256} matches`);
+    }
+  } catch (error) {
+    if (error instanceof UpgradeSendError) fail(error.message);
+    throw error;
   }
 
   // ==========================================================================

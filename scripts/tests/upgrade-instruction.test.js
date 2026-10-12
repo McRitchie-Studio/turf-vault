@@ -335,3 +335,101 @@ test("a vault transaction passes, and only its first 8 bytes are consulted", () 
     true
   );
 });
+
+// --- the mainnet --send gate (squad-tools-hardening) -------------------------
+
+const {
+  UpgradeSendError,
+  assertMainnetUpgradeSend,
+  bufferProgramSha256,
+} = require("../lib/upgrade-instruction");
+const { createHash } = require("node:crypto");
+
+const GATE_VAULT = "Bk9sS7iiSRL18vuo2KVzkeGw7EekKqxMCjrdoyGGdJm";
+const GATE_AGENT = "7auwTLSvNniSUeAgL6v9RStMXJhWrrUhSJgwFWLpcqC";
+
+/** A buffer account: 37 header bytes that must NOT be hashed, then the program. */
+function bufferAccount(program, headerFill = 0xaa) {
+  return Buffer.concat([Buffer.alloc(37, headerFill), Buffer.from(program)]);
+}
+const sha = (bytes) => createHash("sha256").update(Buffer.from(bytes)).digest("hex");
+const PROGRAM_BYTES = Buffer.from([1, 2, 3, 4, 5, 0, 0, 0]); // trailing zeros are program bytes too
+
+test("bufferProgramSha256 hashes everything after the 37-byte header, trailing zeros included", () => {
+  const account = bufferAccount(PROGRAM_BYTES);
+  assert.equal(bufferProgramSha256(account), sha(PROGRAM_BYTES));
+  assert.notEqual(bufferProgramSha256(account), sha(PROGRAM_BYTES.subarray(0, 5)), "nothing is trimmed");
+  assert.equal(
+    bufferProgramSha256(bufferAccount(PROGRAM_BYTES, 0x55)),
+    sha(PROGRAM_BYTES),
+    "the header is not part of the hash"
+  );
+});
+
+test("bufferProgramSha256 hashes exactly programLength bytes when one is given", () => {
+  const account = bufferAccount(PROGRAM_BYTES);
+  assert.equal(bufferProgramSha256(account, 5), sha(PROGRAM_BYTES.subarray(0, 5)));
+  assert.throws(() => bufferProgramSha256(account, 9), UpgradeSendError, "longer than the account holds");
+  assert.throws(() => bufferProgramSha256(Buffer.alloc(37)), /no program bytes/);
+  assert.throws(() => bufferProgramSha256(account, 0), /no program bytes/);
+});
+
+const GATE_OK = {
+  cluster: "mainnet-beta",
+  send: true,
+  spillArg: GATE_VAULT,
+  vaultPda: GATE_VAULT,
+  expectedSha256: sha(PROGRAM_BYTES),
+  bufferData: bufferAccount(PROGRAM_BYTES),
+};
+
+test("the mainnet gate passes the vault spill and the matching hash, and returns the hash", () => {
+  assert.deepEqual(assertMainnetUpgradeSend(GATE_OK), { sha256: sha(PROGRAM_BYTES) });
+  assert.deepEqual(
+    assertMainnetUpgradeSend({ ...GATE_OK, expectedSha256: ` ${sha(PROGRAM_BYTES).toUpperCase()} ` }),
+    { sha256: sha(PROGRAM_BYTES) },
+    "hex case and surrounding space do not matter"
+  );
+});
+
+test("the gate does not apply to devnet or to a dry run", () => {
+  const bare = { ...GATE_OK, spillArg: null, expectedSha256: null, bufferData: null };
+  assert.equal(assertMainnetUpgradeSend({ ...bare, cluster: "devnet" }), null);
+  assert.equal(assertMainnetUpgradeSend({ ...bare, send: false }), null);
+  assert.throws(() => assertMainnetUpgradeSend(bare), UpgradeSendError, "but mainnet --send is gated");
+});
+
+test("the gate refuses a missing --spill, even though the mainnet default is the vault", () => {
+  assert.throws(() => assertMainnetUpgradeSend({ ...GATE_OK, spillArg: null }), /needs --spill=Bk9s/);
+});
+
+test("the gate refuses a --spill that is not the vault (the old fee-payer default)", () => {
+  assert.throws(
+    () => assertMainnetUpgradeSend({ ...GATE_OK, spillArg: GATE_AGENT }),
+    /--spill=7auw\w+ is not the Squad vault/
+  );
+});
+
+test("the gate refuses a missing or malformed --expect-buffer-sha256", () => {
+  assert.throws(() => assertMainnetUpgradeSend({ ...GATE_OK, expectedSha256: null }), /needs --expect-buffer-sha256/);
+  assert.throws(
+    () => assertMainnetUpgradeSend({ ...GATE_OK, expectedSha256: "abc123" }),
+    /not a 64-character hex sha256/
+  );
+  assert.throws(
+    () => assertMainnetUpgradeSend({ ...GATE_OK, expectedSha256: "z".repeat(64) }),
+    /not a 64-character hex sha256/
+  );
+});
+
+test("the gate refuses a buffer that is not on chain", () => {
+  assert.throws(() => assertMainnetUpgradeSend({ ...GATE_OK, bufferData: null }), /not on chain/);
+});
+
+test("the gate refuses a buffer whose program bytes hash to something else", () => {
+  const other = bufferAccount(Buffer.from([1, 2, 3, 4, 5, 0, 0, 1]));
+  assert.throws(
+    () => assertMainnetUpgradeSend({ ...GATE_OK, bufferData: other }),
+    /hash to [0-9a-f]{64}, not the expected/
+  );
+});

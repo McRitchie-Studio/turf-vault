@@ -257,10 +257,9 @@ test("a well-formed secret parses in both forms", () => {
 test("a moved index that already carries this transfer says approve, never send again", () => {
   const candidates = [
     { index: 7n, instructions: [solTransfer(VAULT, PHANTOM, 1n)], status: "Active" },
-    { index: 8n, instructions: [solTransfer(VAULT, HWQC, 6_200_000_000n)], status: "Executed" },
     { index: 9n, instructions: [solTransfer(VAULT, HWQC, 6_200_000_000n)], status: "Active" },
   ];
-  assert.deepEqual(findMatchingIndex(candidates, SOL_PLAN), { index: 9n, executed: false }, "a live match wins");
+  assert.deepEqual(findMatchingIndex(candidates, SOL_PLAN), { index: 9n, executed: false }, "with nothing executed, the live match wins");
   assert.deepEqual(
     findMatchingIndex([{ index: 10n, instructions: [solTransfer(VAULT, HWQC, 6_200_000_000n)], status: "Approved" }], SOL_PLAN),
     { index: 10n, executed: false }
@@ -283,14 +282,40 @@ test("a moved index whose match already EXECUTED says so, and never says approve
     { index: 8n, instructions: [solTransfer(VAULT, HWQC, 6_200_000_000n)], status: "Executed" },
   ];
   const match = findMatchingIndex(done, SOL_PLAN);
-  assert.deepEqual(match, { index: 8n, executed: true });
+  assert.deepEqual(match, { index: 8n, executed: true, liveDuplicates: [] });
   const advice = indexMovedAdvice(match, "--cluster=mainnet");
   assert.match(advice, /already executed at #8/);
   assert.doesNotMatch(advice, /approve|re-plan/);
 
   // Two executed copies (a duplicate that both ran): name the FIRST, where the money left.
   const twice = [...done, { index: 9n, instructions: [solTransfer(VAULT, HWQC, 6_200_000_000n)], status: "Executed" }];
-  assert.deepEqual(findMatchingIndex(twice, SOL_PLAN), { index: 8n, executed: true });
+  assert.deepEqual(findMatchingIndex(twice, SOL_PLAN), { index: 8n, executed: true, liveDuplicates: [] });
+});
+
+test("an EXECUTED match wins over a live duplicate, and the advice says cancel the live one", () => {
+  // Another actor's identical transfer already executed at #8 while this run's
+  // create sits Active at #9. Approving #9 would move the money twice.
+  const raced = [
+    { index: 7n, instructions: [solTransfer(VAULT, PHANTOM, 1n)], status: "Active" },
+    { index: 8n, instructions: [solTransfer(VAULT, HWQC, 6_200_000_000n)], status: "Executed" },
+    { index: 9n, instructions: [solTransfer(VAULT, HWQC, 6_200_000_000n)], status: "Active" },
+  ];
+  const match = findMatchingIndex(raced, SOL_PLAN);
+  assert.deepEqual(match, { index: 8n, executed: true, liveDuplicates: [9n] });
+
+  // Order does not matter: a live copy listed BEFORE the executed one still loses.
+  const liveFirst = [raced[2], raced[1], { ...raced[2], index: 10n, status: "Approved" }];
+  assert.deepEqual(findMatchingIndex(liveFirst, SOL_PLAN), { index: 8n, executed: true, liveDuplicates: [9n, 10n] });
+
+  const advice = indexMovedAdvice(match, "--cluster=mainnet --to=x --sol=6.2");
+  assert.match(advice, /already executed at #8/);
+  assert.match(advice, /#9 is a live duplicate/);
+  assert.match(advice, /Cancel #9 on the Squads page/);
+  assert.match(advice, /do NOT approve or execute it/);
+  assert.doesNotMatch(advice, /squad-vault-transfer\.js approve/, "never hands out the approve command for a duplicate");
+
+  const two = indexMovedAdvice(findMatchingIndex(liveFirst, SOL_PLAN), "");
+  assert.match(two, /#9, #10 are live duplicates/);
 });
 
 test("an expired confirmation says re-run the SAME command, never plan", () => {

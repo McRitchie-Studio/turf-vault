@@ -171,25 +171,46 @@ function checkExpectedIndex(current, expected) {
 /**
  * The index moved since the plan. Was it THIS move? `candidates` are the
  * transactions created since, read back as `{ index, instructions, status }`.
- * Returns `{ index, executed }` for the transaction that carries exactly the
- * planned transfer, else null. A live match (Active or Approved) wins over an
- * Executed one: it means "approve or execute THAT index". An Executed match
- * means the money already moved. Neither ever means "send again".
+ * Returns the transaction that carries exactly the planned transfer, else null.
+ *
+ * AN EXECUTED MATCH WINS (2026-10-12, Carl on squad-vault-ops-sop). If the money
+ * already moved at one index while an identical proposal is still live at
+ * another, the live one is a DUPLICATE: approving it moves the money twice. So
+ * the result is `{ index, executed: true, liveDuplicates: [<indexes>] }`, naming
+ * the FIRST executed match (where the money left) and every live copy, which the
+ * advice says to cancel. Only with no executed match does a live one (Active or
+ * Approved) win, as `{ index, executed: false }`: "approve or execute THAT
+ * index". Neither ever means "send again".
  */
 function findMatchingIndex(candidates, plan) {
   let executed = null;
+  let live = null;
+  const liveIndexes = [];
   for (const c of candidates) {
     if (!matchesPlan(c.instructions, plan).ok) continue;
-    if (["Active", "Approved"].includes(c.status)) return { index: BigInt(c.index), executed: false };
-    if (c.status === "Executed" && executed === null) executed = { index: BigInt(c.index), executed: true };
+    if (c.status === "Executed" && executed === null) executed = BigInt(c.index);
+    if (["Active", "Approved"].includes(c.status)) {
+      liveIndexes.push(BigInt(c.index));
+      if (live === null) live = BigInt(c.index);
+    }
   }
-  return executed;
+  if (executed !== null) return { index: executed, executed: true, liveDuplicates: liveIndexes };
+  if (live !== null) return { index: live, executed: false };
+  return null;
 }
 
 /** What to tell the operator when the index moved: approve the match, report it done, or stop and read. */
 function indexMovedAdvice(match, rerunArgs) {
   if (match && match.executed) {
-    return `this transfer was already executed at #${match.index}. Do NOT send again; verify the balances from chain.`;
+    const done = `this transfer was already executed at #${match.index}. Do NOT send again; verify the balances from chain.`;
+    const dupes = match.liveDuplicates || [];
+    if (dupes.length === 0) return done;
+    const list = dupes.map((i) => `#${i}`).join(", ");
+    return (
+      `${done}\n   ${list} ${dupes.length === 1 ? "is a live duplicate" : "are live duplicates"} of the same ` +
+      `transfer: do NOT approve or execute ${dupes.length === 1 ? "it" : "them"}. Cancel ${list} on the Squads page ` +
+      `(reject while Active, cancel once Approved), or it moves the money a second time.`
+    );
   }
   if (match) {
     return (
