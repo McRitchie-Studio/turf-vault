@@ -64,11 +64,22 @@ const CLOCK = "SysvarC1ock11111111111111111111111111111111";
  * right one by accident). BUFFER_SHA256 is computed here independently of the
  * library under test.
  */
-const BUFFER_DATA = (() => {
+/**
+ * The header is a real `UpgradeableLoaderState::Buffer`: variant 1 (u32 LE),
+ * Some(authority), then the authority. The fake PublicKey reads those 32 bytes
+ * back as UTF-8 and expands the truncated address, as it does for ProgramData.
+ */
+function bufferAccount(authority) {
   const data = Buffer.alloc(540_000);
+  data.writeUInt32LE(1, 0);
+  if (authority) {
+    data[4] = 1;
+    Buffer.from(authority, "utf8").copy(data, 5, 0, 32);
+  }
   for (let i = 37; i < data.length; i += 1) data[i] = (i * 31 + 7) & 0xff;
   return data;
-})();
+}
+const BUFFER_DATA = bufferAccount("Bk9sS7iiSRL18vuo2KVzkeGw7EekKqxMCjrdoyGGdJm"); // the mainnet vault
 const BUFFER_SHA256 = crypto.createHash("sha256").update(BUFFER_DATA.subarray(37)).digest("hex");
 
 const LIVE = {
@@ -111,6 +122,7 @@ async function runUpgrade({
   onChainTransaction = null, // null = index is empty, so the script creates one
   programDataSize = 600_000,
   omitCluster = false,
+  bufferData = BUFFER_DATA,
 } = {}) {
   const live = LIVE[cluster];
   const memberKeys = members || live.members;
@@ -158,7 +170,7 @@ async function runUpgrade({
 
   const accountData = {
     [PROGRAM_DATA]: programDataBuffer(live.vault, programDataSize),
-    [BUFFER]: BUFFER_DATA,
+    [BUFFER]: bufferData,
   };
 
   const fakeWeb3 = {
@@ -788,7 +800,7 @@ test("MAINNET --send with the vault spill and the matching buffer hash passes th
     extraArgs: MAINNET_GATE_ARGS,
   });
   assert.equal(exitCode, null, lines(trace));
-  assert.match(lines(trace), new RegExp(`mainnet gate: spill is the vault, buffer sha256 ${BUFFER_SHA256} matches`));
+  assert.match(lines(trace), new RegExp(`mainnet gate: spill and buffer authority are the vault, buffer sha256 ${BUFFER_SHA256} matches`));
   assert.equal(steps(trace, "vaultTransactionCreate").length, 1);
 });
 
@@ -854,6 +866,45 @@ test("the mainnet gate runs BEFORE the permissionless extend, which is also a si
   assert.equal(exitCode, 1);
   assert.match(lines(trace), /EXTEND REQUIRED/, "the fixture must actually plan an extend");
   assertNothingSigned(trace);
+});
+
+test("MAINNET --send whose buffer AUTHORITY is not the vault is refused, nothing signed", async () => {
+  // Handoff mode: between the agents' approvals and the human execute, whoever
+  // holds the buffer's authority could rewrite the bytes this run hashed.
+  for (const authority of [SYSTEM, null]) {
+    const { trace, exitCode } = await runUpgrade({
+      cluster: "mainnet",
+      threshold: 3,
+      send: true,
+      bufferData: bufferAccount(authority),
+      extraArgs: MAINNET_GATE_ARGS,
+    });
+    assert.equal(exitCode, 1, `authority ${authority}:\n${lines(trace)}`);
+    assert.match(lines(trace), new RegExp(`buffer's authority is ${authority || "None"}, not the Squad vault`));
+    assertNothingSigned(trace);
+  }
+});
+
+test("a MAINNET dry run names the buffer authority, and flags one that is not the vault", async () => {
+  const good = await runUpgrade({ cluster: "mainnet", threshold: 3, send: false });
+  assert.match(lines(good.trace), new RegExp(`BUFFER AUTHORITY: ${LIVE.mainnet.vault}  \\(the Squad vault\\)`));
+  const bad = await runUpgrade({ cluster: "mainnet", threshold: 3, send: false, bufferData: bufferAccount(SYSTEM) });
+  assert.equal(bad.exitCode, null, "a dry run reports; it does not refuse");
+  assert.match(lines(bad.trace), /BUFFER AUTHORITY: 7auw\w+ {2}— NOT the vault: an armed mainnet run refuses/);
+});
+
+test("the MAINNET dry run's Arm-with line carries --spill and a PLACEHOLDER hash, never the chain's", async () => {
+  const { trace } = await runUpgrade({ cluster: "mainnet", threshold: 3, send: false });
+  const arm = lines(trace).split("\n").find((l) => /Arm with:/.test(l));
+  assert.ok(arm, lines(trace));
+  assert.match(arm, new RegExp(`--spill=${LIVE.mainnet.vault}`));
+  assert.match(arm, /--expect-buffer-sha256=<sha256 of the reviewed \.so> --send/);
+  assert.ok(!arm.includes(BUFFER_SHA256), "the hint never fills in the hash it read from chain");
+  assert.match(lines(trace), /never paste it into\s/);
+
+  const devnet = await runUpgrade({ cluster: "devnet", threshold: 3, send: false });
+  const devArm = lines(devnet.trace).split("\n").find((l) => /Arm with:/.test(l));
+  assert.doesNotMatch(devArm, /--spill|--expect-buffer-sha256/, "devnet is not gated, so its hint stays bare");
 });
 
 test("DEVNET --send is not gated: no spill or hash flag is needed", async () => {

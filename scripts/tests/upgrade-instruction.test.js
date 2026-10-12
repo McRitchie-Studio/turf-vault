@@ -342,6 +342,7 @@ const {
   UpgradeSendError,
   assertMainnetUpgradeSend,
   bufferProgramSha256,
+  readBufferHeader,
 } = require("../lib/upgrade-instruction");
 const { createHash } = require("node:crypto");
 
@@ -381,6 +382,7 @@ const GATE_OK = {
   vaultPda: GATE_VAULT,
   expectedSha256: sha(PROGRAM_BYTES),
   bufferData: bufferAccount(PROGRAM_BYTES),
+  bufferAuthority: GATE_VAULT,
 };
 
 test("the mainnet gate passes the vault spill and the matching hash, and returns the hash", () => {
@@ -393,7 +395,7 @@ test("the mainnet gate passes the vault spill and the matching hash, and returns
 });
 
 test("the gate does not apply to devnet or to a dry run", () => {
-  const bare = { ...GATE_OK, spillArg: null, expectedSha256: null, bufferData: null };
+  const bare = { ...GATE_OK, spillArg: null, expectedSha256: null, bufferData: null, bufferAuthority: null };
   assert.equal(assertMainnetUpgradeSend({ ...bare, cluster: "devnet" }), null);
   assert.equal(assertMainnetUpgradeSend({ ...bare, send: false }), null);
   assert.throws(() => assertMainnetUpgradeSend(bare), UpgradeSendError, "but mainnet --send is gated");
@@ -432,4 +434,49 @@ test("the gate refuses a buffer whose program bytes hash to something else", () 
     () => assertMainnetUpgradeSend({ ...GATE_OK, bufferData: other }),
     /hash to [0-9a-f]{64}, not the expected/
   );
+});
+
+test("the gate refuses a buffer whose authority is not the vault, or has none", () => {
+  assert.throws(
+    () => assertMainnetUpgradeSend({ ...GATE_OK, bufferAuthority: GATE_AGENT }),
+    /buffer's authority is 7auw\w+, not the Squad vault/
+  );
+  assert.throws(
+    () => assertMainnetUpgradeSend({ ...GATE_OK, bufferAuthority: null }),
+    /buffer's authority is None, not the Squad vault/
+  );
+  assert.throws(() => assertMainnetUpgradeSend({ ...GATE_OK, bufferAuthority: undefined }), /authority is None/);
+});
+
+test("the refusals say the expected hash comes from the reviewed .so, never the dry run", () => {
+  assert.throws(
+    () => assertMainnetUpgradeSend({ ...GATE_OK, expectedSha256: null }),
+    /REVIEWED \.so.*Never paste the dry run's printed hash/s
+  );
+  assert.throws(
+    () => assertMainnetUpgradeSend({ ...GATE_OK, expectedSha256: "0".repeat(64) }),
+    /must come from the reviewed \.so, never from the dry run's print/
+  );
+});
+
+/** A 37-byte header: variant (u32 LE), Option tag, then 32 authority bytes. */
+function header({ variant = 1, tag = 1, authority = Buffer.alloc(32, 7) } = {}) {
+  const h = Buffer.alloc(37);
+  h.writeUInt32LE(variant, 0);
+  h[4] = tag;
+  Buffer.from(authority).copy(h, 5);
+  return Buffer.concat([h, PROGRAM_BYTES]);
+}
+
+test("readBufferHeader returns the 32 authority bytes after a Buffer variant and Some tag", () => {
+  const authority = Buffer.from(Array.from({ length: 32 }, (_, i) => i + 1));
+  assert.deepEqual(Buffer.from(readBufferHeader(header({ authority })).authority), authority);
+  assert.equal(readBufferHeader(header({ tag: 0 })).authority, null, "None: no authority");
+});
+
+test("readBufferHeader refuses an account that is not a Buffer, a bad tag, or a short account", () => {
+  assert.throws(() => readBufferHeader(header({ variant: 2 })), /not an upgradeable-loader BUFFER \(state variant 2/);
+  assert.throws(() => readBufferHeader(header({ variant: 3 })), /state variant 3/, "ProgramData is not a buffer");
+  assert.throws(() => readBufferHeader(header({ tag: 2 })), /authority tag is 2/);
+  assert.throws(() => readBufferHeader(Buffer.alloc(36)), /shorter than the 37-byte buffer header/);
 });

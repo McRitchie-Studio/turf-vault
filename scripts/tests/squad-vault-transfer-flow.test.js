@@ -376,6 +376,31 @@ test("APPROVE of an index that is NOT the planned transfer signs nothing and rea
   assert.equal(steps(trace, "keyLoaded").length, 0, "no key material is even read");
 });
 
+test("APPROVE of a proposal that is not Active is refused, with nothing signed and no key read", async () => {
+  // Carl's surviving mutant on squad-tools-hardening (activity-18036): deleting
+  // this check passed the suite, because Squads also rejects an approve on a
+  // non-Active proposal on chain. The script refuses first, so an Approved or
+  // Executed proposal never costs a fee or a signature from an agent seat.
+  for (const status of ["Approved", "Executed", "Rejected", "Cancelled", "Draft"]) {
+    const { trace, exitCode } = await runTransfer({
+      mode: "approve",
+      extraArgs: ["--index=9"],
+      transactions: HONEST_9,
+      proposals: { 9: { status, approved: status === "Approved" ? [SYSTEM, GOVERNANCE, ALEX] : [] } },
+    });
+    assert.equal(exitCode, 1, `${status}:\n${lines(trace)}`);
+    assert.match(lines(trace), new RegExp(`proposal #9 is ${status}, not Active`));
+    assert.equal(steps(trace, "sign").length, 0, `${status}: nothing is signed`);
+    assert.equal(steps(trace, "keyLoaded").length, 0, `${status}: no key is read`);
+  }
+
+  // A transaction with no proposal account at all is refused the same way.
+  const none = await runTransfer({ mode: "approve", extraArgs: ["--index=9"], transactions: HONEST_9 });
+  assert.equal(none.exitCode, 1);
+  assert.match(lines(none.trace), /proposal #9 is null, not Active/);
+  assert.equal(steps(none.trace, "sign").length, 0);
+});
+
 // --- execute -----------------------------------------------------------------
 
 test("EXECUTE reads the transaction back and grades it before any key or signature", async () => {
