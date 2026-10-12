@@ -1,0 +1,12 @@
+submit: auth — one board token minted for this run; every board call reuses it.
+submit: 0/8 claim — squad-tools-hardening is [designed]; /Users/alex/projects/.agents/bin/task move squad-tools-hardening building
+squad-tools-hardening  [building]  Squad Tools Hardening
+  assignee: unassigned  builders: NOT STAMPED  kind: chore  repos: turf-vault
+  branch: feat/squad-tools-hardening  pr: -
+  epic: platform-audit-refactors
+  acceptance: 3 item(s)  risk: solana
+submit: 0/8 pre-check — bin/dor-check squad-tools-hardening --precheck (every DoR rule but CI; records nothing)
+✓ DoR pre-check met for "Squad Tools Hardening" (shape: onchain)
+  tiers green in checks_run: unit, integration
+  → ready to advance to the push (CI NOT read; the full DoR-to-Merge verdict runs at bin/submit 7/8 on a settled CI)
+submit: 1/8 commit — committing 1 changed path(s): "squad tools: gate a mainnet upgrade send on vault spill and buffer sha256; prefer an executed transfer match; pin read-back before signing"
