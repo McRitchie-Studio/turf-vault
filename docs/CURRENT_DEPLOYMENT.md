@@ -7,14 +7,43 @@ This is the live operator reference for TurfVault deployment identity. Keep hist
 | Field | Value |
 |-------|-------|
 | Program ID | `EQGFJAcABtDb6VXtiijTjZ6cE2UqdvhnqJvoharJbpMJ` |
-| Version | v0.25.0 |
-| Deployed | 2026-06-11, slot `468716417` |
+| Version | v0.26.0 |
+| Deployed | 2026-10-12, slot `510279923` (Squads devnet transaction #20; card `devnet-v026-upgrade`) |
 | Upgrade authority | Squads V4 vault PDA `BW13kgfiG2koFn3WRkte21NW9TFygsD1ge2fNJdjH6kC` |
-| `VaultState` threshold | 2-of-3 for treasury and governance ops — the program's own signer set below, NOT the Squads multisig that holds the upgrade authority (3-of-5; see **Squads Governance**) |
-| Alex Bot signer | `8K81w4e6UcB7TiANhM9N8sAgijJvTxxybRi8AENRaRYd` |
-| Alex signer | `7ZDJp7FUHhuceAqcW9CHe81hCiaMTjgWAXfprBM59Tcr` |
-| Mason signer | `CytJS23p1zCM2wvUUngiDePtbMB484ebD7bK4nDqWjrR` |
-| Program SHA256 | `a0611d29b8ddb001e0c5e1b87425745f079b965e1ed1fb87b1990170cd5f5341` (544,632 bytes) |
+| `GovernanceConfig` | `729Q8AVBSV4fovTk9G74aoLwH6eChZT4DESzVAoGVS8J`, created by `init_governance`; shipped defaults except `settle_contest` = **2** (devnet only, `scripts/set-devnet-threshold.js`) |
+| `VaultState` signers | five slots, read off chain after the EVICT (`node scripts/check-signer-slots.js --cluster devnet`) |
+| slot 1 | `2eGs8G3wzhEeNQQU2Q86BmmA2xTpDbMMae3Y1bvpZfx9` — `solana.turf.system.devnet`, turf-monster-qa's `SOLANA_ADMIN_KEY` |
+| slot 2 | `foUuRyeibadQoGdKXZ9pBGDqmkb1jY1jYsu8dZ29nds` — Mack (`agent.mack.solana`), the devnet-only rehearsal co-signer |
+| slot 3 | `BVQHNwUEo91ePwqPcR6Ro4g9Ejqt3qn3ajKPqJSSTd51` — `solana.turf.governance.devnet` (admin vault), devnet-only |
+| slot 4 | `9gACbzsCLmkYF9Yx1EBGmwMvvyfuTquJ6qs8QsoQvHXf` — Mr. McRitchie, Phantom account 2 |
+| slot 5 | `3Qj4v9qjhXgkru6zCRCErRVhy8Q6qU3NrNpvpXLTZboA` — Mr. McRitchie's second wallet |
+| Program SHA256 | `af3d1cdf3e35ec0348249db775f61d3d565ef4ca5a025ef80409128f785eb6b9` (707,328 bytes, the whole region; its first 706,304 bytes are the built `turf_vault.so`, `76a8db25…`) |
+| Consumer pin | turf-monster-qa `EXPECTED_IDL_HASH` = v0.25 `f11446fa…` + v0.26 `2d9f7151…`, `SOLANA_VAULT_GOVERNANCE=on` |
+
+**No mainnet `VaultState` signer is seated on devnet.** `8K81…` (production's
+server key) and `CytJ…` (Mason) left devnet in the EVICT; `7ZDJ…` left in the
+v0.25 swap before the upgrade. `9gAC…` and `3Qj4…` are mainnet Squads members and
+the mainnet rotation's target, not mainnet `VaultState` signers today.
+
+The devnet signer change ran in four devnet transactions, all agent-signed under
+Mr. McRitchie's devnet-only grant:
+
+| Step | Set written | Signed by | Signature |
+|------|-------------|-----------|-----------|
+| v0.25 swap | `8K81, 2eGs, CytJ` | `8K81` + `CytJ` | `4mQTE8XisEMPUHpURZtZzZH7J3fZdzouooTihZuuXd29wXrkLSXq4PnAGL1QeHcX2jfJUj7dXGhCQGTHk9kLEvgb` |
+| `init_governance` | — | `2eGs` + `8K81` | `36Kdhj6gFLaJo63QG5dp7fmb8pg7NM7JqZj6jCvVTwhgQwkATf1zjBUqnj7QkwWHwAfZnjGZsHsU9yGcu7D8TiSR` |
+| ADD | `8K81, 2eGs, CytJ, foUu, BVQH` | `2eGs` + `8K81` + `CytJ` | `2VZepg7KRFG4Gv8Z9UEW8twSL1bJtoMFJiyVdaVfzXuL6fRwWmY5s9rfPC9UaKL5sCA7Q8NtyxsqyXjAGhmfzTzs` |
+| EVICT | `2eGs, foUu, BVQH, 9gAC, 3Qj4` | `2eGs` + `foUu` + `BVQH` | `3CfnL5pcacmHt1kXPtrYxf2QtKpiYA5245uyaZN472j7HFRnshfgq39P7iRTV1x77sjyd3HsFZJ8HwR8hRmEPbiv` |
+| `settle_contest` → 2 | — | `2eGs` + `foUu` + `BVQH` | `2kuQ4zhtjahYw1KHLQS9y7bJPAY8p7ipiZL9KTg4Kfp1BBB4m91iarSEVutRtWe3B9fgZAq9eVeDuw3ufysy8KWK` |
+
+The upgrade itself: buffer `BmYZP4v6zKzLYZBPMYYEq9h3VPaGT2JWv3WJsXjQioV4`
+(rent spilled to Mack), ProgramData extended by 162,696 bytes
+(`4EYfWTNFLQNv5Nb7WXa31MWXT2mL8t7oeRpu3sK8Ptm5qisvqx3jzzDd7kTqwsasuVcMaLKAEWwcyXXeToJxJQVv`),
+executed `3bhF2Mk9TGbtiuqZk75KSU5aCQYdhk4GNQZ5dPWFsPSZUPB638J4Xu5Vc9yay7N3k8JDiLWJ7hkfibHx7nhSfWhh`.
+**Rollback:** the v0.25.0 dump (`a0611d29…`, 544,632 bytes) written to a buffer
+and upgraded through the same Squad; then unset `SOLANA_VAULT_GOVERNANCE` on QA.
+The `GovernanceConfig` account and the five-slot set stay, and v0.25 ignores both
+(it reads only slots 1–3 and validates two signers).
 
 The old devnet program `Dx8uGU5w7B9NytDSsW4kseGZuqdVVRq1KY1mGXN2GaCT` is orphaned. Do not use it for live verification. **Orphaned is not closed.** Read at `finalized` on 2026-09-16, it is still upgradeable by the same Squads vault `BW13kgfi…` (last deployed 2026-05-25, slot `464879124`), and its old-layout `VaultState` still lists the retired `F6f8...KzhZ` as a signer beside `7ZDJp7FU…` and `CytJS23p…`. It holds only the devnet test mint.
 
@@ -52,16 +81,16 @@ So "retired 2026-06-02" and "retired 2026-06-06" are both true, of different aut
 
 So "`F6f8` holds no mainnet authority" is now true of both mainnet deployments, not only the live one. Its devnet leftovers, including its signer slot in the orphaned `Dx8u…` vault, are under **Devnet**. Signatures for both transactions are recorded in `KEY_ROTATION.md` §7–§8.
 
-Both clusters run **v0.25.0** today; mainnet reached it on 2026-06-11, nine minutes after devnet. The next upgrade window carries `burn_entry_token` AND the v0.26 governance change (both Unreleased in `CHANGELOG.md`), which change the IDL and so need a freshly built `EXPECTED_IDL_HASH` pinned on `turf-monster-mainnet`. The Version row above is read off the deployed executable, not inferred from a commit message; the method is under **Verification** below.
+**Devnet runs v0.26.0 since 2026-10-12; mainnet runs v0.25.0** (reached 2026-06-11). The next upgrade window carries `burn_entry_token` AND the v0.26 governance change (both Unreleased in `CHANGELOG.md`), which change the IDL and so need a freshly built `EXPECTED_IDL_HASH` pinned on `turf-monster-mainnet`. The Version row above is read off the deployed executable, not inferred from a commit message; the method is under **Verification** below.
 
-**The crate version is not this row.** `programs/turf_vault/Cargo.toml` reads `0.26.0` as of 2026-09-15: that is what the SOURCE is, and it is the label a freshly built IDL will carry. Both tables above say v0.25.0 because that is what the CHAIN runs. The two agree again only after the upgrade window. Reading `0.26.0` in the crate and concluding these rows are stale is the mistake this paragraph exists to prevent.
+**The crate version is not this row.** `programs/turf_vault/Cargo.toml` reads `0.26.0` as of 2026-09-15: that is what the SOURCE is, and it is the label a freshly built IDL will carry. The mainnet table says v0.25.0 because that is what the mainnet CHAIN runs; devnet agrees with the crate since 2026-10-12. Mainnet agrees only after its upgrade window. Reading `0.26.0` in the crate and concluding these rows are stale is the mistake this paragraph exists to prevent.
 
 **The `VaultState` threshold rows above describe v0.25, which is what is DEPLOYED.** They say
 2-of-3 because that is what the deployed program can express: `validate_multisig`
 takes exactly two signers and never reads the `threshold` field at all. v0.26
 replaces that with per-action thresholds stored in a `GovernanceConfig` PDA
 (3 for anything that moves money or changes who governs, 2 for pause, 3 for
-unpause), and widens the signer set to five slots. **None of that is live yet** —
+unpause), and widens the signer set to five slots. **It is live on devnet only** (2026-10-12); on mainnet none of it is —
 do not read the new table in `CHANGELOG.md` as a description of the chain.
 
 When v0.26 does land, two rows here need re-deriving and one step must not be
@@ -74,7 +103,7 @@ off either cluster and is the cheapest way to re-derive the signer rows above;
 run on 2026-09-15 it reported 1515-byte accounts and the same three signers on
 both clusters, with slots 4 and 5 empty.
 
-**The upgrade authority is per cluster.** Mainnet's Squads vault PDA (`Bk9sS7ii...`) is a different vault from devnet's (`BW13kgfi...`). Never carry one cluster's vault address to the other; the devnet address is the one that historically leaked into mainnet-facing prose. The `VaultState` signer set and threshold are identical on both clusters today, but nothing in the program ties them together — each cluster's `VaultState` was written by its own `initialize`, and `update_signers` can move one without the other. Read the cluster you mean.
+**The upgrade authority is per cluster.** Mainnet's Squads vault PDA (`Bk9sS7ii...`) is a different vault from devnet's (`BW13kgfi...`). Never carry one cluster's vault address to the other; the devnet address is the one that historically leaked into mainnet-facing prose. The `VaultState` signer sets DIFFER since 2026-10-12 (devnet holds no mainnet signer), and nothing in the program ties them together — each cluster's `VaultState` was written by its own `initialize`, and `update_signers` can move one without the other. Read the cluster you mean.
 
 Do not infer the live mainnet version from Turf Monster's committed IDL file alone. The source tree can carry a next-upgrade IDL before the Heroku app has accepted it, so that file can describe a program which is not yet on chain. Until 2026-09-15 there was a second and worse way to be misled: an unreleased tree could keep the released crate version, so a freshly built IDL's `metadata.version` read identically to the live one and no comparison could separate them. `scripts/tests/crate-version.test.js` now refuses that tree. Treat the version as a label for humans even so — it is a DECLARATION rather than a measurement, true only because someone wrote it down, so never branch on it. Live truth is the chain: the instruction-set probe under **Verification** below, cross-checked against the `EXPECTED_IDL_HASH` configured on `turf-monster-mainnet`. This note records that reading; it does not replace it. Its mainnet rows once sat nearly three months stale while claiming to have been verified.
 
