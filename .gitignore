@@ -16,3 +16,6 @@ validator.log
 
 # Hidden per-task git worktrees.
 .worktrees/
+
+# Local tooling scratch (bin/submit-wait writes its log and pid under tmp/ship-wait).
+tmp/

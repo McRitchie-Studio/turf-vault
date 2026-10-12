@@ -1,7 +1,0 @@
-{
-  "slug": "squad-tools-hardening",
-  "pid": 66439,
-  "log": "/Users/alex/projects/turf-vault/.worktrees/squad-tools-hardening/tmp/ship-wait/ship-squad-tools-hardening.log",
-  "command": "/Users/alex/projects/.agents/tooling/3aae7e6a103c40ab49a16dbaeecad30b4ee471f4/bin/submit squad-tools-hardening -m squad tools: gate a mainnet upgrade send on vault spill and buffer sha256; prefer an executed transfer match; pin read-back before signing",
-  "started_at": "2026-10-12T23:11:42Z"
-}
