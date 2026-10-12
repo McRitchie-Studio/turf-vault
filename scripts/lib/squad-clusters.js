@@ -136,6 +136,49 @@ const AGENT_SEATS = {
 };
 
 /**
+ * Mr. McRitchie's own wallets: the seats whose approval a MAINNET vault
+ * transaction must carry before an agent may execute it (Steffon's
+ * `squad-vault-ops` SOP, enforced by `scripts/lib/vault-transfer.js`).
+ *
+ * Like `AGENT_SEATS`, this is a list of KEYS, not a claim about the chain. It
+ * says "these three are his"; whether each is seated is read from the chain on
+ * every run. Read off mainnet 2026-10-12, the Squad `4H3fP3ot…` is threshold 3
+ * of 5, every member mask 7, and its five members are exactly the two mainnet
+ * agent seats above plus these three — `scripts/tests/squad-clusters.test.js`
+ * pins that union so the next rotation has to update it on purpose.
+ */
+const OPERATOR_KEYS = [
+  "7ZDJp7FUHhuceAqcW9CHe81hCiaMTjgWAXfprBM59Tcr",
+  "9gACbzsCLmkYF9Yx1EBGmwMvvyfuTquJ6qs8QsoQvHXf",
+  "3Qj4v9qjhXgkru6zCRCErRVhy8Q6qU3NrNpvpXLTZboA",
+];
+
+/**
+ * Keys no agent signs a MAINNET transaction with, whatever they are seated on.
+ * Xan's key is production's `SOLANA_ADMIN_KEY`; Mason's is retired; Mack is a
+ * devnet `VaultState` agent key. A script that loads a key checks it here
+ * before it signs anything on mainnet.
+ */
+const MAINNET_FORBIDDEN_SIGNERS = {
+  "8K81w4e6UcB7TiANhM9N8sAgijJvTxxybRi8AENRaRYd": "Xan (production SOLANA_ADMIN_KEY)",
+  CytJS23p1zCM2wvUUngiDePtbMB484ebD7bK4nDqWjrR: "Mason (retired)",
+  foUuRyeibadQoGdKXZ9pBGDqmkb1jY1jYsu8dZ29nds: "Mack (devnet agent)",
+};
+
+/**
+ * The page Mr. McRitchie approves from. Squads routes a Squad by its VAULT PDA:
+ * the multisig address 404s (measured 2026-09-29; turf-monster
+ * `Solana::Config.squads_app_url` records it). `app.squads.so` serves both
+ * clusters, so the address carries the cluster.
+ */
+function squadsTransactionsUrl(vaultPda) {
+  if (typeof vaultPda !== "string" || vaultPda.length < 32) {
+    throw new ClusterError(`squadsTransactionsUrl needs the vault PDA (got ${JSON.stringify(vaultPda)})`);
+  }
+  return `https://app.squads.so/squads/${vaultPda}/transactions`;
+}
+
+/**
  * Where one seat's secret is read from, and with which token.
  *
  * An `AGENT_VAULT` seat honours `MCR_OP_VAULT_AGENT` exactly as every seat did
@@ -190,6 +233,7 @@ const MEMBER_NAMES = {
   BLSBw8fXHzZc5pbaYCKMpMSsrtXBTbWXpUPVzMrXx9oo:
     "EXPOSED admin solana.turf.admin (rotated out of both 2026-10-09: mainnet #6, devnet #19)",
   "8K81w4e6UcB7TiANhM9N8sAgijJvTxxybRi8AENRaRYd": "Xan (agent)",
+  foUuRyeibadQoGdKXZ9pBGDqmkb1jY1jYsu8dZ29nds: "Mack (agent; devnet VaultState only)",
   CytJS23p1zCM2wvUUngiDePtbMB484ebD7bK4nDqWjrR: "Mason (retired: live Squads 2026-09-15, 9dCLM 2026-09-16)",
   F6f8h5yynbnkgWvU5abQx3RJxJpe8EoQmeFBuNKdKzhZ: "LEAKED agent.solana (evicted: devnet 2026-06-06, 9dCLM 2026-09-16)",
 };
@@ -291,7 +335,9 @@ module.exports = {
   ClusterError,
   DEFAULT_RPC,
   GENESIS,
+  MAINNET_FORBIDDEN_SIGNERS,
   MEMBER_NAMES,
+  OPERATOR_KEYS,
   REQUIRED_ADDRESSES,
   SQUAD_JSON,
   addressesFor,
@@ -299,4 +345,5 @@ module.exports = {
   memberName,
   resolveCluster,
   seatSecretSource,
+  squadsTransactionsUrl,
 };

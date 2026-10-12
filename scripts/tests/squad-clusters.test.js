@@ -44,13 +44,16 @@ const {
   AGENT_VAULT,
   ClusterError,
   GENESIS,
+  MAINNET_FORBIDDEN_SIGNERS,
   MEMBER_NAMES,
+  OPERATOR_KEYS,
   SQUAD_JSON,
   addressesFor,
   canonicalCluster,
   memberName,
   resolveCluster,
   seatSecretSource,
+  squadsTransactionsUrl,
 } = require("../lib/squad-clusters");
 
 const cfg = () => JSON.parse(fs.readFileSync(SQUAD_JSON, "utf8"));
@@ -193,6 +196,56 @@ test("the roster's public keys are the LIVE agent seats on each cluster", () => 
       "8K81w4e6UcB7TiANhM9N8sAgijJvTxxybRi8AENRaRYd", // Xan — devnet ONLY since 09:41
     ]
   );
+});
+
+test("the mainnet Squad's five seats, as read off chain 2026-10-12", () => {
+  // Read 2026-10-12 from multisig 4H3fP3ot…: threshold 3, five members, every
+  // mask 7 (Initiate|Vote|Execute). The two agent seats plus Mr. McRitchie's
+  // three are EXACTLY those five. This file never claims membership (the chain
+  // decides on every run), but a rotation that changes the set has to change
+  // this test on purpose — that is how BLSBw8 lingered in prose after #6.
+  const LIVE_MAINNET_SEATS = [
+    "7auwTLSvNniSUeAgL6v9RStMXJhWrrUhSJgwFWLpcqC", // system (agent)
+    "3Qj4v9qjhXgkru6zCRCErRVhy8Q6qU3NrNpvpXLTZboA", // operator
+    "4bKNSqkrKeggSyrds16Ak7rcB4ibvGJ4ZLsKjvQgC3Vk", // governance (agent)
+    "7ZDJp7FUHhuceAqcW9CHe81hCiaMTjgWAXfprBM59Tcr", // operator (Phantom)
+    "9gACbzsCLmkYF9Yx1EBGmwMvvyfuTquJ6qs8QsoQvHXf", // operator
+  ];
+  const roster = [...AGENT_SEATS["mainnet-beta"].map((s) => s.pubkey), ...OPERATOR_KEYS];
+  assert.deepEqual([...roster].sort(), [...LIVE_MAINNET_SEATS].sort());
+  assert.equal(new Set(roster).size, 5, "no key is both an agent seat and an operator seat");
+  assert.ok(!roster.includes("BLSBw8fXHzZc5pbaYCKMpMSsrtXBTbWXpUPVzMrXx9oo"), "BLSBw8 left the Squad at #6");
+});
+
+test("no forbidden mainnet signer is an agent seat or an operator seat", () => {
+  // squad-vault-ops: no agent signs mainnet with Xan (8K81), Mason (CytJ) or Mack.
+  assert.deepEqual(Object.keys(MAINNET_FORBIDDEN_SIGNERS).sort(), [
+    "8K81w4e6UcB7TiANhM9N8sAgijJvTxxybRi8AENRaRYd",
+    "CytJS23p1zCM2wvUUngiDePtbMB484ebD7bK4nDqWjrR",
+    "foUuRyeibadQoGdKXZ9pBGDqmkb1jY1jYsu8dZ29nds",
+  ]);
+  for (const key of Object.keys(MAINNET_FORBIDDEN_SIGNERS)) {
+    assert.ok(!AGENT_SEATS["mainnet-beta"].some((s) => s.pubkey === key), `${key} is a mainnet agent seat`);
+    assert.ok(!OPERATOR_KEYS.includes(key), `${key} is listed as an operator seat`);
+  }
+});
+
+test("the operator keys are the three wallets named for Mr. McRitchie", () => {
+  for (const key of OPERATOR_KEYS) assert.match(memberName(key), /\(operator\)$/);
+  const named = Object.keys(MEMBER_NAMES).filter((k) => /\(operator\)$/.test(MEMBER_NAMES[k]));
+  assert.deepEqual([...named].sort(), [...OPERATOR_KEYS].sort());
+});
+
+test("the Squads link keys on the VAULT PDA, never the multisig", () => {
+  // The multisig address 404s on app.squads.so (turf-monster
+  // Solana::Config.squads_app_url records the 2026-09-29 measurement).
+  const mainnet = resolveCluster("mainnet");
+  assert.equal(
+    squadsTransactionsUrl(mainnet.vaultPda),
+    "https://app.squads.so/squads/Bk9sS7iiSRL18vuo2KVzkeGw7EekKqxMCjrdoyGGdJm/transactions"
+  );
+  assert.ok(!squadsTransactionsUrl(mainnet.vaultPda).includes(mainnet.multisigPda));
+  assert.throws(() => squadsTransactionsUrl(undefined), ClusterError);
 });
 
 test("the exposed admin key is offered on NO cluster", () => {
