@@ -69,14 +69,23 @@ const {
   approvalsOwed,
   assertSignerAllowed,
   checkExpectedIndex,
+  checkSourceFunds,
   executeGate,
+  findMatchingIndex,
   formatAmount,
   handoff,
+  indexMovedAdvice,
   matchesPlan,
   parseAmount,
+  secretBytesFrom,
 } = require("./lib/vault-transfer");
 
 const RENT_RESERVE_LAMPORTS = 10_000_000; // 0.01 SOL: tx + proposal rent and fees
+// Every transaction sets its own compute budget. Squads create/approve/execute of
+// one transfer each use well under 200k CU; the price lands it under mainnet load.
+// Worst case per transaction: 200_000 CU x 50_000 micro-lamports = 0.00001 SOL.
+const COMPUTE_UNIT_LIMIT = 200_000;
+const PRIORITY_MICRO_LAMPORTS = 50_000;
 const MODES = ["plan", "send", "approve", "execute"];
 
 function fail(message) {
@@ -102,15 +111,18 @@ function parseArgs(argv) {
   };
 }
 
+/**
+ * A parser's error quotes the text it choked on, and here that text is a secret.
+ * secretBytesFrom() throws only fixed messages; this adds the SOURCE (an env var
+ * or item name), never anything read from it.
+ */
 function keypairFrom(raw, source) {
-  const text = String(raw).trim();
-  let secret = null;
-  if (text.startsWith("[")) secret = Uint8Array.from(JSON.parse(text));
-  else {
-    const decoded = (bs58.default || bs58).decode(text);
-    if (decoded.length === 64) secret = decoded;
+  let secret;
+  try {
+    secret = secretBytesFrom(raw, (text) => (bs58.default || bs58).decode(text));
+  } catch (error) {
+    throw new TransferError(`${source}: ${error.message}`);
   }
-  if (!secret) throw new Error(`${source} did not parse as a 64-byte secret key`);
   const keypair = Keypair.fromSecretKey(Uint8Array.from(secret));
   secret.fill(0);
   return keypair;
@@ -148,12 +160,33 @@ async function sendTx(connection, payer, signers, instructions, label) {
   const message = new TransactionMessage({
     payerKey: payer.publicKey,
     recentBlockhash: blockhash,
-    instructions: [ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 1000 }), ...instructions],
+    instructions: [
+      ComputeBudgetProgram.setComputeUnitLimit({ units: COMPUTE_UNIT_LIMIT }),
+      ComputeBudgetProgram.setComputeUnitPrice({ microLamports: PRIORITY_MICRO_LAMPORTS }),
+      ...instructions,
+    ],
   }).compileToV0Message();
   const tx = new VersionedTransaction(message);
   tx.sign(signers);
   const signature = await connection.sendTransaction(tx, { maxRetries: 10 });
-  const result = await connection.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, "confirmed");
+  let result;
+  try {
+    result = await connection.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, "confirmed");
+  } catch (error) {
+    // The blockhash expired before confirmation. The transaction MAY still have
+    // landed. Ask once; otherwise stop and say how to find out, because a blind
+    // re-run of `send` is how a second proposal for the same move gets created.
+    const status = (await connection.getSignatureStatus(signature, { searchTransactionHistory: true })).value;
+    if (status && !status.err && ["confirmed", "finalized"].includes(status.confirmationStatus)) {
+      console.log(`   ${label.padEnd(34)} ${signature} (confirmed after the blockhash expired)`);
+      return signature;
+    }
+    throw new TransferError(
+      `${label}: confirmation expired for ${signature} (${error.message.split("\n")[0]}). It may still land. ` +
+        `Do NOT re-run send. Run plan: if the index moved, plan's send refusal names the transaction that ` +
+        `carries this transfer and the approve command that finishes it.`
+    );
+  }
   if (result.value.err) throw new Error(`${label} failed: ${JSON.stringify(result.value.err)} (${signature})`);
   console.log(`   ${label.padEnd(34)} ${signature}`);
   return signature;
@@ -197,14 +230,28 @@ async function readBack(connection, multisigPda, index, plan, quiet = false) {
   }
   const approved = state ? state.approved.map((k) => k.toBase58()) : [];
   const status = state ? state.status.__kind : null;
-  if (quiet) return { verdict, status, approved };
+  if (quiet) return { verdict, status, approved, instructions };
   console.log(`   vault tx #${index} ${transaction.toBase58()} (vault index ${vt.vaultIndex})`);
   console.log(`   instruction: ${verdict.ok ? "EXACTLY the planned transfer" : "MISMATCH — " + verdict.reasons.join("; ")}`);
   console.log(
     `   proposal ${proposal.toBase58()}: ${state ? state.status.__kind : "NOT FOUND"}; approved ` +
       `[${approved.map((k) => `${k.slice(0, 6)} ${memberName(k)}`).join(", ")}]`
   );
-  return { verdict, status, approved };
+  return { verdict, status, approved, instructions };
+}
+
+/** Index moved since the plan: was one of the new transactions THIS move? */
+async function adviseOnMovedIndex(connection, multisigPda, from, to, plan, rerunArgs) {
+  const candidates = [];
+  for (let i = from; i <= to && candidates.length < 20; i += 1n) {
+    try {
+      const rb = await readBack(connection, multisigPda, i, plan, true);
+      candidates.push({ index: i, instructions: rb.instructions, status: rb.status });
+    } catch (_) {
+      /* a config or batch transaction is not a vault transaction: not this move */
+    }
+  }
+  return indexMovedAdvice(findMatchingIndex(candidates, plan), rerunArgs);
 }
 
 (async () => {
@@ -252,7 +299,10 @@ async function readBack(connection, multisigPda, index, plan, quiet = false) {
       if (mintInfo.owner.toBase58() !== TOKEN_PROGRAM) fail("only classic SPL mints are supported (not Token-2022)");
       const { decimals } = await spl.getMint(connection, mint);
       const source = spl.getAssociatedTokenAddressSync(mint, vault, true);
-      const destination = spl.getAssociatedTokenAddressSync(mint, to);
+      // allowOwnerOffCurve: a PDA destination (another program's vault) has an
+      // ordinary ATA too. Said out loud, because a PDA owner is not a person's wallet.
+      if (!PublicKey.isOnCurve(to.toBytes())) console.log(`   NOTE: ${args.to} is off-curve (a PDA), not a keypair wallet`);
+      const destination = spl.getAssociatedTokenAddressSync(mint, to, true);
       if (!(await connection.getAccountInfo(destination))) {
         fail(`${args.to} has no token account for ${args.mint}. Create it first (any wallet can); the vault does not pay rent for it.`);
       }
@@ -275,18 +325,34 @@ async function readBack(connection, multisigPda, index, plan, quiet = false) {
   }
   const amountText = `${formatAmount(plan.amount, plan.kind === "sol" ? SOL_DECIMALS : plan.decimals)} ${symbol}`;
 
+  // What the vault actually holds of the asset being moved.
+  let sourceFunds;
+  if (plan.kind === "sol") {
+    sourceFunds = { exists: true, balance: BigInt(await connection.getBalance(vault)) };
+  } else {
+    const info = await connection.getAccountInfo(new PublicKey(plan.source));
+    sourceFunds = info
+      ? { exists: true, balance: BigInt((await connection.getTokenAccountBalance(new PublicKey(plan.source))).value.amount) }
+      : { exists: false, balance: 0n };
+  }
+
   // --- the chain ---------------------------------------------------------
   const ms = await multisig.accounts.Multisig.fromAccountAddress(connection, multisigPda);
   const current = BigInt(ms.transactionIndex.toString());
   const members = ms.members.map((m) => ({ key: m.key.toBase58(), mask: m.permissions.mask }));
   const seats = cfg.agentSeats.filter((s) => members.some((m) => m.key === s.pubkey));
   const system = seats.find((s) => s.role.startsWith("system"));
+  const rerunArgs = () =>
+    process.argv
+      .slice(2)
+      .filter((a) => !MODES.includes(a) && !a.startsWith("--expect-index=") && !a.startsWith("--index="))
+      .join(" ");
   const operatorNames = OPERATOR_KEYS.filter((k) => members.some((m) => m.key === k)).map((k) => k.slice(0, 4));
 
   console.log(`\n${cfg.cluster.toUpperCase()}  squad-vault-transfer ${args.mode}`);
   console.log(`   multisig ${cfg.multisigPda}  threshold ${ms.threshold} of ${members.length}  transaction_index ${current}`);
   console.log(`   vault    ${cfg.vaultPda}  ${(await connection.getBalance(vault)) / LAMPORTS_PER_SOL} SOL`);
-  console.log(`   move     ${amountText} -> ${args.to}`);
+  console.log(`   move     ${amountText} -> ${args.to}  (vault holds ${sourceFunds.balance} base units)`);
   for (const m of members) console.log(`   member   ${m.key} mask ${m.mask}  ${memberName(m.key)}`);
   if (!system) fail(`no system seat of the roster is a live member of ${cfg.multisigPda}`);
 
@@ -295,14 +361,26 @@ async function readBack(connection, multisigPda, index, plan, quiet = false) {
     const { transaction, proposal } = pdas(multisigPda, next);
     console.log(`\n   next index ${next}: vault tx ${transaction.toBase58()}  proposal ${proposal.toBase58()}`);
     console.log(`   agent seats seated: ${seats.map((s) => `${s.role} ${s.pubkey.slice(0, 6)}`).join(", ")}`);
-    console.log(`\n   to queue it:  node scripts/squad-vault-transfer.js send ${process.argv.slice(2).filter((a) => a !== "plan").join(" ")} --expect-index=${current}\n`);
+    try {
+      checkSourceFunds(plan, sourceFunds);
+    } catch (error) {
+      console.log(`\n   WARNING: ${error.message}; send will refuse.`);
+    }
+    console.log(`\n   to queue it:  node scripts/squad-vault-transfer.js send ${rerunArgs()} --expect-index=${current}\n`);
     return;
   }
 
   try {
     if (args.mode === "send") {
-      const index = checkExpectedIndex(current, args.expectIndex);
-      if (plan.kind === "sol" && BigInt(await connection.getBalance(vault)) < plan.amount) fail("the vault holds less than the amount");
+      let index;
+      try {
+        index = checkExpectedIndex(current, args.expectIndex);
+      } catch (error) {
+        const expected = /^\d+$/.test(String(args.expectIndex)) ? BigInt(args.expectIndex) : null;
+        if (expected === null || expected >= current) throw error;
+        fail(`${error.message}\n   ${await adviseOnMovedIndex(connection, multisigPda, expected + 1n, current, plan, rerunArgs())}`);
+      }
+      checkSourceFunds(plan, sourceFunds);
       const payer = loadSeat(system, cfg.cluster);
       if ((await connection.getBalance(payer.publicKey)) < RENT_RESERVE_LAMPORTS) fail(`${system.role} holds under 0.01 SOL for rent and fees`);
       const memo = args.memo || `vault transfer ${amountText}`;

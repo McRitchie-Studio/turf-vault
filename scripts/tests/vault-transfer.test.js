@@ -32,12 +32,16 @@ const {
   approvalsOwed,
   assertSignerAllowed,
   checkExpectedIndex,
+  checkSourceFunds,
   describeInstruction,
   executeGate,
+  findMatchingIndex,
   formatAmount,
   handoff,
+  indexMovedAdvice,
   matchesPlan,
   parseAmount,
+  secretBytesFrom,
 } = require("../lib/vault-transfer");
 const { MAINNET_FORBIDDEN_SIGNERS, OPERATOR_KEYS } = require("../lib/squad-clusters");
 
@@ -125,6 +129,153 @@ test("the read-back passes ONLY the exact planned SPL transfer", () => {
   assert.equal(matchesPlan([ix({ vault: HWQC })], plan).ok, false, "authority must be the vault");
   assert.equal(matchesPlan([ix({ decimals: 9 })], plan).ok, false);
   assert.equal(matchesPlan([solTransfer(VAULT, HWQC, 290_000n)], plan).ok, false, "kind mismatch");
+});
+
+// --- each decoder and read-back guard, one case per guard ---------------------
+// Review (2026-10-12) ran 28 guard mutants against lib/vault-transfer.js and 8
+// survived. Each case below fails when exactly one guard is removed.
+
+const SPL = {
+  kind: "spl",
+  vault: VAULT,
+  mint: "MintMintMintMintMintMintMintMintMintMint111",
+  source: "SourceAtaSourceAtaSourceAtaSourceAta1111111",
+  destination: "DestAtaDestAtaDestAtaDestAtaDestAta11111111",
+  amount: 290_000n,
+  decimals: 6,
+};
+const splIx = (over = {}) => {
+  const p = { ...SPL, ...over };
+  return splTransferChecked(p.source, p.mint, p.destination, p.vault, p.amount, p.decimals);
+};
+
+test("a SOL-transfer layout under any program but System is not a SOL transfer", () => {
+  const forged = { ...solTransfer(VAULT, HWQC, 6_200_000_000n), programId: TOKEN_PROGRAM };
+  assert.equal(describeInstruction(forged).kind, "other");
+  assert.equal(matchesPlan([forged], SOL_PLAN).ok, false);
+  const elsewhere = { ...solTransfer(VAULT, HWQC, 6_200_000_000n), programId: "AnyOtherProgram1111111111111111111111111111" };
+  assert.equal(matchesPlan([elsewhere], SOL_PLAN).ok, false);
+});
+
+test("a TransferChecked layout under any program but Token is not an SPL transfer", () => {
+  const forged = { ...splIx(), programId: SYSTEM_PROGRAM };
+  assert.equal(describeInstruction(forged).kind, "other");
+  assert.equal(matchesPlan([forged], SPL).ok, false);
+  const t22 = { ...splIx(), programId: "TokenzQdBNbLqP5VEhdkAS6EPFLC1PE6sTDAZZTF1qTX" };
+  assert.equal(matchesPlan([t22], SPL).ok, false, "Token-2022 is not the classic program");
+});
+
+test("a System instruction with the wrong discriminator or length is not a transfer", () => {
+  const assign = solTransfer(VAULT, HWQC, 6_200_000_000n);
+  assign.data.writeUInt32LE(3, 0); // CreateAccountWithSeed's slot, same 12 bytes
+  assert.equal(describeInstruction(assign).kind, "other");
+  assert.equal(matchesPlan([assign], SOL_PLAN).ok, false);
+
+  const long = solTransfer(VAULT, HWQC, 6_200_000_000n);
+  long.data = Buffer.concat([long.data, Buffer.alloc(4)]);
+  assert.equal(describeInstruction(long).kind, "other", "trailing bytes are not a Transfer");
+});
+
+test("a Token instruction with the wrong discriminator or length is not TransferChecked", () => {
+  const approve = splIx();
+  approve.data[0] = 13; // ApproveChecked: same 10-byte layout
+  assert.equal(describeInstruction(approve).kind, "other");
+  assert.equal(matchesPlan([approve], SPL).ok, false);
+
+  const long = splIx();
+  long.data = Buffer.concat([long.data, Buffer.alloc(1)]);
+  assert.equal(describeInstruction(long).kind, "other");
+});
+
+test("the SPL read-back checks the mint, the source and the account count, each on its own", () => {
+  const wrongMint = matchesPlan([splIx({ mint: "OtherMintOtherMintOtherMintOtherMint1111111" })], SPL);
+  assert.equal(wrongMint.ok, false);
+  assert.deepEqual(wrongMint.reasons.map((r) => r.split(":")[0]), ["mint"]);
+
+  const wrongSource = matchesPlan([splIx({ source: "OtherSourceOtherSourceOtherSource1111111111" })], SPL);
+  assert.equal(wrongSource.ok, false);
+  assert.deepEqual(wrongSource.reasons.map((r) => r.split(":")[0]), ["source"]);
+
+  const fifth = splIx();
+  fifth.accounts.push(PHANTOM);
+  const extra = matchesPlan([fifth], SPL);
+  assert.equal(extra.ok, false, "a 5th account (a multisig signer slot) is not the planned transfer");
+  assert.deepEqual(extra.reasons.map((r) => r.split(":")[0]), ["accounts"]);
+});
+
+test("a kind mismatch is refused AS a kind mismatch, before any field is compared", () => {
+  const solAgainstSpl = matchesPlan([solTransfer(VAULT, HWQC, 290_000n)], SPL);
+  assert.deepEqual(solAgainstSpl.reasons, ["instruction is sol, plan is spl"]);
+  const splAgainstSol = matchesPlan([splIx({ amount: 6_200_000_000n })], SOL_PLAN);
+  assert.deepEqual(splAgainstSol.reasons, ["instruction is spl, plan is sol"]);
+});
+
+// --- the secret never reaches output ------------------------------------------
+
+test("a malformed secret is refused with a FIXED message that quotes none of it", () => {
+  const throwsEcho = (text) => {
+    throw new Error(`Non-base58 character in ${text}`);
+  };
+  const malformed = [
+    "[12,34,56,secretTAILabcdefghij]",
+    "[1,2,3",
+    `[${Array(63).fill(7).join(",")}]`,
+    `[${Array(64).fill(300).join(",")}]`,
+    "{\"not\":\"an array of secretbytes\"}",
+    "4Nd1mXYZsecretbase58notlongenough",
+    "",
+  ];
+  for (const raw of malformed) {
+    let message = null;
+    try {
+      secretBytesFrom(raw, throwsEcho);
+    } catch (error) {
+      assert.ok(error instanceof TransferError, `${JSON.stringify(raw)} should raise TransferError`);
+      message = error.message;
+    }
+    assert.ok(message, `${JSON.stringify(raw)} should refuse`);
+    assert.match(message, /^secret is not a 64-byte (JSON array|base58 string)$/);
+    // No 4-character run of the secret appears in what would be printed.
+    for (let i = 0; i + 4 <= raw.length; i += 1) {
+      const piece = raw.slice(i, i + 4);
+      if (/^(secr|ecre|cret|JSON|arra|rray|base|ase5|se58|stri|trin|ring|byte)$/.test(piece)) continue;
+      assert.ok(!message.includes(piece), `the refusal leaks ${JSON.stringify(piece)} of the secret`);
+    }
+  }
+});
+
+test("a well-formed secret parses in both forms", () => {
+  const bytes = Array.from({ length: 64 }, (_, i) => i);
+  assert.deepEqual(Array.from(secretBytesFrom(JSON.stringify(bytes), () => null)), bytes);
+  assert.deepEqual(Array.from(secretBytesFrom("anything", () => Uint8Array.from(bytes))), bytes);
+  assert.throws(() => secretBytesFrom("short", () => new Uint8Array(32)), /64-byte base58/);
+});
+
+// --- index moved, and source funds --------------------------------------------
+
+test("a moved index that already carries this transfer says approve, never send again", () => {
+  const candidates = [
+    { index: 7n, instructions: [solTransfer(VAULT, PHANTOM, 1n)], status: "Active" },
+    { index: 8n, instructions: [solTransfer(VAULT, HWQC, 6_200_000_000n)], status: "Executed" },
+    { index: 9n, instructions: [solTransfer(VAULT, HWQC, 6_200_000_000n)], status: "Active" },
+  ];
+  assert.equal(findMatchingIndex(candidates, SOL_PLAN), 9n, "an Executed match is not resumable");
+  assert.equal(findMatchingIndex(candidates.slice(0, 2), SOL_PLAN), null);
+  assert.equal(
+    findMatchingIndex([{ index: 10n, instructions: [solTransfer(VAULT, HWQC, 6_200_000_000n)], status: "Approved" }], SOL_PLAN),
+    10n
+  );
+  assert.match(indexMovedAdvice(9n, "--cluster=mainnet --to=x --sol=6.2"), /approve --cluster=mainnet --to=x --sol=6\.2 --index=9/);
+  assert.match(indexMovedAdvice(9n, ""), /Do NOT send again/);
+  assert.match(indexMovedAdvice(null, ""), /re-plan/);
+});
+
+test("the vault must hold the amount, and an SPL vault must have the token account", () => {
+  assert.doesNotThrow(() => checkSourceFunds(SOL_PLAN, { exists: true, balance: 6_200_000_000n }));
+  assert.throws(() => checkSourceFunds(SOL_PLAN, { exists: true, balance: 6_199_999_999n }), /less than/);
+  assert.throws(() => checkSourceFunds(SPL, { exists: false, balance: 0n }), /no token account/);
+  assert.throws(() => checkSourceFunds(SPL, { exists: true, balance: 289_999n }), /less than/);
+  assert.doesNotThrow(() => checkSourceFunds(SPL, { exists: true, balance: 290_000n }));
 });
 
 test("an unknown instruction is described, never guessed at", () => {

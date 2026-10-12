@@ -168,6 +168,76 @@ function checkExpectedIndex(current, expected) {
   return BigInt(current) + 1n;
 }
 
+/**
+ * The index moved since the plan. Was it THIS move? `candidates` are the
+ * transactions created since, read back as `{ index, instructions, status }`.
+ * Returns the first index that still carries exactly the planned transfer and
+ * can still take votes (Active or Approved), else null. A match means "approve
+ * or execute THAT index"; never "send again".
+ */
+function findMatchingIndex(candidates, plan) {
+  for (const c of candidates) {
+    if (!["Active", "Approved"].includes(c.status)) continue;
+    if (matchesPlan(c.instructions, plan).ok) return BigInt(c.index);
+  }
+  return null;
+}
+
+/** What to tell the operator when the index moved: approve the match, or stop and read. */
+function indexMovedAdvice(match, rerunArgs) {
+  if (match !== null) {
+    return (
+      `transaction #${match} already carries exactly this transfer. Do NOT send again; finish it with:\n` +
+      `   node scripts/squad-vault-transfer.js approve ${rerunArgs} --index=${match}`
+    );
+  }
+  return "no transaction created since the plan carries this transfer. Read the Squads page, then re-plan.";
+}
+
+/**
+ * The vault must hold the amount BEFORE a proposal exists: a proposal that can
+ * never execute is rent-paying litter and an index that looks like progress.
+ * `source` is `{ exists, balance }` read from chain (lamports, or token base units).
+ */
+function checkSourceFunds(plan, source) {
+  if (plan.kind === "spl" && !source.exists) {
+    throw new TransferError(`the vault has no token account ${plan.source} for mint ${plan.mint}; nothing to send`);
+  }
+  if (BigInt(source.balance) < plan.amount) {
+    throw new TransferError(`the vault holds ${source.balance}, less than the ${plan.amount} planned (base units)`);
+  }
+}
+
+/**
+ * A secret's 64 bytes, from the JSON byte-array or base58 form. Every failure is
+ * a FIXED message: a parser's own error quotes the text it choked on, and that
+ * text is the secret. `decodeBase58` is injected so this file needs no SDK.
+ */
+function secretBytesFrom(raw, decodeBase58) {
+  const text = String(raw ?? "").trim();
+  if (text.startsWith("[")) {
+    let parsed;
+    try {
+      parsed = JSON.parse(text);
+    } catch (_) {
+      throw new TransferError("secret is not a 64-byte JSON array");
+    }
+    const ok = Array.isArray(parsed) && parsed.length === 64 && parsed.every((b) => Number.isInteger(b) && b >= 0 && b <= 255);
+    const bytes = ok ? Uint8Array.from(parsed) : null;
+    parsed = null;
+    if (!bytes) throw new TransferError("secret is not a 64-byte JSON array");
+    return bytes;
+  }
+  let decoded;
+  try {
+    decoded = decodeBase58(text);
+  } catch (_) {
+    throw new TransferError("secret is not a 64-byte base58 string");
+  }
+  if (!decoded || decoded.length !== 64) throw new TransferError("secret is not a 64-byte base58 string");
+  return Uint8Array.from(decoded);
+}
+
 /** Refuse a forbidden key on mainnet, whatever it is seated as. */
 function assertSignerAllowed(pubkey, cluster, forbidden) {
   if (cluster === "mainnet-beta" && Object.prototype.hasOwnProperty.call(forbidden, pubkey)) {
@@ -225,10 +295,14 @@ module.exports = {
   approvalsOwed,
   assertSignerAllowed,
   checkExpectedIndex,
+  checkSourceFunds,
   describeInstruction,
   executeGate,
+  findMatchingIndex,
   formatAmount,
   handoff,
+  indexMovedAdvice,
   matchesPlan,
   parseAmount,
+  secretBytesFrom,
 };
