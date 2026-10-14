@@ -234,7 +234,8 @@ const MEMBER_NAMES = {
   "9gACbzsCLmkYF9Yx1EBGmwMvvyfuTquJ6qs8QsoQvHXf": "Mr. McRitchie's third (operator)",
   "7auwTLSvNniSUeAgL6v9RStMXJhWrrUhSJgwFWLpcqC": "system (agent)",
   "2eGs8G3wzhEeNQQU2Q86BmmA2xTpDbMMae3Y1bvpZfx9": "system.devnet (agent)",
-  "4bKNSqkrKeggSyrds16Ak7rcB4ibvGJ4ZLsKjvQgC3Vk": "governance (agent; off devnet at #21 2026-10-12)",
+  "4bKNSqkrKeggSyrds16Ak7rcB4ibvGJ4ZLsKjvQgC3Vk": "governance (agent; EXPOSED 2026-10-12; off devnet at #21)",
+  "3LTLPG1s952sdNatZWtnfM7r9F3ivWSnPSqfhQLBepJ9": "governance.v2 (agent; solana.turf.governance.v2, replaces 4bKN)",
   GF4sojG9tHF2kC3jpgto1gd3b1nXLuUiAcsAiYi5Y5vb: "seat-a.devnet (agent, devnet only)",
   "39qaSh2J4VoQhn3sZCwWmb1W17VCrDMri2JoBAN6dT1o": "seat-b.devnet (agent, devnet only)",
   BLSBw8fXHzZc5pbaYCKMpMSsrtXBTbWXpUPVzMrXx9oo:

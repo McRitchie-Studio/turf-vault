@@ -29,7 +29,8 @@ const bs58m = require("bs58");
 const { execFileSync } = require("child_process");
 
 const { AGENT_SEATS, MEMBER_NAMES, resolveCluster, seatSecretSource } = require("../lib/squad-clusters");
-const { NEW_SEAT, OLD_SEAT } = require("../lib/admin-seat-rotation");
+const { ROTATION_2026_10_09 } = require("../lib/admin-seat-rotation");
+const { old: OLD_SEAT, new: NEW_SEAT } = ROTATION_2026_10_09; // the 2026-10-09 BLSBw8 -> 4bKN swap this sweep followed
 
 const bs58 = bs58m.default || bs58m;
 // Canonical mainnet mints (Circle USDC, Tether USDT). Anything else refuses.

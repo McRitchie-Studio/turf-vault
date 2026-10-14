@@ -1,20 +1,32 @@
 #!/usr/bin/env node
 /**
- * CEREMONY — rotate the exposed agent admin seat out of a Squads V4 multisig.
- * 2026-10-08, task rotate-mainnet-admin-key. Modeled on squad-membership.js.
+ * CEREMONY — swap ONE member of a Squads V4 multisig for another.
+ * 2026-10-08, task rotate-mainnet-admin-key (BLSBw8 -> 4bKN, hard-coded).
+ * 2026-10-14, task squad-seat-rotation-any-pair: the pair is --old / --new,
+ * both REQUIRED, with no default.
  *
  * ONE atomic config transaction per cluster:
- *     removeMember(BLSBw8…)  +  addMember(4bKN…, mask 7)      threshold unchanged
- * BLSBw8 (`solana.turf.admin`) NEVER signs anything here. The clean agent seat
- * of the cluster (`system` on mainnet, `system.devnet` on devnet) creates, pays
- * rent, approves once and — after the humans' approvals — executes.
+ *     removeMember(<old>)  +  addMember(<new>, <old's live mask>)   threshold unchanged
+ * The cluster's clean agent seat (`system` on mainnet, `system.devnet` on
+ * devnet) creates, pays rent, approves once and, once the threshold is met on
+ * chain, executes. The outgoing key never creates or executes; it may cast an
+ * APPROVAL of its own removal only under --allow-outgoing-signer.
  *
- * DRY RUN BY DEFAULT, in every mode. --send arms it. --cluster is REQUIRED.
+ * DRY RUN BY DEFAULT, in every mode. --send arms it. --cluster, --old and --new
+ * are REQUIRED in every mode, because approve and execute read the on-chain
+ * transaction back against the same plan.
  *
- *   node scripts/ceremony/rotate-admin-seat.js --cluster=devnet               # plan, read-only
- *   node scripts/ceremony/rotate-admin-seat.js --cluster=devnet --send        # create + propose + 1 vote
- *   node scripts/ceremony/rotate-admin-seat.js --cluster=devnet --approve --index=19 --as=xan [--send]
- *   node scripts/ceremony/rotate-admin-seat.js --cluster=devnet --execute --index=19 [--send]
+ *   # 1. plan (read-only): validates the keys and live membership, prints the
+ *   #    plan and the stale-proposal warning
+ *   node scripts/ceremony/rotate-admin-seat.js --cluster=mainnet --old=<pk> --new=<pk>
+ *   # 2. create + propose + the creator's vote [+ a second agent vote]
+ *   node scripts/ceremony/rotate-admin-seat.js --cluster=mainnet --old=<pk> --new=<pk> --send \
+ *        [--and-approve-as=<role> [--allow-outgoing-signer]]
+ *   #    (or a later vote on its own)
+ *   node scripts/ceremony/rotate-admin-seat.js ... --approve --index=<n> --as=<role> [--allow-outgoing-signer] --send
+ *   # 3. execute: refuses until the proposal is Approved, the approvals meet the
+ *   #    threshold and, on mainnet, one of Mr. McRitchie's seats has approved
+ *   node scripts/ceremony/rotate-admin-seat.js ... --execute --index=<n> --send
  *
  * Every mode re-reads the on-chain ConfigTransaction and refuses unless its
  * actions are EXACTLY the plan (scripts/lib/admin-seat-rotation.js). Keys come
@@ -22,8 +34,8 @@
  * seatSecretSource), never from argv and never to disk; only public addresses
  * are printed.
  *
- * Like the 2026-09-15 scripts beside it, this one refuses on the chain it
- * leaves behind: once executed, BLSBw8 is not a member and every mode says so.
+ * Once executed, approve and execute refuse with "live membership no longer
+ * matches the plan": the old key is gone, which is the success signal.
  */
 "use strict";
 
@@ -32,7 +44,15 @@ const multisig = require("@sqds/multisig");
 const bs58m = require("bs58");
 const { execFileSync } = require("child_process");
 
-const { GENESIS, memberName, resolveCluster, seatSecretSource } = require("../lib/squad-clusters");
+const {
+  GENESIS,
+  MAINNET_FORBIDDEN_SIGNERS,
+  OPERATOR_KEYS,
+  memberName,
+  resolveCluster,
+  seatSecretSource,
+  squadsTransactionsUrl,
+} = require("../lib/squad-clusters");
 const R = require("../lib/admin-seat-rotation");
 
 const bs58 = bs58m.default || bs58m;
@@ -45,50 +65,30 @@ const EXPECTED_MULTISIG = {
 const CREATOR_ROLE = { "mainnet-beta": "system", devnet: "system.devnet" };
 // Rent for a two-action ConfigTransaction plus a Proposal is ~0.004 SOL; keep headroom.
 const MIN_LAMPORTS = { create: 0.02 * LAMPORTS_PER_SOL, vote: 0.001 * LAMPORTS_PER_SOL };
-const MEMO = "rotate exposed admin seat BLSBw8 -> 4bKN (rotate-mainnet-admin-key)";
-const VOTE = 0b010;
-const EXECUTE = 0b100;
-const INITIATE = 0b001;
+const OPEN_STATUSES = ["Draft", "Active", "Approved", "Executing"];
 
 // --------------------------------------------------------------------------- args
-const argv = process.argv.slice(2);
-const flag = (n) => argv.includes(n);
-const value = (n) => (argv.find((a) => a.startsWith(`${n}=`)) || "").split("=")[1];
-const SEND = flag("--send");
-const MODE = flag("--execute") && flag("--approve") ? "both" : flag("--execute") ? "execute" : flag("--approve") ? "approve" : "create";
-
 function fail(msg, code = 1) {
   console.error(`\nREFUSED — ${msg}`);
   process.exit(code);
 }
-if (MODE === "both") fail("--approve and --execute are separate steps; pass one.", 2);
-const indexArg = value("--index");
-if (MODE !== "create" && !/^\d+$/.test(indexArg || "")) fail(`--${MODE} needs --index=<n>.`, 2);
-if (MODE === "create" && indexArg) fail("create takes no --index: the next index is read from chain.", 2);
-if (MODE === "approve" && !value("--as")) fail("--approve needs --as=<roster role>, e.g. --as=xan.", 2);
+
+const A = R.parseRotationArgs(process.argv.slice(2));
+if (A.problems.length) fail(`arguments:\n  - ${A.problems.join("\n  - ")}`, 2);
+const { mode: MODE, send: SEND } = A;
+const PAIR = { old: A.old, new: A.new };
 
 let cfg;
 try {
-  cfg = resolveCluster(value("--cluster"));
+  cfg = resolveCluster(A.cluster);
 } catch (e) {
   fail(e.message, 2);
 }
-// The ONE exception to "BLSBw8 never signs" (see admin-seat-rotation.js):
-// devnet, --approve, by Mr. McRitchie's instruction 2026-10-09 10:50 MDT.
-const ALLOW_OUTGOING = flag("--allow-outgoing-signer");
-if (ALLOW_OUTGOING) {
-  const op = R.outgoingSignerOverrideProblems({ cluster: cfg.cluster, mode: MODE });
-  if (op.length) fail(op.join("; "), 2);
-}
-const OUTGOING_SEAT = {
-  role: "admin (outgoing)",
-  pubkey: R.OLD_SEAT,
-  item: "solana.turf.admin",
-  vault: "studio-agents",
-  secretField: "private-key",
-};
 if (cfg.multisigPda !== EXPECTED_MULTISIG[cfg.cluster]) {
   fail(`squad.json names multisig ${cfg.multisigPda} for ${cfg.cluster}; this ceremony expects ${EXPECTED_MULTISIG[cfg.cluster]}.`, 2);
+}
+if (!PublicKey.isOnCurve(new PublicKey(PAIR.new).toBytes())) {
+  fail(`--new ${PAIR.new} is off the ed25519 curve (a PDA); no key can sign for it.`, 2);
 }
 
 // --------------------------------------------------------------------------- helpers
@@ -104,9 +104,10 @@ async function settle(label, probe, tries = 40, delayMs = 1500) {
   throw new Error(`timed out waiting for ${label}`);
 }
 
-function loadSeat(seat, { allowOutgoing = false } = {}) {
-  const old = R.refuseOldSigner(seat.pubkey);
-  if (old.length && !allowOutgoing) throw new Error(old[0]);
+function loadSeat(seat) {
+  if (cfg.cluster === "mainnet-beta" && MAINNET_FORBIDDEN_SIGNERS[seat.pubkey]) {
+    throw new Error(`${seat.pubkey} (${MAINNET_FORBIDDEN_SIGNERS[seat.pubkey]}) never signs on mainnet.`);
+  }
   const spec = seatSecretSource(seat);
   let raw;
   try {
@@ -136,13 +137,6 @@ function flatActions(actions) {
   });
 }
 
-function describeAction(a) {
-  if (a.kind === "RemoveMember") return `- removeMember ${a.key}  (${memberName(a.key)})`;
-  if (a.kind === "AddMember") return `+ addMember    ${a.key}  mask ${a.mask}  (${memberName(a.key)})`;
-  if (a.kind === "ChangeThreshold") return `~ changeThreshold -> ${a.threshold}`;
-  return `? ${a.kind}`;
-}
-
 async function readIndex(conn, msPda, index) {
   const [txPda] = multisig.getTransactionPda({ multisigPda: msPda, index });
   const [prPda] = multisig.getProposalPda({ multisigPda: msPda, transactionIndex: index });
@@ -154,6 +148,17 @@ async function readIndex(conn, msPda, index) {
   const tx = isConfig ? multisig.accounts.ConfigTransaction.fromAccountInfo(txInfo)[0] : null;
   const pr = (await conn.getAccountInfo(prPda)) ? await multisig.accounts.Proposal.fromAccountAddress(conn, prPda) : null;
   return { txPda, prPda, tx, pr, exists: !!txInfo, isConfig };
+}
+
+/** Proposals between the stale line and the latest index that can still move. */
+async function openProposals(conn, msPda, stale, txIndex, skip) {
+  const open = [];
+  for (let i = stale + 1n; i <= txIndex; i += 1n) {
+    if (skip !== undefined && i === skip) continue;
+    const { pr } = await readIndex(conn, msPda, i);
+    if (pr && OPEN_STATUSES.includes(pr.status.__kind)) open.push({ index: i, status: pr.status.__kind });
+  }
+  return open;
 }
 
 function printProposal(pr, threshold) {
@@ -170,18 +175,48 @@ async function balanceGate(conn, seat, need, armed) {
   if (lamports < need) {
     const msg = `fee payer ${seat.role} holds ${sol(lamports)} SOL, short by ${sol(need - lamports)} SOL. Fund ${seat.pubkey}.`;
     if (armed) fail(msg);
-    console.log(`  ⚠ ${msg}`);
+    console.log(`  WARNING ${msg}`);
   }
 }
 
-function readBackOrFail(tx, label) {
+function readBackOrFail(tx, label, plan) {
   if (!tx) fail(`no config transaction at ${label} (empty, or a vault transaction).`);
   const actions = flatActions(tx.actions);
   console.log(`\n  on-chain actions at ${label} (read back):`);
-  actions.forEach((a) => console.log(`    ${describeAction(a)}`));
-  const problems = R.checkReadBack(actions);
+  actions.forEach((a) => console.log(`    ${R.describeAction(a)}`));
+  const problems = R.checkReadBack(actions, { ...PAIR, mask: plan.mask });
   if (problems.length) fail(`on-chain actions differ from the plan:\n  - ${problems.join("\n  - ")}`);
-  console.log("  ✓ exactly the plan: one remove, one add at mask 7, threshold untouched");
+  console.log(`  OK exactly the plan: remove ${PAIR.old}, add ${PAIR.new} at mask ${plan.mask}, threshold untouched`);
+}
+
+/** A voting seat from the roster, checked against the outgoing-key rule and live Vote permission. */
+function voterOrFail(role, liveMask, allowOutgoing) {
+  const seat = cfg.agentSeats.find((s) => s.role === role);
+  if (!seat) fail(`no seat with role ${role} on ${cfg.cluster}; roster roles: ${cfg.agentSeats.map((s) => s.role).join(", ")}.`);
+  const op = R.outgoingSignerProblems({ seatPubkey: seat.pubkey, old: PAIR.old, allowOutgoing, step: "approve" });
+  if (op.length) fail(op.join("; "), 2);
+  const mask = liveMask(seat.pubkey);
+  if (mask === undefined || !(mask & R.VOTE)) fail(`${seat.role} ${seat.pubkey} is not a live member with Vote.`);
+  return seat;
+}
+
+async function approveAs(conn, msPda, index, seat, threshold) {
+  if (seat.pubkey === PAIR.old) console.log(`\n  ${R.OUTGOING_SIGNER_NOTICE}`);
+  const kp = loadSeat(seat);
+  const sig = await multisig.rpc.proposalApprove({ connection: conn, multisigPda: msPda, transactionIndex: index, feePayer: kp, member: kp });
+  console.log(`   approve (${seat.role})  ${sig}`);
+  await settle(`${seat.role}'s approval`, async () => {
+    const r = await readIndex(conn, msPda, index);
+    return r.pr && r.pr.approved.some((k) => k.toBase58() === seat.pubkey);
+  });
+  printProposal((await readIndex(conn, msPda, index)).pr, threshold);
+}
+
+function operatorHandoff(index) {
+  if (cfg.cluster !== "mainnet-beta") return;
+  console.log(`\n  HANDOFF — Mr. McRitchie approves #${index} from one of his seats (${OPERATOR_KEYS.map((k) => k.slice(0, 4)).join(", ")}):`);
+  console.log(`    ${squadsTransactionsUrl(cfg.vaultPda)}`);
+  console.log(`  Then: --execute --index=${index} (refuses until his approval is on chain).`);
 }
 
 // --------------------------------------------------------------------------- main
@@ -189,7 +224,7 @@ function readBackOrFail(tx, label) {
   const conn = new Connection(cfg.rpcUrl, "confirmed");
   const genesis = await conn.getGenesisHash();
   if (genesis !== cfg.genesisHash) fail(`${cfg.cluster} genesis mismatch (got ${genesis}).`, 2);
-  if (ALLOW_OUTGOING && genesis !== GENESIS.devnet) fail("--allow-outgoing-signer: this RPC is not devnet.", 2);
+  if (genesis !== GENESIS[cfg.cluster]) fail(`genesis ${genesis} is not ${cfg.cluster}.`, 2);
 
   const msPda = new PublicKey(cfg.multisigPda);
   const ms = await multisig.accounts.Multisig.fromAccountAddress(conn, msPda);
@@ -198,6 +233,8 @@ function readBackOrFail(tx, label) {
   const stale = big(ms.staleTransactionIndex);
 
   console.log(`\n${cfg.cluster.toUpperCase()}  multisig ${cfg.multisigPda}   genesis OK   mode ${MODE}${SEND ? "  ARMED (--send)" : "  dry run"}`);
+  console.log(`  swap: OUT ${PAIR.old} (${memberName(PAIR.old)})`);
+  console.log(`         IN ${PAIR.new} (${memberName(PAIR.new)})`);
   console.log(`  threshold ${ms.threshold} of ${members.length}   txIndex ${txIndex}   staleTransactionIndex ${stale}`);
   members.forEach((m) => console.log(`    mask ${m.mask}  ${m.key}  ${memberName(m.key)}`));
 
@@ -206,47 +243,48 @@ function readBackOrFail(tx, label) {
   if (!creator) fail(`no ${CREATOR_ROLE[cfg.cluster]} seat in the roster.`);
   const cMask = liveMask(creator.pubkey);
   if (cMask === undefined) fail(`${creator.role} ${creator.pubkey} is not a live member.`);
+  const plan = R.planRotation({ threshold: ms.threshold, members }, PAIR);
 
   // ============================================================== create
   if (MODE === "create") {
-    if ((cMask & (INITIATE | VOTE)) !== (INITIATE | VOTE)) fail(`${creator.role} cannot Initiate and Vote (mask ${cMask}).`);
-    const plan = R.planRotation({ threshold: ms.threshold, members });
+    const cp = R.outgoingSignerProblems({ seatPubkey: creator.pubkey, old: PAIR.old, allowOutgoing: false, step: "create" });
+    if (cp.length) fail(cp.join("; "), 2);
+    if ((cMask & (R.INITIATE | R.VOTE)) !== (R.INITIATE | R.VOTE)) fail(`${creator.role} cannot Initiate and Vote (mask ${cMask}).`);
     if (plan.problems.length) fail(`plan does not match live state:\n  - ${plan.problems.join("\n  - ")}`);
+    const coVoter = A.andApproveAs ? voterOrFail(A.andApproveAs, liveMask, A.allowOutgoing) : null;
+    if (coVoter && coVoter.pubkey === creator.pubkey) fail(`--and-approve-as names the creator ${creator.role}; it already votes.`, 2);
 
-    // An open, non-stale proposal must be landed or cancelled first.
-    for (let i = stale + 1n; i <= txIndex; i += 1n) {
-      const { pr } = await readIndex(conn, msPda, i);
-      if (pr && ["Draft", "Active", "Approved", "Executing"].includes(pr.status.__kind)) {
-        fail(`proposal #${i} is ${pr.status.__kind} and not stale — land or cancel it first.`);
-      }
-    }
+    const open = await openProposals(conn, msPda, stale, txIndex);
     const index = txIndex + 1n;
     if ((await readIndex(conn, msPda, index)).exists) fail(`a transaction already exists at #${index}.`);
 
-    console.log(`\n  PLAN — ONE atomic config transaction at #${index}, creator ${creator.role}:`);
-    R.plannedActions().forEach((a) => console.log(`    ${describeAction(a)}`));
-    console.log(`    threshold stays ${ms.threshold}`);
-    console.log(`  AFTER (predicted): threshold ${ms.threshold} of ${plan.after.length}`);
-    plan.after.forEach((k) => console.log(`    ${k}  ${memberName(k)}`));
+    console.log("");
+    R.formatPlan({ index, creator, plan, pair: PAIR, open }).forEach((l) => console.log(l));
+    console.log(`\n  VOTES — ${creator.role} creates and approves${coVoter ? `; ${coVoter.role} approves` : ""}.`);
     await balanceGate(conn, creator, MIN_LAMPORTS.create, SEND);
-    if (!SEND) return console.log("\n  DRY RUN — nothing sent. Re-run with --send to create, propose and cast one vote.\n");
+    if (coVoter) await balanceGate(conn, coVoter, MIN_LAMPORTS.vote, SEND);
+    if (SEND && open.length) fail(`${open.length} open proposal(s) would be staled (${open.map((p) => `#${p.index}`).join(", ")}) — land or cancel them first.`);
+    if (!SEND) return console.log("\n  DRY RUN — nothing sent. Re-run with --send to create, propose and vote.\n");
 
     const kp = loadSeat(creator);
     console.log(`  ${creator.role} key loaded and verified`);
-    const allPerm = multisig.types.Permissions.all();
-    if (Number(allPerm.mask) !== R.SEAT_MASK) fail(`SDK Permissions.all() is mask ${allPerm.mask}, not ${R.SEAT_MASK}.`);
+    const { Permission, Permissions } = multisig.types;
+    const perms = Permissions.fromPermissions(
+      [Permission.Initiate, Permission.Vote, Permission.Execute].filter((bit) => plan.mask & bit)
+    );
+    if (Number(perms.mask) !== plan.mask) fail(`SDK built mask ${perms.mask}, the plan needs ${plan.mask}.`);
     const actions = [
-      { __kind: "RemoveMember", oldMember: new PublicKey(R.OLD_SEAT) },
-      { __kind: "AddMember", newMember: { key: new PublicKey(R.NEW_SEAT), permissions: allPerm } },
+      { __kind: "RemoveMember", oldMember: new PublicKey(PAIR.old) },
+      { __kind: "AddMember", newMember: { key: new PublicKey(PAIR.new), permissions: perms } },
     ];
     const common = { connection: conn, multisigPda: msPda, transactionIndex: index, sendOptions: { skipPreflight: false } };
 
     let sig = await multisig.rpc.configTransactionCreate({
-      ...common, feePayer: kp, creator: kp.publicKey, rentPayer: kp.publicKey, actions, memo: MEMO,
+      ...common, feePayer: kp, creator: kp.publicKey, rentPayer: kp.publicKey, actions, memo: R.rotationMemo(PAIR),
     });
     console.log(`   1/3 configTransactionCreate  ${sig}`);
     await settle("config transaction account", async () => !!(await readIndex(conn, msPda, index)).tx);
-    readBackOrFail((await readIndex(conn, msPda, index)).tx, `#${index}`);
+    readBackOrFail((await readIndex(conn, msPda, index)).tx, `#${index}`, plan);
 
     sig = await multisig.rpc.proposalCreate({ ...common, feePayer: kp, creator: kp });
     console.log(`   2/3 proposalCreate           ${sig}`);
@@ -261,33 +299,27 @@ function readBackOrFail(tx, label) {
       const { pr } = await readIndex(conn, msPda, index);
       return pr && pr.approved.some((k) => k.toBase58() === creator.pubkey);
     });
+    if (coVoter) await approveAs(conn, msPda, index, coVoter, ms.threshold);
 
     const after = await readIndex(conn, msPda, index);
-    readBackOrFail(after.tx, `#${index}`);
+    readBackOrFail(after.tx, `#${index}`, plan);
     printProposal(after.pr, ms.threshold);
-    console.log(`\n  TRANSACTION INDEX ${index} on ${cfg.cluster}. Nothing executed.\n`);
+    console.log(`\n  TRANSACTION INDEX ${index} on ${cfg.cluster}. Nothing executed.`);
+    operatorHandoff(index);
+    console.log("");
     return;
   }
 
   // ============================================================== approve / execute
-  const index = BigInt(indexArg);
+  const index = BigInt(A.index);
   const { tx, pr } = await readIndex(conn, msPda, index);
-  readBackOrFail(tx, `#${index}`);
+  if (plan.problems.length) fail(`live membership no longer matches the plan:\n  - ${plan.problems.join("\n  - ")}`);
+  readBackOrFail(tx, `#${index}`, plan);
   printProposal(pr, ms.threshold);
   if (!pr) fail(`no proposal at #${index}.`);
-  const plan = R.planRotation({ threshold: ms.threshold, members });
-  if (plan.problems.length) fail(`live membership no longer matches the plan:\n  - ${plan.problems.join("\n  - ")}`);
 
   if (MODE === "approve") {
-    const outgoing = ALLOW_OUTGOING && value("--as") === "admin";
-    if (ALLOW_OUTGOING && !outgoing) fail("--allow-outgoing-signer only pairs with --as=admin.", 2);
-    const seat = outgoing ? OUTGOING_SEAT : cfg.agentSeats.find((s) => s.role === value("--as"));
-    if (!seat) fail(`no seat with role ${value("--as")} on ${cfg.cluster}.`);
-    const old = R.refuseOldSigner(seat.pubkey);
-    if (old.length && !outgoing) fail(old[0]);
-    if (outgoing) console.log(`\n  ${R.OUTGOING_SIGNER_NOTICE}`);
-    const mask = liveMask(seat.pubkey);
-    if (mask === undefined || !(mask & VOTE)) fail(`${seat.role} ${seat.pubkey} is not a live member with Vote.`);
+    const seat = voterOrFail(A.as, liveMask, A.allowOutgoing);
     const pp = R.proposalProblems({ index, staleTransactionIndex: stale, status: pr.status.__kind, want: "Active" });
     if (pp.length) fail(pp.join("; "));
     if (pr.approved.some((k) => k.toBase58() === seat.pubkey)) {
@@ -296,22 +328,31 @@ function readBackOrFail(tx, label) {
     }
     await balanceGate(conn, seat, MIN_LAMPORTS.vote, SEND);
     if (!SEND) return console.log(`\n  DRY RUN — ${seat.role} would approve #${index}. Re-run with --send.\n`);
-    const kp = loadSeat(seat, { allowOutgoing: outgoing });
-    const sig = await multisig.rpc.proposalApprove({ connection: conn, multisigPda: msPda, transactionIndex: index, feePayer: kp, member: kp });
-    console.log(`   approve (${seat.role})  ${sig}`);
-    await settle(`${seat.role}'s approval`, async () => {
-      const r = await readIndex(conn, msPda, index);
-      return r.pr && r.pr.approved.some((k) => k.toBase58() === seat.pubkey);
-    });
-    printProposal((await readIndex(conn, msPda, index)).pr, ms.threshold);
+    await approveAs(conn, msPda, index, seat, ms.threshold);
+    operatorHandoff(index);
     console.log("");
     return;
   }
 
   // execute
-  if (!(cMask & EXECUTE)) fail(`${creator.role} cannot Execute (mask ${cMask}).`);
-  const pp = R.proposalProblems({ index, staleTransactionIndex: stale, status: pr.status.__kind, want: "Approved" });
-  if (pp.length) fail(pp.join("; "));
+  const ep = R.outgoingSignerProblems({ seatPubkey: creator.pubkey, old: PAIR.old, allowOutgoing: false, step: "execute" });
+  if (ep.length) fail(ep.join("; "), 2);
+  if (!(cMask & R.EXECUTE)) fail(`${creator.role} cannot Execute (mask ${cMask}).`);
+  const sp = R.proposalProblems({ index, staleTransactionIndex: stale, status: pr.status.__kind });
+  if (sp.length) fail(sp.join("; "));
+  const gate = R.executeProblems({
+    cluster: cfg.cluster,
+    status: pr.status.__kind,
+    approved: pr.approved.map((k) => k.toBase58()),
+    threshold: ms.threshold,
+    operatorKeys: OPERATOR_KEYS,
+  });
+  if (gate.length) fail(`not executable yet:\n  - ${gate.join("\n  - ")}`);
+  const others = await openProposals(conn, msPda, stale, txIndex, index);
+  if (others.length) {
+    console.log(`\n  ${R.STALE_NOTICE}`);
+    console.log(`  Executing #${index} stales: ${others.map((p) => `#${p.index} (${p.status})`).join(", ")}`);
+  }
   await balanceGate(conn, creator, MIN_LAMPORTS.vote, SEND);
   if (!SEND) return console.log(`\n  DRY RUN — #${index} is Approved and matches the plan; ${creator.role} would execute. Re-run with --send.\n`);
   const kp = loadSeat(creator);
@@ -323,7 +364,7 @@ function readBackOrFail(tx, label) {
   const fin = new Connection(cfg.rpcUrl, "finalized");
   await settle("membership change at finalized", async () => {
     const a = flatMembers(await multisig.accounts.Multisig.fromAccountAddress(fin, msPda)).map((m) => m.key);
-    return a.includes(R.NEW_SEAT) && !a.includes(R.OLD_SEAT);
+    return a.includes(PAIR.new) && !a.includes(PAIR.old);
   }, 60, 2000);
   const after = await multisig.accounts.Multisig.fromAccountAddress(fin, msPda);
   console.log(`\n  AFTER (read back at finalized): threshold ${after.threshold} of ${after.members.length}`);
