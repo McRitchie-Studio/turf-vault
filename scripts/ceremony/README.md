@@ -38,10 +38,13 @@ reach for the committed tooling instead:
 | `add-system-seat.js` | The second pass, cluster-parameterised: brought both multisigs to five seats, matching the `VaultState` signer list | It prints whether the agent reaches quorum in the resulting shape, and says so as `⚠ AGENT CAN ACT ALONE` |
 | `blast-radius.js` | Read-only: proved the Squads change did NOT move the vault PDA, the program's upgrade authority, or `VaultState` | Verifying what a change did *not* touch is as much a part of a ceremony as verifying what it did |
 
-## The 2026-10-08 governance rotation
+## Governance seat rotations (2026-10-08 onward)
 
-Two scripts were added for task `rotate-mainnet-admin-key`, and like the four above
-they refuse once their plan is done.
+Three scripts were added for task `rotate-mainnet-admin-key`. The two sweeps were
+one-shots for BLSBw8 and, like the four above, refuse once their plan is done.
+`rotate-admin-seat.js` became the standing any-pair tool on 2026-10-14 (task
+`squad-seat-rotation-any-pair`): each run's plan is the `--old`/`--new` pair it is
+given, and it refuses once that pair's swap has executed.
 
 | Script | What it does | Notes |
 |--------|--------------|-------|
@@ -73,8 +76,17 @@ is the point of keeping these:
 
 Each script reads its signing key from 1Password at run time and never writes it
 to disk. The field LABEL differs between items and that is not a typo to tidy:
-the `solana.turf.system*` items spell it `private-key`; `solana.turf.governance`
-and `agent.xan.solana` spell it `private key`, with a space.
+the `solana.turf.system*` items spell it `private-key`; `solana.turf.governance`,
+`solana.turf.governance.v2` and `agent.xan.solana` spell it `private key`, with a space.
+
+**The governance seat is picked from the chain.** The mainnet roster in
+`scripts/lib/squad-clusters.js` lists two governance candidates, `4bKN…`
+(`solana.turf.governance`) and `3LTL…` (`solana.turf.governance.v2`). Every tool
+that votes with the seat (`squad-vault-transfer.js`, `squad-upgrade.js`,
+`squad-inventory.js`, `rotate-admin-seat.js`) reads live membership and calls
+`seatsForMembers()`, which keeps the one that is seated and refuses when neither
+or both are. Before the 4bKN -> 3LTL swap executes the old item signs; after it,
+the new one, with no edit in between.
 
 ```bash
 op read "op://${MCR_OP_VAULT_AGENT:-studio-agents}/solana.turf.system.devnet/private-key"

@@ -103,6 +103,8 @@ const AGENT_SEATS = {
       secretField: "private-key",
       env: "SQUAD_KEY_SYSTEM",
     },
+    // TWO governance candidates; exactly one is ever seated. seatsForMembers()
+    // picks the seated one from LIVE membership (see GOVERNANCE_ITEMS below).
     {
       role: "governance",
       pubkey: "4bKNSqkrKeggSyrds16Ak7rcB4ibvGJ4ZLsKjvQgC3Vk",
@@ -110,6 +112,14 @@ const AGENT_SEATS = {
       vault: ADMIN_VAULT,
       secretField: "private key",
       env: "SQUAD_KEY_GOVERNANCE",
+    },
+    {
+      role: "governance",
+      pubkey: "3LTLPG1s952sdNatZWtnfM7r9F3ivWSnPSqfhQLBepJ9",
+      item: "solana.turf.governance.v2",
+      vault: ADMIN_VAULT,
+      secretField: "private key",
+      env: "SQUAD_KEY_GOVERNANCE_V2",
     },
   ],
   devnet: [
@@ -139,6 +149,50 @@ const AGENT_SEATS = {
     },
   ],
 };
+
+/**
+ * THE GOVERNANCE CUT-OVER (2026-10-14, task squad-seat-rotation-any-pair).
+ * `4bKN…` (`solana.turf.governance`) was printed into a transcript on
+ * 2026-10-12, so mainnet swaps it for `3LTL…` (`solana.turf.governance.v2`)
+ * with `scripts/ceremony/rotate-admin-seat.js`. Before that config transaction
+ * executes the old item is the right key; after it, the new one. No date or
+ * flag decides which: the CHAIN does. Every tool that votes with the governance
+ * seat reads membership first and calls `seatsForMembers()`, which keeps the
+ * one governance candidate that is seated and REFUSES when neither or both are
+ * (neither: the roster no longer knows the seat; both: someone added the new
+ * key without removing the old, which is not the rotation).
+ */
+const GOVERNANCE_ITEMS = ["solana.turf.governance", "solana.turf.governance.v2"];
+
+/**
+ * The roster a run may sign with, given the LIVE member keys: every non-
+ * governance seat as listed (each tool still drops unseated ones as before),
+ * plus exactly the ONE governance candidate that is a member.
+ *
+ * @param {string} cluster  canonical cluster name
+ * @param {string[]} liveKeys  base58 member keys read from chain this run
+ * @param {Array<object>} [seats]  defaults to AGENT_SEATS[cluster]
+ * @returns {Array<object>} copies of the seats to use
+ * @throws {ClusterError} when the cluster has governance candidates and not exactly one is seated
+ */
+function seatsForMembers(cluster, liveKeys, seats = AGENT_SEATS[cluster] || []) {
+  const live = new Set(liveKeys || []);
+  const isGov = (s) => GOVERNANCE_ITEMS.includes(s.item);
+  const candidates = seats.filter(isGov);
+  const others = seats.filter((s) => !isGov(s)).map((s) => ({ ...s }));
+  if (!candidates.length) return others;
+  const seated = candidates.filter((s) => live.has(s.pubkey));
+  const names = candidates.map((s) => `${s.item} ${s.pubkey}`).join(", ");
+  if (seated.length === 0) {
+    throw new ClusterError(`no governance candidate is a live ${cluster} member (${names}); the roster is out of date. Refusing.`);
+  }
+  if (seated.length > 1) {
+    throw new ClusterError(
+      `BOTH governance candidates are live ${cluster} members (${names}); a rotation adds one and removes the other in one transaction. Refusing.`
+    );
+  }
+  return [...others, { ...seated[0] }];
+}
 
 /**
  * Mr. McRitchie's own wallets: the seats whose approval a MAINNET vault
@@ -349,9 +403,11 @@ module.exports = {
   REQUIRED_ADDRESSES,
   SQUAD_JSON,
   addressesFor,
+  GOVERNANCE_ITEMS,
   canonicalCluster,
   memberName,
   resolveCluster,
   seatSecretSource,
+  seatsForMembers,
   squadsTransactionsUrl,
 };

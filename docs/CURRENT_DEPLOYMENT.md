@@ -370,7 +370,7 @@ under **Mainnet**):
 | Cluster | Multisig | Threshold | Agent-held seats | An upgrade run would |
 |---------|----------|-----------|------------------|----------------------|
 | devnet | `7nRuVw3VZFC6z85tYVDitPnaUHZCkqLpJRSTBNtPmtZB` | 3 of 5 | 3 — `system.devnet` `2eGs8G3w…`, `seat-a.devnet` `GF4sojG9…`, `seat-b.devnet` `39qaSh2J…` | run **AUTONOMOUS**, end to end |
-| mainnet | `4H3fP3otjMtupk1DQDjKXYY1dWjT6LNM4H4ZWZ1XcKSX` | 3 of 5 | 2 — `system` `7auwTLSv…`, `governance` `4bKNSqkr…` | **HAND OFF** one approval and the execute to Mr. McRitchie |
+| mainnet | `4H3fP3otjMtupk1DQDjKXYY1dWjT6LNM4H4ZWZ1XcKSX` | 3 of 5 | 2 — `system` `7auwTLSv…`, `governance` `4bKNSqkr…` (to be `3LTLPG1s…`, `solana.turf.governance.v2`, once the 2026-10-14 swap executes; the tools pick whichever is seated) | **HAND OFF** one approval and the execute to Mr. McRitchie |
 
 **The asymmetry is the design, not a gap.** Devnet is meant to run unattended;
 mainnet is meant to need Mr. McRitchie. His three wallets — `7ZDJp7FU…` (his

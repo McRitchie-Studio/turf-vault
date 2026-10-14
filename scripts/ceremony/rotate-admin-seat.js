@@ -51,6 +51,7 @@ const {
   memberName,
   resolveCluster,
   seatSecretSource,
+  seatsForMembers,
   squadsTransactionsUrl,
 } = require("../lib/squad-clusters");
 const R = require("../lib/admin-seat-rotation");
@@ -190,9 +191,9 @@ function readBackOrFail(tx, label, plan) {
 }
 
 /** A voting seat from the roster, checked against the outgoing-key rule and live Vote permission. */
-function voterOrFail(role, liveMask, allowOutgoing) {
-  const seat = cfg.agentSeats.find((s) => s.role === role);
-  if (!seat) fail(`no seat with role ${role} on ${cfg.cluster}; roster roles: ${cfg.agentSeats.map((s) => s.role).join(", ")}.`);
+function voterOrFail(role, roster, liveMask, allowOutgoing) {
+  const seat = roster.find((s) => s.role === role);
+  if (!seat) fail(`no seat with role ${role} on ${cfg.cluster}; roster roles: ${roster.map((s) => s.role).join(", ")}.`);
   const op = R.outgoingSignerProblems({ seatPubkey: seat.pubkey, old: PAIR.old, allowOutgoing, step: "approve" });
   if (op.length) fail(op.join("; "), 2);
   const mask = liveMask(seat.pubkey);
@@ -239,7 +240,14 @@ function operatorHandoff(index) {
   members.forEach((m) => console.log(`    mask ${m.mask}  ${m.key}  ${memberName(m.key)}`));
 
   const liveMask = (k) => (members.find((m) => m.key === k) || {}).mask;
-  const creator = cfg.agentSeats.find((s) => s.role === CREATOR_ROLE[cfg.cluster]);
+  // Before the swap the governance role is 4bKN, after it 3LTL: read from chain.
+  let roster;
+  try {
+    roster = seatsForMembers(cfg.cluster, members.map((m) => m.key), cfg.agentSeats);
+  } catch (e) {
+    fail(e.message);
+  }
+  const creator = roster.find((s) => s.role === CREATOR_ROLE[cfg.cluster]);
   if (!creator) fail(`no ${CREATOR_ROLE[cfg.cluster]} seat in the roster.`);
   const cMask = liveMask(creator.pubkey);
   if (cMask === undefined) fail(`${creator.role} ${creator.pubkey} is not a live member.`);
@@ -251,7 +259,7 @@ function operatorHandoff(index) {
     if (cp.length) fail(cp.join("; "), 2);
     if ((cMask & (R.INITIATE | R.VOTE)) !== (R.INITIATE | R.VOTE)) fail(`${creator.role} cannot Initiate and Vote (mask ${cMask}).`);
     if (plan.problems.length) fail(`plan does not match live state:\n  - ${plan.problems.join("\n  - ")}`);
-    const coVoter = A.andApproveAs ? voterOrFail(A.andApproveAs, liveMask, A.allowOutgoing) : null;
+    const coVoter = A.andApproveAs ? voterOrFail(A.andApproveAs, roster, liveMask, A.allowOutgoing) : null;
     if (coVoter && coVoter.pubkey === creator.pubkey) fail(`--and-approve-as names the creator ${creator.role}; it already votes.`, 2);
 
     const open = await openProposals(conn, msPda, stale, txIndex);
@@ -319,7 +327,7 @@ function operatorHandoff(index) {
   if (!pr) fail(`no proposal at #${index}.`);
 
   if (MODE === "approve") {
-    const seat = voterOrFail(A.as, liveMask, A.allowOutgoing);
+    const seat = voterOrFail(A.as, roster, liveMask, A.allowOutgoing);
     const pp = R.proposalProblems({ index, staleTransactionIndex: stale, status: pr.status.__kind, want: "Active" });
     if (pp.length) fail(pp.join("; "));
     if (pr.approved.some((k) => k.toBase58() === seat.pubkey)) {

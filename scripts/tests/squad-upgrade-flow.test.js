@@ -634,7 +634,9 @@ test("a roster with NO seated key refuses before reading a balance", async () =>
   });
 
   assert.equal(exitCode, 1);
-  assert.match(lines(trace), /is a member of this multisig/);
+  // Since 2026-10-14 the governance resolver speaks first: neither 4bKN nor
+  // 3LTL is seated, so the roster is refused before the planner counts.
+  assert.match(lines(trace), /no governance candidate is a live mainnet-beta member/);
   assert.equal(steps(trace, "sendTransaction").length, 0);
   assert.equal(steps(trace, "vaultTransactionCreate").length, 0);
 });

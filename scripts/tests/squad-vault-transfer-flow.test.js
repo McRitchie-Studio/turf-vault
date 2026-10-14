@@ -44,6 +44,7 @@ const VAULT = SQUAD.vaultPda;
 const MULTISIG = SQUAD.multisigPda;
 const SYSTEM = "7auwTLSvNniSUeAgL6v9RStMXJhWrrUhSJgwFWLpcqC";
 const GOVERNANCE = "4bKNSqkrKeggSyrds16Ak7rcB4ibvGJ4ZLsKjvQgC3Vk";
+const GOVERNANCE_V2 = "3LTLPG1s952sdNatZWtnfM7r9F3ivWSnPSqfhQLBepJ9"; // replaces 4bKN (squad-seat-rotation-any-pair)
 const ALEX = "7ZDJp7FUHhuceAqcW9CHe81hCiaMTjgWAXfprBM59Tcr";
 const ALEX_TWO = "3Qj4v9qjhXgkru6zCRCErRVhy8Q6qU3NrNpvpXLTZboA";
 const ALEX_THREE = "9gACbzsCLmkYF9Yx1EBGmwMvvyfuTquJ6qs8QsoQvHXf";
@@ -69,7 +70,15 @@ function solMessage(from, to, lamports) {
  * `tamperCreate` makes the chain store a DIFFERENT amount than the create asked
  * for — the case the post-create read-back exists to catch.
  */
-async function runTransfer({ mode, extraArgs = [], current = 9, transactions = {}, proposals = {}, tamperCreate = false }) {
+async function runTransfer({
+  mode,
+  extraArgs = [],
+  current = 9,
+  transactions = {},
+  proposals = {},
+  tamperCreate = false,
+  members: memberKeys = null,
+}) {
   const trace = [];
   let exitCode = null;
   let finished;
@@ -82,7 +91,7 @@ async function runTransfer({ mode, extraArgs = [], current = 9, transactions = {
       Object.entries(proposals).map(([k, v]) => [Number(k), { status: v.status, approved: [...v.approved] }])
     ),
   };
-  const members = [SYSTEM, ALEX_TWO, ALEX, ALEX_THREE, GOVERNANCE];
+  const members = memberKeys || [SYSTEM, ALEX_TWO, ALEX, ALEX_THREE, GOVERNANCE];
   const threshold = 3;
 
   class FakePublicKey {
@@ -275,6 +284,7 @@ async function runTransfer({ mode, extraArgs = [], current = 9, transactions = {
   process.argv = ["node", SCRIPT, mode, "--cluster=mainnet", `--to=${HWQC}`, "--sol=6.2", ...extraArgs];
   process.env.SQUAD_KEY_SYSTEM = SYSTEM;
   process.env.SQUAD_KEY_GOVERNANCE = GOVERNANCE;
+  process.env.SQUAD_KEY_GOVERNANCE_V2 = GOVERNANCE_V2;
   delete process.env.SOLANA_RPC_URL;
 
   // The stubbed exit must HALT, or a refusal would run on (see
@@ -480,4 +490,37 @@ test("SEND whose created transaction reads back DIFFERENT signs no approval", as
   assert.equal(signsOf(trace, "create").length, 1, "the create is the only signature");
   assert.equal(signsOf(trace, "approve").length, 0, "nothing is approved");
   assert.deepEqual(chain.proposals.get(10).approved, []);
+});
+
+// --- the governance cut-over (2026-10-14, squad-seat-rotation-any-pair) -----
+
+test("after the seat swap, APPROVE votes with 3LTL and never loads 4bKN", async () => {
+  const { trace, exitCode } = await runTransfer({
+    mode: "approve",
+    extraArgs: ["--index=9"],
+    transactions: HONEST_9,
+    proposals: { 9: { status: "Active", approved: [] } },
+    members: [SYSTEM, ALEX_TWO, ALEX, ALEX_THREE, GOVERNANCE_V2],
+  });
+  assert.equal(exitCode, null, lines(trace));
+  assert.deepEqual(
+    signsOf(trace, "approve").map((t) => t.signers[t.signers.length - 1]),
+    [SYSTEM, GOVERNANCE_V2],
+    "the governance vote comes from the seated v2 key"
+  );
+  assert.ok(!steps(trace, "keyLoaded").some((t) => t.pubkey === GOVERNANCE), "the retired key is never read");
+});
+
+test("both governance keys seated at once refuses before any key is read", async () => {
+  const { trace, exitCode } = await runTransfer({
+    mode: "approve",
+    extraArgs: ["--index=9"],
+    transactions: HONEST_9,
+    proposals: { 9: { status: "Active", approved: [] } },
+    members: [SYSTEM, ALEX, ALEX_TWO, GOVERNANCE, GOVERNANCE_V2],
+  });
+  assert.equal(exitCode, 1);
+  assert.match(lines(trace), /BOTH governance candidates/);
+  assert.equal(steps(trace, "keyLoaded").length, 0);
+  assert.equal(signsOf(trace, "approve").length, 0);
 });
