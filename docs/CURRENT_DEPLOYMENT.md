@@ -415,6 +415,13 @@ and nothing else, through `rotate-admin-seat.js --allow-outgoing-signer`, which
 is refused on mainnet (cluster and genesis) and for create and execute. Mainnet
 needed two of his own wallets and got them.
 
+*Since 2026-10-14 (task `squad-seat-rotation-any-pair`)* the script swaps any
+pair: `--old` and `--new` are required, the new member inherits the old one's
+live mask, and `--allow-outgoing-signer` is allowed on mainnet for the outgoing
+seat's APPROVAL only, still never to create or execute. On mainnet `--execute`
+refuses until one of Mr. McRitchie's seats has approved on chain. The paragraph
+above describes the tool as it stood on 2026-10-09.
+
 **BLSBw8 is emptied and archived.** On Mr. McRitchie's ruling, after both swaps
 read Executed, `scripts/ceremony/sweep-admin-seat.js` moved its mainnet SOL:
 0.5 SOL to `4bKNSqkr…` (`VxQ5DSDv…`), 3 SOL to `7ZDJp7FU…` (`5PEBmzSN…`), and the
