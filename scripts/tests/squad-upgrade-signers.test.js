@@ -82,8 +82,8 @@ test("the script plans through squad-roles, against the chain's own members", ()
   );
   assert.match(
     src,
-    /seats: cfg\.agentSeats/,
-    "the seats offered are the cluster roster, so an unseated key drops out by measurement"
+    /seats: seatsForMembers\(cfg\.cluster, liveMembers\.map\(\(m\) => m\.key\), cfg\.agentSeats\)/,
+    "the seats offered are the cluster roster resolved against LIVE membership, so an unseated key drops out by measurement"
   );
 });
 

@@ -132,6 +132,7 @@ const {
   memberName,
   resolveCluster,
   seatSecretSource,
+  seatsForMembers,
 } = require("./lib/squad-clusters");
 const { INITIATE, SquadRoleError, describeMask, planUpgrade } = require("./lib/squad-roles");
 const {
@@ -430,10 +431,12 @@ function explorerUrl(address, cluster) {
   try {
     plan = planUpgrade({
       multisig: { threshold: Number(multisigAccount.threshold), members: liveMembers },
-      seats: cfg.agentSeats,
+      // The governance seat is whichever candidate (4bKN or 3LTL) is seated
+      // NOW; seatsForMembers throws a ClusterError when neither or both are.
+      seats: seatsForMembers(cfg.cluster, liveMembers.map((m) => m.key), cfg.agentSeats),
     });
   } catch (error) {
-    if (error instanceof SquadRoleError) fail(error.message);
+    if (error instanceof SquadRoleError || error instanceof ClusterError) fail(error.message);
     throw error;
   }
 

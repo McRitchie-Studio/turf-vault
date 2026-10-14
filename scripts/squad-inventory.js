@@ -32,7 +32,7 @@
 const { Connection, PublicKey } = require("@solana/web3.js");
 const multisig = require("@sqds/multisig");
 
-const { canonicalCluster, memberName, resolveCluster } = require("./lib/squad-clusters");
+const { ClusterError, canonicalCluster, memberName, resolveCluster, seatsForMembers } = require("./lib/squad-clusters");
 const { SquadRoleError, describeMask, planUpgrade } = require("./lib/squad-roles");
 
 const BPF_LOADER = new PublicKey("BPFLoaderUpgradeab1e11111111111111111111111");
@@ -91,7 +91,7 @@ async function report(clusterName) {
   try {
     const plan = planUpgrade({
       multisig: { threshold: Number(account.threshold), members },
-      seats: cfg.agentSeats,
+      seats: seatsForMembers(cfg.cluster, members.map((m) => m.key), cfg.agentSeats),
     });
     console.log(
       `\n  agent-held: ${plan.seated.length} of ${members.length}, ` +
@@ -107,7 +107,7 @@ async function report(clusterName) {
           : ` — ⚠ THE AGENT CAN UPGRADE ALONE.`)
     );
   } catch (error) {
-    if (!(error instanceof SquadRoleError)) throw error;
+    if (!(error instanceof SquadRoleError) && !(error instanceof ClusterError)) throw error;
     console.log(`\n  agent-held: NONE USABLE — ${error.message.split("\n")[0]}`);
   }
 }

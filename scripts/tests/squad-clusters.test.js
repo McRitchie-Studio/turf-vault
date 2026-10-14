@@ -53,6 +53,7 @@ const {
   memberName,
   resolveCluster,
   seatSecretSource,
+  seatsForMembers,
   squadsTransactionsUrl,
 } = require("../lib/squad-clusters");
 
@@ -185,7 +186,8 @@ test("the roster's public keys are the LIVE agent seats on each cluster", () => 
     AGENT_SEATS["mainnet-beta"].map((s) => s.pubkey),
     [
       "7auwTLSvNniSUeAgL6v9RStMXJhWrrUhSJgwFWLpcqC", // system
-      "4bKNSqkrKeggSyrds16Ak7rcB4ibvGJ4ZLsKjvQgC3Vk", // governance
+      "4bKNSqkrKeggSyrds16Ak7rcB4ibvGJ4ZLsKjvQgC3Vk", // governance, before the 2026-10-14 swap
+      "3LTLPG1s952sdNatZWtnfM7r9F3ivWSnPSqfhQLBepJ9", // governance.v2, after it (seatsForMembers picks)
     ]
   );
   assert.deepEqual(
@@ -234,10 +236,52 @@ test("the mainnet Squad's five seats, as read off chain 2026-10-12", () => {
     "7ZDJp7FUHhuceAqcW9CHe81hCiaMTjgWAXfprBM59Tcr", // operator (Phantom)
     "9gACbzsCLmkYF9Yx1EBGmwMvvyfuTquJ6qs8QsoQvHXf", // operator
   ];
-  const roster = [...AGENT_SEATS["mainnet-beta"].map((s) => s.pubkey), ...OPERATOR_KEYS];
+  const resolved = seatsForMembers("mainnet-beta", LIVE_MAINNET_SEATS);
+  const roster = [...resolved.map((s) => s.pubkey), ...OPERATOR_KEYS];
   assert.deepEqual([...roster].sort(), [...LIVE_MAINNET_SEATS].sort());
   assert.equal(new Set(roster).size, 5, "no key is both an agent seat and an operator seat");
   assert.ok(!roster.includes("BLSBw8fXHzZc5pbaYCKMpMSsrtXBTbWXpUPVzMrXx9oo"), "BLSBw8 left the Squad at #6");
+});
+
+// --- the governance cut-over (2026-10-14, squad-seat-rotation-any-pair) ------
+
+const GOV = "4bKNSqkrKeggSyrds16Ak7rcB4ibvGJ4ZLsKjvQgC3Vk";
+const GOV_V2 = "3LTLPG1s952sdNatZWtnfM7r9F3ivWSnPSqfhQLBepJ9";
+const SYSTEM_KEY = "7auwTLSvNniSUeAgL6v9RStMXJhWrrUhSJgwFWLpcqC";
+
+test("before the swap the governance seat is 4bKN's item; after it, 3LTL's", () => {
+  const before = seatsForMembers("mainnet-beta", [SYSTEM_KEY, GOV, ...OPERATOR_KEYS]);
+  const govBefore = before.filter((s) => s.role === "governance");
+  assert.equal(govBefore.length, 1);
+  assert.equal(govBefore[0].pubkey, GOV);
+  assert.equal(govBefore[0].item, "solana.turf.governance");
+
+  const after = seatsForMembers("mainnet-beta", [SYSTEM_KEY, GOV_V2, ...OPERATOR_KEYS]);
+  const govAfter = after.filter((s) => s.role === "governance");
+  assert.equal(govAfter.length, 1);
+  assert.equal(govAfter[0].pubkey, GOV_V2);
+  assert.equal(govAfter[0].item, "solana.turf.governance.v2");
+  assert.equal(govAfter[0].vault, ADMIN_VAULT, "the v2 key lives in the admin vault");
+  assert.equal(govAfter[0].secretField, "private key", "its field is filed with a SPACE");
+  assert.ok(after.some((s) => s.role === "system"), "the other seats ride along unchanged");
+});
+
+test("neither or both governance candidates seated refuses", () => {
+  assert.throws(
+    () => seatsForMembers("mainnet-beta", [SYSTEM_KEY, ...OPERATOR_KEYS]),
+    (e) => e instanceof ClusterError && /no governance candidate/.test(e.message)
+  );
+  assert.throws(
+    () => seatsForMembers("mainnet-beta", [SYSTEM_KEY, GOV, GOV_V2, ...OPERATOR_KEYS]),
+    (e) => e instanceof ClusterError && /BOTH governance candidates/.test(e.message)
+  );
+});
+
+test("devnet has no governance candidate, so its roster passes through untouched", () => {
+  const out = seatsForMembers("devnet", []);
+  assert.deepEqual(out.map((s) => s.pubkey), AGENT_SEATS.devnet.map((s) => s.pubkey));
+  out[0].pubkey = "tampered";
+  assert.notEqual(AGENT_SEATS.devnet[0].pubkey, "tampered", "copies, never the table itself");
 });
 
 test("no forbidden mainnet signer is an agent seat or an operator seat", () => {
@@ -361,7 +405,7 @@ test("every seat names a 1Password item, its FIELD, and an env override", () => 
       // `solana.turf.squad-seat-a.devnet`.
       assert.match(seat.item, /^[a-z0-9]+(?:[.-][a-z0-9]+)*$/, `${cluster}/${seat.role} item`);
       assert.match(seat.secretField, /^private[- ]key$/, `${cluster}/${seat.role} field`);
-      assert.match(seat.env, /^SQUAD_KEY_[A-Z]+$/, `${cluster}/${seat.role} env override`);
+      assert.match(seat.env, /^SQUAD_KEY_[A-Z]+(?:_V\d+)?$/, `${cluster}/${seat.role} env override`);
     }
   }
   assert.equal(

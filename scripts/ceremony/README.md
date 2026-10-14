@@ -38,14 +38,17 @@ reach for the committed tooling instead:
 | `add-system-seat.js` | The second pass, cluster-parameterised: brought both multisigs to five seats, matching the `VaultState` signer list | It prints whether the agent reaches quorum in the resulting shape, and says so as `⚠ AGENT CAN ACT ALONE` |
 | `blast-radius.js` | Read-only: proved the Squads change did NOT move the vault PDA, the program's upgrade authority, or `VaultState` | Verifying what a change did *not* touch is as much a part of a ceremony as verifying what it did |
 
-## The 2026-10-08 governance rotation
+## Governance seat rotations (2026-10-08 onward)
 
-Two scripts were added for task `rotate-mainnet-admin-key`, and like the four above
-they refuse once their plan is done.
+Three scripts were added for task `rotate-mainnet-admin-key`. The two sweeps were
+one-shots for BLSBw8 and, like the four above, refuse once their plan is done.
+`rotate-admin-seat.js` became the standing any-pair tool on 2026-10-14 (task
+`squad-seat-rotation-any-pair`): each run's plan is the `--old`/`--new` pair it is
+given, and it refuses once that pair's swap has executed.
 
 | Script | What it does | Notes |
 |--------|--------------|-------|
-| `rotate-admin-seat.js` | ONE config transaction per cluster: `removeMember(BLSBw8…)` + `addMember(4bKN…, mask 7)`, threshold unchanged. `--send` creates it, proposes it and casts the clean system seat's vote. `--approve --index --as=<role>` adds an agent vote, and `--execute --index` executes once it is Approved | Every mode reads the on-chain actions back against `scripts/lib/admin-seat-rotation.js` and refuses on any drift. BLSBw8 never signs, with one exception: `--allow-outgoing-signer`, used once for devnet #19's third vote on Mr. McRitchie's instruction. It covers devnet `--approve` only |
+| `rotate-admin-seat.js` | Swaps ONE Squad member for another in one config transaction: `removeMember(--old)` + `addMember(--new, <old's live mask>)`, threshold unchanged. `--old` and `--new` are REQUIRED in every mode; there is no default pair. The dry run is the plan: it validates both keys (base58, 32 bytes, on curve, different, `--new` not an exposed key), reads live membership (old seated, new not) and prints the stale-proposal warning (Squads 6007). `--send` creates, proposes and casts the system seat's vote; `--and-approve-as=<role>` adds a second agent vote in the same run. `--approve --index --as=<role>` adds a vote later, and `--execute --index` executes only once the proposal is Approved, the approvals meet the threshold and, on mainnet, one of Mr. McRitchie's seats has approved | Every mode reads the on-chain actions back against `scripts/lib/admin-seat-rotation.js` and refuses on any drift. The outgoing key never creates or executes; it may approve its own removal only under `--allow-outgoing-signer` (devnet #19 2026-10-09; mainnet by Mr. McRitchie's 2026-10-12 queue-and-one-click ruling). Used 2026-10-09 for BLSBw8 -> 4bKN; generalised 2026-10-14 for 4bKN -> 3LTL |
 | `sweep-admin-tokens.js` | Empties and closes BLSBw8's SPL token accounts into an operator wallet, in one transaction paid by the governance seat | Refuses on any mint not on its canonical USDC/USDT list, or on a delegate or close authority. Reads BLSBw8 from the 1Password archive |
 | `sweep-admin-seat.js` | Moves the SOL left on BLSBw8 to allow-listed destinations, fee-aware, leaving it at 0 or at rent-exempt | The dry run SIMULATES the unsigned transaction and loads no key. It lists SPL token accounts but never moves them |
 
@@ -73,8 +76,17 @@ is the point of keeping these:
 
 Each script reads its signing key from 1Password at run time and never writes it
 to disk. The field LABEL differs between items and that is not a typo to tidy:
-the `solana.turf.system*` items spell it `private-key`; `solana.turf.governance`
-and `agent.xan.solana` spell it `private key`, with a space.
+the `solana.turf.system*` items spell it `private-key`; `solana.turf.governance`,
+`solana.turf.governance.v2` and `agent.xan.solana` spell it `private key`, with a space.
+
+**The governance seat is picked from the chain.** The mainnet roster in
+`scripts/lib/squad-clusters.js` lists two governance candidates, `4bKN…`
+(`solana.turf.governance`) and `3LTL…` (`solana.turf.governance.v2`). Every tool
+that votes with the seat (`squad-vault-transfer.js`, `squad-upgrade.js`,
+`squad-inventory.js`, `rotate-admin-seat.js`) reads live membership and calls
+`seatsForMembers()`, which keeps the one that is seated and refuses when neither
+or both are. Before the 4bKN -> 3LTL swap executes the old item signs; after it,
+the new one, with no edit in between.
 
 ```bash
 op read "op://${MCR_OP_VAULT_AGENT:-studio-agents}/solana.turf.system.devnet/private-key"

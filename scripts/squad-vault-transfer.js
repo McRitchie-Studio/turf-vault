@@ -60,6 +60,7 @@ const {
   memberName,
   resolveCluster,
   seatSecretSource,
+  seatsForMembers,
   squadsTransactionsUrl,
 } = require("./lib/squad-clusters");
 const {
@@ -340,7 +341,16 @@ async function adviseOnMovedIndex(connection, multisigPda, from, to, plan, rerun
   const ms = await multisig.accounts.Multisig.fromAccountAddress(connection, multisigPda);
   const current = BigInt(ms.transactionIndex.toString());
   const members = ms.members.map((m) => ({ key: m.key.toBase58(), mask: m.permissions.mask }));
-  const seats = cfg.agentSeats.filter((s) => members.some((m) => m.key === s.pubkey));
+  // The governance seat is whichever candidate (4bKN or 3LTL) is seated NOW;
+  // seatsForMembers refuses when neither or both are.
+  let roster;
+  try {
+    roster = seatsForMembers(cfg.cluster, members.map((m) => m.key), cfg.agentSeats);
+  } catch (e) {
+    if (e instanceof ClusterError) fail(e.message);
+    throw e;
+  }
+  const seats = roster.filter((s) => members.some((m) => m.key === s.pubkey));
   const system = seats.find((s) => s.role.startsWith("system"));
   const rerunArgs = () =>
     process.argv
