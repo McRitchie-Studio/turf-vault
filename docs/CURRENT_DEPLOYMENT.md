@@ -13,10 +13,10 @@ This is the live operator reference for TurfVault deployment identity. Keep hist
 | `GovernanceConfig` | `729Q8AVBSV4fovTk9G74aoLwH6eChZT4DESzVAoGVS8J`, created by `init_governance`; shipped defaults except `settle_contest` = **2** (devnet only, `scripts/set-devnet-threshold.js`) |
 | `VaultState` signers | five slots, read off chain after the EVICT (`node scripts/check-signer-slots.js --cluster devnet`) |
 | slot 1 | `2eGs8G3wzhEeNQQU2Q86BmmA2xTpDbMMae3Y1bvpZfx9` — `solana.turf.system.devnet`, turf-monster-qa's `SOLANA_ADMIN_KEY` |
-| slot 2 | `foUuRyeibadQoGdKXZ9pBGDqmkb1jY1jYsu8dZ29nds` — Mack (`agent.mack.solana`), the devnet-only rehearsal co-signer |
+| slot 2 | `foUuRyeibadQoGdKXZ9pBGDqmkb1jY1jYsu8dZ29nds` — Mack (`solana.mack.agent`), the devnet-only rehearsal co-signer |
 | slot 3 | `BVQHNwUEo91ePwqPcR6Ro4g9Ejqt3qn3ajKPqJSSTd51` — `solana.turf.governance.devnet` (admin vault), devnet-only |
-| slot 4 | `9gACbzsCLmkYF9Yx1EBGmwMvvyfuTquJ6qs8QsoQvHXf` — Mr. McRitchie, Phantom account 2 |
-| slot 5 | `3Qj4v9qjhXgkru6zCRCErRVhy8Q6qU3NrNpvpXLTZboA` — Mr. McRitchie's second wallet |
+| slot 4 | empty (`signers_ext`, read on chain 2026-10-15; no key of Mr. McRitchie's sits in the devnet signer set) |
+| slot 5 | empty (`signers_ext`, read on chain 2026-10-15) |
 | Program SHA256 | `af3d1cdf3e35ec0348249db775f61d3d565ef4ca5a025ef80409128f785eb6b9` (707,328 bytes, the whole region; its first 706,304 bytes are the built `turf_vault.so`, `76a8db25…`) |
 | Consumer pin | turf-monster-qa `EXPECTED_IDL_HASH` = v0.25 `f11446fa…` + v0.26 `2d9f7151…`, `SOLANA_VAULT_GOVERNANCE=on` |
 | USDC test mint | `222Dcu2RgAXE3T8A4mGSG3kQyXaNjqePx7vva1RdWBN9`, mint authority `2eGs8G3w…` (QA's server key) since 2026-10-12, so QA mints its own rehearsal pools. It was `8K81…` until then; local development, which derives `8K81…`, can no longer mint devnet USDC |
