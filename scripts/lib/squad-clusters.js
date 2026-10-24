@@ -214,14 +214,16 @@ const OPERATOR_KEYS = [
 
 /**
  * Keys no agent signs a MAINNET transaction with, whatever they are seated on.
- * Xan's key is production's `SOLANA_ADMIN_KEY`; Mason's is retired; Mack is a
- * devnet `VaultState` agent key. A script that loads a key checks it here
- * before it signs anything on mainnet.
+ * Xan's key is production's `SOLANA_ADMIN_KEY`; Mason's is retired; Mack's
+ * current key is a devnet `VaultState` agent key, and his old one leaked through
+ * a public repository (retired 2026-10-24) and stays forbidden for good. A
+ * script that loads a key checks it here before it signs anything on mainnet.
  */
 const MAINNET_FORBIDDEN_SIGNERS = {
   "8K81w4e6UcB7TiANhM9N8sAgijJvTxxybRi8AENRaRYd": "Xan (production SOLANA_ADMIN_KEY)",
   CytJS23p1zCM2wvUUngiDePtbMB484ebD7bK4nDqWjrR: "Mason (retired)",
-  foUuRyeibadQoGdKXZ9pBGDqmkb1jY1jYsu8dZ29nds: "Mack (devnet agent)",
+  "8UwJhRiNLr8uiqWyGUjgGDFqNEDY4SNQFfJud3ZSnowW": "Mack (devnet agent)",
+  foUuRyeibadQoGdKXZ9pBGDqmkb1jY1jYsu8dZ29nds: "Mack, LEAKED (retired 2026-10-24)",
 };
 
 /**
@@ -295,7 +297,8 @@ const MEMBER_NAMES = {
   BLSBw8fXHzZc5pbaYCKMpMSsrtXBTbWXpUPVzMrXx9oo:
     "EXPOSED admin solana.turf.admin (rotated out of both 2026-10-09: mainnet #6, devnet #19)",
   "8K81w4e6UcB7TiANhM9N8sAgijJvTxxybRi8AENRaRYd": "Xan (agent; off devnet at #21 2026-10-12)",
-  foUuRyeibadQoGdKXZ9pBGDqmkb1jY1jYsu8dZ29nds: "Mack (agent; devnet VaultState only)",
+  "8UwJhRiNLr8uiqWyGUjgGDFqNEDY4SNQFfJud3ZSnowW": "Mack (agent; devnet VaultState only)",
+  foUuRyeibadQoGdKXZ9pBGDqmkb1jY1jYsu8dZ29nds: "LEAKED Mack (secret in a public repo; off devnet VaultState 2026-10-24)",
   CytJS23p1zCM2wvUUngiDePtbMB484ebD7bK4nDqWjrR: "Mason (retired: live Squads 2026-09-15, 9dCLM 2026-09-16)",
   F6f8h5yynbnkgWvU5abQx3RJxJpe8EoQmeFBuNKdKzhZ: "LEAKED agent.solana (evicted: devnet 2026-06-06, 9dCLM 2026-09-16)",
 };

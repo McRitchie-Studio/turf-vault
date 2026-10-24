@@ -11,12 +11,11 @@ This is the live operator reference for TurfVault deployment identity. Keep hist
 | Deployed | 2026-10-12, slot `510279923` (Squads devnet transaction #20; card `devnet-v026-upgrade`) |
 | Upgrade authority | Squads V4 vault PDA `BW13kgfiG2koFn3WRkte21NW9TFygsD1ge2fNJdjH6kC` |
 | `GovernanceConfig` | `729Q8AVBSV4fovTk9G74aoLwH6eChZT4DESzVAoGVS8J`, created by `init_governance`; shipped defaults except `settle_contest` = **2** (devnet only, `scripts/set-devnet-threshold.js`) |
-| `VaultState` signers | five slots, read off chain after the EVICT (`node scripts/check-signer-slots.js --cluster devnet`) |
+| `VaultState` signers | three of five slots, read off chain on 2026-10-24 after the MACK EVICT (`node scripts/check-signer-slots.js --cluster devnet`) |
 | slot 1 | `2eGs8G3wzhEeNQQU2Q86BmmA2xTpDbMMae3Y1bvpZfx9` — `solana.turf.system.devnet`, turf-monster-qa's `SOLANA_ADMIN_KEY` |
-| slot 2 | `foUuRyeibadQoGdKXZ9pBGDqmkb1jY1jYsu8dZ29nds` — Mack (`agent.mack.solana`), the devnet-only rehearsal co-signer |
+| slot 2 | `8UwJhRiNLr8uiqWyGUjgGDFqNEDY4SNQFfJud3ZSnowW` — Mack (`solana.mack.agent`), the devnet-only rehearsal co-signer, since 2026-10-24. It replaced `foUu…`, whose secret leaked through the public turf-monster repo |
 | slot 3 | `BVQHNwUEo91ePwqPcR6Ro4g9Ejqt3qn3ajKPqJSSTd51` — `solana.turf.governance.devnet` (admin vault), devnet-only |
-| slot 4 | `9gACbzsCLmkYF9Yx1EBGmwMvvyfuTquJ6qs8QsoQvHXf` — Mr. McRitchie, Phantom account 2 |
-| slot 5 | `3Qj4v9qjhXgkru6zCRCErRVhy8Q6qU3NrNpvpXLTZboA` — Mr. McRitchie's second wallet |
+| slots 4–5 | empty since the SHRINK of 2026-10-15 (`9gAC…` and `3Qj4…` left devnet) |
 | Program SHA256 | `af3d1cdf3e35ec0348249db775f61d3d565ef4ca5a025ef80409128f785eb6b9` (707,328 bytes, the whole region; its first 706,304 bytes are the built `turf_vault.so`, `76a8db25…`) |
 | Consumer pin | turf-monster-qa `EXPECTED_IDL_HASH` = v0.25 `f11446fa…` + v0.26 `2d9f7151…`, `SOLANA_VAULT_GOVERNANCE=on` |
 | USDC test mint | `222Dcu2RgAXE3T8A4mGSG3kQyXaNjqePx7vva1RdWBN9`, mint authority `2eGs8G3w…` (QA's server key) since 2026-10-12, so QA mints its own rehearsal pools. It was `8K81…` until then; local development, which derives `8K81…`, can no longer mint devnet USDC |
@@ -24,18 +23,17 @@ This is the live operator reference for TurfVault deployment identity. Keep hist
 
 **No mainnet `VaultState` signer is seated on devnet.** `8K81…` (production's
 server key) and `CytJ…` (Mason) left devnet in the EVICT; `7ZDJ…` left in the
-v0.25 swap before the upgrade. `9gAC…` and `3Qj4…` are mainnet Squads members and
-the mainnet rotation's target, not mainnet `VaultState` signers today.
+v0.25 swap before the upgrade. `9gAC…` and `3Qj4…`, now mainnet `VaultState`
+signers, left the devnet `VaultState` in the SHRINK of 2026-10-15.
 
-**`9gAC…` and `3Qj4…` must leave the devnet `VaultState` when the mainnet rotation
-seats them.** The step: in the same sitting as the mainnet EVICT that seats them
-(card `mainnet-v026-upgrade`, `SIGNER_ROTATION.md`), Steffon runs one devnet
-`update_signers` with `node scripts/rotate-devnet-signers.js`, replacing both with
-devnet-only keys, signed by the three devnet agent keys `2eGs` + `foUu` + `BVQH`
-(no human tap). The replacements are two fresh devnet-only keys filed in the
-admin vault, unless Mr. McRitchie names devnet-only wallets of his own. The same
-rule holds for any key the mainnet rotation adds: no key is a `VaultState` signer
-on both clusters. turf-monster's `config/mainnet_vault_signers.yml` already fences
+**No key is a `VaultState` signer on both clusters.** Any key a mainnet rotation
+adds leaves devnet in the same sitting: one devnet `update_signers` with
+`node scripts/rotate-devnet-signers.js`, signed by the three devnet agent keys
+`2eGs` + `8UwJ` + `BVQH` (no human tap). To rotate one of those three agent keys
+itself, add its replacement to a free slot first and then evict it, signed by the
+two that stay plus the replacement: `update_signers` keeps three of its
+authorizers in the new set (6017), and the agents hold exactly three seated keys,
+so a direct swap signed by the outgoing key is refused (the MACK rows below). turf-monster's `config/mainnet_vault_signers.yml` already fences
 both from the QA rehearsal.
 
 The devnet signer change ran in four devnet transactions, all agent-signed under
@@ -48,6 +46,15 @@ Mr. McRitchie's devnet-only grant:
 | ADD | `8K81, 2eGs, CytJ, foUu, BVQH` | `2eGs` + `8K81` + `CytJ` | `2VZepg7KRFG4Gv8Z9UEW8twSL1bJtoMFJiyVdaVfzXuL6fRwWmY5s9rfPC9UaKL5sCA7Q8NtyxsqyXjAGhmfzTzs` |
 | EVICT | `2eGs, foUu, BVQH, 9gAC, 3Qj4` | `2eGs` + `foUu` + `BVQH` | `3CfnL5pcacmHt1kXPtrYxf2QtKpiYA5245uyaZN472j7HFRnshfgq39P7iRTV1x77sjyd3HsFZJ8HwR8hRmEPbiv` |
 | `settle_contest` → 2 | — | `2eGs` + `foUu` + `BVQH` | `2kuQ4zhtjahYw1KHLQS9y7bJPAY8p7ipiZL9KTg4Kfp1BBB4m91iarSEVutRtWe3B9fgZAq9eVeDuw3ufysy8KWK` |
+| SHRINK (2026-10-15, first recorded 2026-10-24) | `2eGs, foUu, BVQH` | `2eGs` + `BVQH` + `foUu` | `3TRebFfehoyqjzD7M94A5qDtTS4mEo1DtqCkivgNTxS3LTANZP4N2TXePEdbpPhtUs6jjq8E7Vxw3FBsWkhQsMS9` |
+| MACK ADD (2026-10-24) | `2eGs, foUu, BVQH, 8UwJ` | `2eGs` + `BVQH` + `foUu` | `2mVU8cjiACbXGhaDAKW28t3mhETBHU2mzFfBJKW1yxDTfiZFd6Vj4tN7qUxNprFCJChHKCzezecxpKhpjNaRf5UD` |
+| MACK EVICT (2026-10-24) | `2eGs, 8UwJ, BVQH` | `2eGs` + `BVQH` + `8UwJ` | `2KGbPeFAyKtDKQG8Z2G82dC9Ux4itgPjkzaQZQ4TPJcc9XqxqHJ372q66R9a9drAt6NPQPY1fMoWVATZnMkvkSma` |
+
+The MACK rows rotated Mack's key off devnet because its secret had been committed
+to the public turf-monster repository (task `rotate-leaked-devnet-mack-key`).
+`foUu…` was swept to 0 SOL and its 1Password item archived; git history still
+holds the secret, so treat `foUu…` as anyone's key. The SHRINK was found on
+2026-10-24 by reading the vault's signature history; nothing had recorded it.
 
 The upgrade itself: buffer `BmYZP4v6zKzLYZBPMYYEq9h3VPaGT2JWv3WJsXjQioV4`
 (rent spilled to Mack), ProgramData extended by 162,696 bytes
@@ -137,9 +144,10 @@ mainnet upgrade, as `RUNBOOK.md` → *v0.26 Upgrade Ordering* requires. The sign
 rows did NOT change at deploy: the two appended slots read empty until the
 ceremony in `SIGNER_ROTATION.md` runs. `node scripts/check-signer-slots.js
 --cluster <devnet|mainnet>` reads all five slots and is the cheapest way to
-re-derive either table's signer rows. Read on 2026-10-12, devnet holds the five
-keys in its table (ROTATED) and mainnet holds `8K81…`, `7ZDJ…`, `CytJ…` with
-slots 4 and 5 empty (UNROTATED).
+re-derive either table's signer rows. Read on 2026-10-12, devnet held five keys
+(ROTATED) and mainnet held `8K81…`, `7ZDJ…`, `CytJ…` with slots 4 and 5 empty
+(UNROTATED). Read on 2026-10-24, devnet holds `2eGs…`, `8UwJ…`, `BVQH…` with
+slots 4 and 5 empty, which the script labels UNROTATED.
 
 **The upgrade authority is per cluster.** Mainnet's Squads vault PDA (`Bk9sS7ii...`) is a different vault from devnet's (`BW13kgfi...`). Never carry one cluster's vault address to the other; the devnet address is the one that historically leaked into mainnet-facing prose. The `VaultState` signer sets DIFFER since 2026-10-12 (devnet holds no mainnet signer), and nothing in the program ties them together — each cluster's `VaultState` was written by its own `initialize`, and `update_signers` can move one without the other. Read the cluster you mean.
 
