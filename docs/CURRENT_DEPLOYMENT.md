@@ -13,10 +13,10 @@ This is the live operator reference for TurfVault deployment identity. Keep hist
 | `GovernanceConfig` | `729Q8AVBSV4fovTk9G74aoLwH6eChZT4DESzVAoGVS8J`, created by `init_governance`; shipped defaults except `settle_contest` = **2** (devnet only, `scripts/set-devnet-threshold.js`) |
 | `VaultState` signers | five slots, read off chain after the EVICT (`node scripts/check-signer-slots.js --cluster devnet`) |
 | slot 1 | `2eGs8G3wzhEeNQQU2Q86BmmA2xTpDbMMae3Y1bvpZfx9` — `solana.turf.system.devnet`, turf-monster-qa's `SOLANA_ADMIN_KEY` |
-| slot 2 | `foUuRyeibadQoGdKXZ9pBGDqmkb1jY1jYsu8dZ29nds` — Mack (`agent.mack.solana`), the devnet-only rehearsal co-signer |
+| slot 2 | `foUuRyeibadQoGdKXZ9pBGDqmkb1jY1jYsu8dZ29nds` — Mack (`solana.mack.agent`), the devnet-only rehearsal co-signer |
 | slot 3 | `BVQHNwUEo91ePwqPcR6Ro4g9Ejqt3qn3ajKPqJSSTd51` — `solana.turf.governance.devnet` (admin vault), devnet-only |
-| slot 4 | `9gACbzsCLmkYF9Yx1EBGmwMvvyfuTquJ6qs8QsoQvHXf` — Mr. McRitchie, Phantom account 2 |
-| slot 5 | `3Qj4v9qjhXgkru6zCRCErRVhy8Q6qU3NrNpvpXLTZboA` — Mr. McRitchie's second wallet |
+| slot 4 | empty (`signers_ext`, read on chain 2026-10-15; no key of Mr. McRitchie's sits in the devnet signer set) |
+| slot 5 | empty (`signers_ext`, read on chain 2026-10-15) |
 | Program SHA256 | `af3d1cdf3e35ec0348249db775f61d3d565ef4ca5a025ef80409128f785eb6b9` (707,328 bytes, the whole region; its first 706,304 bytes are the built `turf_vault.so`, `76a8db25…`) |
 | Consumer pin | turf-monster-qa `EXPECTED_IDL_HASH` = v0.25 `f11446fa…` + v0.26 `2d9f7151…`, `SOLANA_VAULT_GOVERNANCE=on` |
 | USDC test mint | `222Dcu2RgAXE3T8A4mGSG3kQyXaNjqePx7vva1RdWBN9`, mint authority `2eGs8G3w…` (QA's server key) since 2026-10-12, so QA mints its own rehearsal pools. It was `8K81…` until then; local development, which derives `8K81…`, can no longer mint devnet USDC |
@@ -27,18 +27,14 @@ server key) and `CytJ…` (Mason) left devnet in the EVICT; `7ZDJ…` left in th
 v0.25 swap before the upgrade. `9gAC…` and `3Qj4…` are mainnet Squads members and
 the mainnet rotation's target, not mainnet `VaultState` signers today.
 
-**`9gAC…` and `3Qj4…` must leave the devnet `VaultState` when the mainnet rotation
-seats them.** The step: in the same sitting as the mainnet EVICT that seats them
-(card `mainnet-v026-upgrade`, `SIGNER_ROTATION.md`), Steffon runs one devnet
-`update_signers` with `node scripts/rotate-devnet-signers.js`, replacing both with
-devnet-only keys, signed by the three devnet agent keys `2eGs` + `foUu` + `BVQH`
-(no human tap). The replacements are two fresh devnet-only keys filed in the
-admin vault, unless Mr. McRitchie names devnet-only wallets of his own. The same
-rule holds for any key the mainnet rotation adds: no key is a `VaultState` signer
-on both clusters. turf-monster's `config/mainnet_vault_signers.yml` already fences
-both from the QA rehearsal.
+**`9gAC…` and `3Qj4…` left the devnet `VaultState` on 2026-10-15.** One devnet
+`update_signers` (the NARROW row below), signed by the three devnet agent keys
+`2eGs` + `foUu` + `BVQH` with no human tap, wrote the set down to those three keys
+and left slots 4-5 empty; nothing replaced them. The rule stands for any key a
+rotation adds: no key is a `VaultState` signer on both clusters. turf-monster's
+`config/mainnet_vault_signers.yml` fences both from the QA rehearsal.
 
-The devnet signer change ran in four devnet transactions, all agent-signed under
+The devnet signer change ran in six devnet transactions, all agent-signed under
 Mr. McRitchie's devnet-only grant:
 
 | Step | Set written | Signed by | Signature |
@@ -48,6 +44,7 @@ Mr. McRitchie's devnet-only grant:
 | ADD | `8K81, 2eGs, CytJ, foUu, BVQH` | `2eGs` + `8K81` + `CytJ` | `2VZepg7KRFG4Gv8Z9UEW8twSL1bJtoMFJiyVdaVfzXuL6fRwWmY5s9rfPC9UaKL5sCA7Q8NtyxsqyXjAGhmfzTzs` |
 | EVICT | `2eGs, foUu, BVQH, 9gAC, 3Qj4` | `2eGs` + `foUu` + `BVQH` | `3CfnL5pcacmHt1kXPtrYxf2QtKpiYA5245uyaZN472j7HFRnshfgq39P7iRTV1x77sjyd3HsFZJ8HwR8hRmEPbiv` |
 | `settle_contest` → 2 | — | `2eGs` + `foUu` + `BVQH` | `2kuQ4zhtjahYw1KHLQS9y7bJPAY8p7ipiZL9KTg4Kfp1BBB4m91iarSEVutRtWe3B9fgZAq9eVeDuw3ufysy8KWK` |
+| NARROW (2026-10-15 06:34Z, slot 511260048) | `2eGs, foUu, BVQH` | `2eGs` + `foUu` + `BVQH` | `3TRebFfehoyqjzD7M94A5qDtTS4mEo1DtqCkivgNTxS3LTANZP4N2TXePEdbpPhtUs6jjq8E7Vxw3FBsWkhQsMS9` |
 
 The upgrade itself: buffer `BmYZP4v6zKzLYZBPMYYEq9h3VPaGT2JWv3WJsXjQioV4`
 (rent spilled to Mack), ProgramData extended by 162,696 bytes
