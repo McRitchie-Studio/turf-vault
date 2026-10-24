@@ -285,9 +285,10 @@ test("devnet has no governance candidate, so its roster passes through untouched
 });
 
 test("no forbidden mainnet signer is an agent seat or an operator seat", () => {
-  // squad-vault-ops: no agent signs mainnet with Xan (8K81), Mason (CytJ) or Mack.
+  // squad-vault-ops: no agent signs mainnet with Xan (8K81), Mason (CytJ) or Mack (8UwJ, and the leaked foUu).
   assert.deepEqual(Object.keys(MAINNET_FORBIDDEN_SIGNERS).sort(), [
     "8K81w4e6UcB7TiANhM9N8sAgijJvTxxybRi8AENRaRYd",
+    "8UwJhRiNLr8uiqWyGUjgGDFqNEDY4SNQFfJud3ZSnowW",
     "CytJS23p1zCM2wvUUngiDePtbMB484ebD7bK4nDqWjrR",
     "foUuRyeibadQoGdKXZ9pBGDqmkb1jY1jYsu8dZ29nds",
   ]);
